@@ -255,7 +255,7 @@ namespace soundphysicsadapted
                 PlayOutdoorBoltThunder(boltWorldPos, distance, playerEarPos);
 
                 // Queue delayed nodistance.ogg crack (outdoor positioned)
-                if (distance < 150)
+                if (distance < 200)
                 {
                     Vec3d dir = NormalizeBoltDirection(boltWorldPos, playerEarPos);
                     if (dir != null)
@@ -294,7 +294,7 @@ namespace soundphysicsadapted
                 }
 
                 // Queue delayed nodistance.ogg crack (indoor, same LPF as L1)
-                if (distance < 150)
+                if (distance < 200)
                 {
                     pendingCracks.Add(new PendingDelayedCrack
                     {
@@ -803,8 +803,10 @@ namespace soundphysicsadapted
         /// </summary>
         private void FireDelayedCrack(PendingDelayedCrack crack, long gameTimeMs)
         {
-            // Vanilla: nodistance.ogg uses steep 1 - dist/70 curve, clamped at 0.1
-            float crackVol = Math.Max(0.1f, 1f - crack.Distance / 70f);
+            // Realistic crack falloff: pow(1.5) curve over 200m range.
+            // Real thunder cracks (>2kHz) attenuate ~6dB per distance doubling.
+            // pow(1.5) gives fast initial drop + gentle tail — audible to ~200m.
+            float crackVol = MathF.Pow(Math.Max(0f, 1f - crack.Distance / 200f), 1.5f);
 
             // Apply our enclosure attenuation on top
             float enclosureMod = CalculateThunderVolume(1.0f, crack.SkyCoverage, crack.OcclusionFactor, crack.NearestRainDistance);
