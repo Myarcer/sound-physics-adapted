@@ -1,1 +1,0 @@
-MixinConfigs: sound_physics_remastered.mixins.json

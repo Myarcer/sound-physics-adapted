@@ -1,197 +1,137 @@
 # Sound Physics Adapted
 
-A comprehensive sound physics mod for Vintage Story that adds realistic sound occlusion, enhanced reverb, and physics-based audio propagation.
+Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the difference walls, caves, and weather make.
 
-## Vision
-
-Match or exceed the feature set of Minecraft's [Sound Physics Remastered](https://github.com/henkelmax/sound-physics-remastered), adapted for Vintage Story's unique atmosphere and mechanics.
-
----
-
-## Current Status: Phase 3 Complete
-
-### Phase 1: Basic Occlusion - COMPLETE
-- [x] Sound occlusion through blocks (raycast-based)
-- [x] Lowpass filtering for muffled sounds
-- [x] Volume reduction based on obstruction
-- [x] Per-sound filter management (no global filter conflicts)
-
-### Phase 2: Material System - COMPLETE
-- [x] Per-material occlusion values
-- [x] JSON configuration for customization
-- [x] Block-specific overrides via material config
-
-### Phase 3: Enhanced Reverb (SPR-Style) - COMPLETE
-- [x] 4-slot EFX reverb system (short/medium/long decay)
-- [x] Ray-traced environment detection
-- [x] Material-based reflectivity
-- [x] Send filter gain control (SPR-style)
-- [x] SPR-matched effect parameters
-- [x] Non-positional sound handling (player position fallback)
-
-### Phase 4: Shared Airspace & Sound Paths - COMPLETE
-- [x] Shared airspace detection (only count audible reflections)
-- [x] Fix: Distant occluded sounds no longer have excessive reverb
-- [x] Sound repositioning (sound comes from doorway/opening)
-
-### Phase 5: Weather & Ambient - PLANNED
-- [ ] Gradual weather attenuation (not binary)
-- [ ] Door state affects sound properly
-- [ ] Cave openings have partial muffling
-
-### Phase 6: Advanced - PLANNED
-- [ ] Air absorption over distance
-- [ ] Performance optimization
-- [ ] Debug visualization
+[![VS Version](https://img.shields.io/badge/Vintage%20Story-1.21.0%2B-green)](https://vintagestory.at/)
+[![Side](https://img.shields.io/badge/Side-Client-blue)]()
 
 ---
 
-## Project Structure
+## What It Does
+
+**Occlusion** — Sounds behind walls get muffled. Different materials block different amounts: stone walls muffle heavily, wooden doors let more through. Open and close a door and hear the difference immediately.
+
+**Reverb** — Caves echo. Small rooms sound tight. Open fields sound dry. The mod traces rays from your position to detect surrounding geometry and applies matching reverb in real time.
+
+**Sound Repositioning** — When a sound source is behind a wall but there's a nearby doorway, the sound shifts to come from the opening instead of phasing through solid blocks.
+
+**Weather Audio** — Rain, wind, and hail are positioned at openings around you. Step inside a shelter and weather sounds fade based on how enclosed you are — not a binary cutoff.
+
+**Thunder** — Thunder cracks are placed directionally above the horizon with realistic distance falloff.
+
+**Block Integration** — Resonators, boomboxes, and music blocks are fully supported with proper audio lifecycle management and multiplayer sync.
+
+---
+
+## Install
+
+1. Download the latest `.zip` from [Releases](https://github.com/Myarcer/sound-physics-adapted/releases)
+2. Drop it into your `VintagestoryData/Mods/` folder
+3. Launch the game
+
+Config generates automatically at `VintagestoryData/ModConfig/soundphysicsadapted.json`. Everything is tweakable from the in-game mod settings menu.
+
+---
+
+## Building from Source
+
+Requires .NET 8 SDK.
 
 ```
-sound-physics-adapted/
-├── soundphysicsadapted.csproj         # Project file
-├── SoundPhysicsAdaptedModSystem.cs    # Main mod entry
-├── Config/                       # Configuration classes
-│   ├── SoundPhysicsConfig.cs
-│   └── MaterialSoundConfig.cs
-├── Core/                         # Main processing logic
-│   ├── OcclusionCalculator.cs
-│   ├── AcousticRaytracer.cs      # SPR-style ray tracing
-│   ├── SoundPathResolver.cs      # Sound repositioning
-│   ├── ReverbEffects.cs          # EFX slot management
-│   ├── EfxHelper.cs              # OpenAL EFX wrapper
-│   ├── AudioPhysicsSystem.cs     # Main update loop
-│   └── AudioRenderer.cs          # Per-sound OpenAL filters
-├── Patches/                      # Harmony patches
-│   ├── LoadSoundPatch.cs         # Sound creation hook
-│   ├── AudioLoaderPatch.cs       # Audio loader hook
-│   ├── ResonatorPatch.cs         # Resonator integration
-│   └── ReverbPatch.cs            # Vanilla reverb disable
-├── Network/                      # Multiplayer sync
-│   └── ResonatorSyncPacket.cs
-├── lib/                          # Reference DLLs
-│   ├── VintagestoryAPI.dll
-│   ├── VintagestoryLib.dll
-│   ├── VSSurvivalMod.dll
-│   └── protobuf-net.dll
-├── resources/                    # Mod assets
-│   ├── modinfo.json
-│   └── assets/soundphysicsadapted/lang/
-├── docs/                         # Documentation
-│   ├── research/                 # Research documents
-│   │   ├── 00_DEEP_RESEARCH_FULL.md
-│   │   └── 01-08_*.md
-│   ├── phases/                   # Phase documentation
-│   ├── resolved-issues/          # Fixed issues archive
-│   └── *.md                      # Technical docs
-├── bin/Release/                  # Build output
-├── Releases/                     # Packaged mod ZIPs
-├── references/                   # Reference code (not for build)
-│   ├── sound-physics-remastered-master/  # SPR source
-│   ├── decompiled/               # VS decompiled source
-│   └── ForestSymphony/           # Reference mod
+git clone https://github.com/Myarcer/sound-physics-adapted.git
+cd sound-physics-adapted
+```
+
+**Important Legal Note**: Due to copyright restrictions, the proprietary Vintage Story game engine (`VintagestoryLib.dll`) and official survival content (`VSSurvivalMod.dll`) cannot be distributed with this repository.
+
+You must copy these DLLs from your own game installation into the `lib/` folder:
+- `VintagestoryAPI.dll`
+- `VintagestoryLib.dll`
+- `VSSurvivalMod.dll`
+- `protobuf-net.dll`
+
+```
+dotnet build soundphysicsadapted.csproj -c Release
+```
+
+The mod ZIP lands in `Releases/` and auto-deploys to your mods folder.
+
+---
+
+## Repository Structure
+
+```
+├── SoundPhysicsAdaptedModSystem.cs   # Mod entry point
+├── Config/                           # Configuration classes
+├── Core/                             # Audio processing, raycasting, weather
+├── Network/                          # Multiplayer sync packets
+├── Patches/                          # Harmony patches for audio interception
+├── resources/                        # Mod assets (modinfo, icon, sounds, lang)
+├── soundphysicsadapted.csproj        # Build config
+├── build.bat                         # Build helper
+├── CHANGELOG.md                      # Release history
 └── README.md
 ```
 
 ---
 
-## Technical Approach
+## Compatibility
 
-### Occlusion System
-- DDA raycasting from sound source to player
-- Per-block occlusion accumulation
-- Lowpass filter with smoothed transitions
-- Material-based occlusion values
-
-### Reverb System (SPR-Style)
-- 4 auxiliary effect slots with different decay times
-- Fibonacci sphere ray distribution (32 rays)
-- Multi-bounce reflection calculation
-- Send filter gains control reverb intensity
-- Material reflectivity affects reverb character
-
-### Key Files
-| File | Purpose |
-|------|---------|
-| `AcousticRaytracer.cs` | Ray tracing, gain calculation |
-| `SoundPathResolver.cs` | Sound repositioning through openings |
-| `ReverbEffects.cs` | Aux slot/effect management |
-| `EfxHelper.cs` | OpenAL EFX reflection wrapper |
-| `LoadSoundPatch.cs` | Hooks sound playback |
-| `ResonatorPatch.cs` | Resonator/music block integration |
+| | |
+|---|---|
+| **Vintage Story** | 1.21.0+ |
+| **Required on server** | No |
+| **Required on client** | No (but only the client running it hears the effects) |
+| **CarryOn** | Compatible (dedicated patches) |
 
 ---
 
-## Build & Install
+## Mod API
 
-```bash
-cd sound-physics-adapted
-dotnet build soundphysicsadapted.csproj -c Release
-# Output: Releases/soundphysicsadapted_v0.1.0.zip
-# Auto-deploys to %appdata%/VintagestoryData/Mods/
+Other mods can interact at runtime via `SoundPhysicsAPI`:
+
+```csharp
+// Override occlusion for a specific block
+SoundPhysicsAPI.SetOcclusionOverride("game:door-*", 0.4f);
+
+// Set material reflectivity
+SoundPhysicsAPI.SetMaterialReflectivity("metal", 0.95f);
+
+// Get the full config instance
+var config = SoundPhysicsAPI.GetMaterialConfig();
 ```
 
 ---
 
-## Configuration
+## Development Roadmap
 
-Config file: `%appdata%/VintagestoryData/ModConfig/soundphysicsadapted.json`
+<details>
+<summary>Phase progress (click to expand)</summary>
 
-```json
-{
-  "EnableOcclusion": true,
-  "EnableCustomReverb": true,
-  "ReverbGain": 1.0,
-  "ReverbRayCount": 32,
-  "ReverbBounces": 4,
-  "ReverbMaxDistance": 256,
-  "DebugOcclusion": false,
-  "DebugReverb": false
-}
-```
+### Phase 1: Basic Occlusion ✅
+Raycast-based sound occlusion, lowpass filtering, volume reduction, per-sound filter management.
 
----
+### Phase 2: Material System ✅
+Per-material occlusion values, JSON configuration, block-specific overrides.
 
-## Debugging
+### Phase 3: Enhanced Reverb ✅
+4-slot EFX reverb, ray-traced environment detection, material reflectivity, send filter gains.
 
-### Log Locations
-- **Debug log**: `%appdata%/VintagestoryData/Logs/client-debug.log`
-- **Main log**: `%appdata%/VintagestoryData/Logs/client-main.log`
+### Phase 4: Shared Airspace & Sound Paths ✅
+Shared airspace detection, sound repositioning through doorways/openings.
 
-### Key Log Patterns
-```
-REVERB CALC: g0=X.XX g1=X.XX g2=X.XX g3=X.XX enclosed=XX% (hits/total) dist=X.X
-REVERB APPLIED src=XX: g0=X.XX g1=X.XX g2=X.XX g3=X.XX
-OCCLUSION: src=XX factor=X.XX
-```
+### Phase 5: Weather & Ambient ✅
+Positional weather audio, shelter detection, gradual attenuation, directional thunder.
+
+### Phase 6: Polish — In Progress
+Air absorption, performance optimization, debug visualization.
+
+</details>
 
 ---
 
+## Links
 
----
-
-## Development Guidelines
-
-### Reference Code
-- **SPR Source**: `references/sound-physics-remastered-master/` - Full Minecraft Sound Physics Remastered
-  - Key file: `common/src/main/java/com/sonicether/soundphysics/SoundPhysics.java`
-  - Config: `common/src/main/java/com/sonicether/soundphysics/config/`
-- **VS Decompiled**: `references/decompiled/` - Vintagestory source for reference
-
-### VS Game References
-Game entity logic (Resonator, EchoChamber, etc.) is in VSSurvivalMod DLL, not the API.
-
----
-
-## References
-
-### Local Reference Code
-- `references/sound-physics-remastered-master/` - SPR source (primary implementation reference)
-- `references/decompiled/` - VS game source for API reference
-
-### External Links
-- [Sound Physics Remastered (MC)](https://github.com/henkelmax/sound-physics-remastered) - Primary reference
+- [Sound Physics Remastered (Minecraft)](https://github.com/henkelmax/sound-physics-remastered) — original inspiration
 - [VS Modding Wiki](https://wiki.vintagestory.at/Modding:Getting_Started)
-- [VS API Documentation](https://apidocs.vintagestory.at/)
-- [OpenAL EFX Guide](https://openal-soft.org/openal-extensions/EXT_EFX.txt)
+- [VS API Docs](https://apidocs.vintagestory.at/)
