@@ -304,74 +304,6 @@ namespace soundphysicsadapted
         public float PermeationOcclusionThreshold { get; set; } = 1.5f;
 
         // ============================================================
-        // PERFORMANCE
-        // Per-tick processing budget to prevent frame drops during
-        // spike scenarios (teleport, block break mass invalidation).
-        // Sound playback throttle limits concurrent OpenAL sources.
-        // ============================================================
-
-        /// <summary>
-        /// Section header visible in JSON config file.
-        /// </summary>
-        public string _PerformanceSystem { get; set; } = "--- Per-tick budget cap and sound playback throttle. Prevents overload from dense areas. ---";
-
-        /// <summary>
-        /// Maximum number of sounds that can run full raycasting per tick.
-        /// VS runs at 20 ticks/second — default 25 = up to 500 sounds/sec max throughput.
-        /// Protects against spikes when many sounds become eligible at once
-        /// (teleport, block break cache invalidation, entering dense areas).
-        /// Sounds exceeding the budget are deferred to the next tick.
-        /// Close sounds are prioritized. Overdue sounds (>2s stale) get priority but are still capped.
-        /// 0 = unlimited (no budget cap).
-        /// </summary>
-        public int MaxSoundsPerTick { get; set; } = 25;
-
-        /// <summary>
-        /// Additional overdue sounds that can process on top of MaxSoundsPerTick each tick.
-        /// Overdue = new sounds or sounds not updated in >2s.
-        /// Real max per tick = MaxSoundsPerTick + MaxOverdueSoundsPerTick (default 25+6=31).
-        /// Prevents spikes when many sounds appear simultaneously (approaching a farm).
-        /// 0 = overdue sounds obey normal budget (strictest). Default 6.
-        /// </summary>
-        public int MaxOverdueSoundsPerTick { get; set; } = 6;
-
-        /// <summary>
-        /// Enable spatial reverb cell caching.
-        /// Sounds in the same 4x4x4 block area share reverb calculations.
-        /// Dramatically reduces CPU usage when many entities are clustered.
-        /// </summary>
-        public bool EnableReverbCellCache { get; set; } = true;
-
-        /// <summary>
-        /// Enable the sound playback throttle.
-        /// Limits concurrent positional sounds to save OpenAL mixing overhead.
-        /// When the budget is full, farthest sounds are blocked; closer sounds always win.
-        /// </summary>
-        public bool EnableSoundThrottle { get; set; } = true;
-
-        /// <summary>
-        /// Maximum concurrent positional sounds allowed to play simultaneously.
-        /// Sounds beyond this limit are silently blocked based on distance.
-        /// 0 = no limit (vanilla behavior, same as disabling the throttle). Default 40.
-        /// </summary>
-        public int MaxConcurrentSounds { get; set; } = 40;
-
-        /// <summary>
-        /// Fade duration in seconds when a sound is throttled (evicted) or unthrottled (admitted).
-        /// Instead of abrupt silence, sounds smoothly fade to/from minimum volume.
-        /// Prevents audible mute/unmute clicks when sounds near the budget threshold oscillate.
-        /// 5.0 = very smooth fade. 0 = instant (original behavior).
-        /// </summary>
-        public float ThrottleFadeSeconds { get; set; } = 5.0f;
-
-        /// <summary>
-        /// Weather audio tick update interval in milliseconds.
-        /// Weather state changes slowly; 100ms is sufficient.
-        /// Lower = smoother indoor/outdoor transitions but more CPU overhead.
-        /// </summary>
-        public int WeatherTickIntervalMs { get; set; } = 100;
-
-        // ============================================================
         // SOUND OVERRIDES
         // Optional replacement of vanilla sounds with custom versions.
         // Changes require game restart to take effect.
@@ -652,6 +584,92 @@ namespace soundphysicsadapted
         /// Thunder events are discrete and don't stack heavily.
         /// </summary>
         public int MaxThunderSources { get; set; } = 10;
+
+        // ============================================================
+        // PERFORMANCE
+        // Per-tick processing budget to prevent frame drops during
+        // spike scenarios (teleport, block break mass invalidation).
+        // Sound playback throttle limits concurrent OpenAL sources.
+        // ============================================================
+
+        /// <summary>
+        /// Section header visible in JSON config file.
+        /// </summary>
+        public string _PerformanceSystem { get; set; } = "--- Per-tick budget cap and sound playback throttle. Prevents overload from dense areas. ---";
+
+        /// <summary>
+        /// Maximum number of sounds that can run full raycasting per tick.
+        /// VS runs at 20 ticks/second — default 25 = up to 500 sounds/sec max throughput.
+        /// Protects against spikes when many sounds become eligible at once
+        /// (teleport, block break cache invalidation, entering dense areas).
+        /// Sounds exceeding the budget are deferred to the next tick.
+        /// Close sounds are prioritized. Overdue sounds (>2s stale) get priority but are still capped.
+        /// 0 = unlimited (no budget cap).
+        /// </summary>
+        public int MaxSoundsPerTick { get; set; } = 25;
+
+        /// <summary>
+        /// Additional overdue sounds that can process on top of MaxSoundsPerTick each tick.
+        /// Overdue = new sounds or sounds not updated in >2s.
+        /// Real max per tick = MaxSoundsPerTick + MaxOverdueSoundsPerTick (default 25+6=31).
+        /// Prevents spikes when many sounds appear simultaneously (approaching a farm).
+        /// 0 = overdue sounds obey normal budget (strictest). Default 6.
+        /// </summary>
+        public int MaxOverdueSoundsPerTick { get; set; } = 6;
+
+        /// <summary>
+        /// Enable spatial reverb cell caching.
+        /// Sounds in the same 4x4x4 block area share reverb calculations.
+        /// Dramatically reduces CPU usage when many entities are clustered.
+        /// </summary>
+        public bool EnableReverbCellCache { get; set; } = true;
+
+        /// <summary>
+        /// Enable the sound playback throttle.
+        /// Limits concurrent positional sounds to save OpenAL mixing overhead.
+        /// When the budget is full, farthest sounds are blocked; closer sounds always win.
+        /// </summary>
+        public bool EnableSoundThrottle { get; set; } = true;
+
+        /// <summary>
+        /// Maximum concurrent positional sounds allowed to play simultaneously.
+        /// Sounds beyond this limit are silently blocked based on distance.
+        /// 0 = no limit (vanilla behavior, same as disabling the throttle). Default 40.
+        /// </summary>
+        public int MaxConcurrentSounds { get; set; } = 40;
+
+        /// <summary>
+        /// Fade duration in seconds when a sound is throttled (evicted) or unthrottled (admitted).
+        /// Instead of abrupt silence, sounds smoothly fade to/from minimum volume.
+        /// Prevents audible mute/unmute clicks when sounds near the budget threshold oscillate.
+        /// 5.0 = very smooth fade. 0 = instant (original behavior).
+        /// </summary>
+        public float ThrottleFadeSeconds { get; set; } = 5.0f;
+
+        /// <summary>
+        /// Weather audio tick update interval in milliseconds.
+        /// Weather state changes slowly; 100ms is sufficient.
+        /// Lower = smoother indoor/outdoor transitions but more CPU overhead.
+        /// </summary>
+        public int WeatherTickIntervalMs { get; set; } = 100;
+
+        // ============================================================
+        // EXECUTION TRACE
+        // Developer tools for Call Graph generation.
+        // ============================================================
+
+        /// <summary>
+        /// Section header visible in JSON config file.
+        /// </summary>
+        public string _ExecutionTraceSystem { get; set; } = "--- Developer Execution Tracer. Do not enable during normal gameplay. ---";
+
+        /// <summary>
+        /// Enable the performance execution tracer.
+        /// Writes method entry/exit timestamps to trace.csv for Call Graph generation.
+        /// Disable during normal gameplay for best performance.
+        /// </summary>
+        public bool EnableExecutionTracer { get; set; } = false;
+
 
     }
 }

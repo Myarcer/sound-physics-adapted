@@ -345,14 +345,6 @@ namespace soundphysicsadapted.Patches
                     BindingFlags.Public | BindingFlags.Instance);
                 float rainOverlay = rainOverlayField != null ? Convert.ToSingle(rainOverlayField.GetValue(climateCond)) : 1f;
 
-                // Calculate deepnessSub (same as VS)
-                float seaLevel = capi.World.SeaLevel;
-                float playerY = (float)capi.World.Player.Entity.Pos.Y;
-                float roomLoss = ReadRoomVolumePitchLoss();
-                float deepnessSub = GameMath.Clamp(
-                    1f - (float)Math.Pow(playerY / seaLevel * 1.5 - 0.5, 1.5) - roomLoss * 0.5f,
-                    0f, 1f);
-
                 // Get player ear position + enclosure metrics
                 var player = capi.World.Player?.Entity;
                 if (player == null) return true;
@@ -377,15 +369,12 @@ namespace soundphysicsadapted.Patches
                     // Set lightningTime and lightningIntensity on the instance for visual effects
                     SetLightningVisuals(__instance, lightningTime, lightningIntensity);
 
-                    float pitch = GameMath.Clamp(
-                        (float)worldRand.NextDouble() * 0.3f + lightningTime / 2 + lightningIntensity / 2 - deepnessSub / 2,
-                        0.6f, 1.15f);
-                    float volume = GameMath.Clamp(
-                        Math.Min(1, 0.25f + lightningTime + lightningIntensity / 2) - 2f * deepnessSub,
-                        0f, 1f);
+                    // Raw intensity encodes lightning type — our handler computes final volume
+                    float rawIntensity = 0.3f;
+                    float basePitch = 0.85f + (float)worldRand.NextDouble() * 0.3f;
 
                     var asset = new AssetLocation("sounds/weather/lightning-distant.ogg");
-                    _thunderHandler.PlayAmbientThunder(asset, volume, pitch, openings, earPos, skyCoverage, occlusionFactor);
+                    _thunderHandler.PlayAmbientThunder(asset, rawIntensity, basePitch, openings, earPos, skyCoverage, occlusionFactor);
                     return false; // Skip original — we handled this roll
                 }
 
@@ -407,28 +396,27 @@ namespace soundphysicsadapted.Patches
 
                         SetLightningVisuals(__instance, lightningTime, lightningIntensity);
 
-                        float pitch = GameMath.Clamp(
-                            0.75f + (float)worldRand.NextDouble() * 0.3f - deepnessSub / 2,
-                            0.5f, 1.2f);
-                        float volume = GameMath.Clamp(
-                            0.5f + (float)worldRand.NextDouble() * 0.5f - 2f * deepnessSub,
-                            0f, 1f);
+                        // Raw intensity encodes lightning type — our handler computes final volume
+                        float basePitch = 0.85f + (float)worldRand.NextDouble() * 0.3f;
 
                         AssetLocation asset;
+                        float rawIntensity;
                         if (worldRand.NextDouble() > 0.25)
                         {
                             asset = new AssetLocation("sounds/weather/lightning-near.ogg");
+                            rawIntensity = 0.7f;
                             if (_nearLightningCoolDownField != null)
                                 _nearLightningCoolDownField.SetValue(__instance, 5f);
                         }
                         else
                         {
                             asset = new AssetLocation("sounds/weather/lightning-verynear.ogg");
+                            rawIntensity = 1.0f;
                             if (_nearLightningCoolDownField != null)
                                 _nearLightningCoolDownField.SetValue(__instance, 10f);
                         }
 
-                        _thunderHandler.PlayAmbientThunder(asset, volume, pitch, openings, earPos, skyCoverage, occlusionFactor);
+                        _thunderHandler.PlayAmbientThunder(asset, rawIntensity, basePitch, openings, earPos, skyCoverage, occlusionFactor);
                     }
                 }
 

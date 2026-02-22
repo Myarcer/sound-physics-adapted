@@ -88,6 +88,7 @@ namespace soundphysicsadapted
             public float SkyCoverage;
             public float OcclusionFactor;
             public float CombinedEnclosure; // Pre-computed for LPF
+            public float NearestRainDistance; // Stored at queue time for volume calc
             public bool IsOutdoor;
             // For outdoor: direction + placement info
             public Vec3d OutdoorDir;
@@ -140,18 +141,19 @@ namespace soundphysicsadapted
         /// <summary>
         /// Play an ambient thunder event (replaces VS's WeatherSimulationLightning.ClientTick sounds).
         /// Ambient thunder has no bolt position — direction is random.
+        /// Volume is computed entirely from our enclosure system (sky + occlusion + rain distance).
         /// </summary>
         /// <param name="asset">Sound asset (distant/near/verynear)</param>
-        /// <param name="volume">VS-calculated volume (includes deepnessSub)</param>
-        /// <param name="pitch">VS-calculated pitch</param>
+        /// <param name="rawIntensity">Lightning type intensity: 0.3=distant, 0.7=near, 1.0=verynear</param>
+        /// <param name="basePitch">Random base pitch (no depth influence)</param>
         /// <param name="trackedOpenings">Currently tracked openings from Phase 5B</param>
         /// <param name="playerEarPos">Player ear position</param>
         /// <param name="skyCoverage">Current sky coverage (0=outdoor, 1=covered)</param>
         /// <param name="occlusionFactor">Current occlusion factor (0=air, 1=material)</param>
         public void PlayAmbientThunder(
             AssetLocation asset,
-            float volume,
-            float pitch,
+            float rawIntensity,
+            float basePitch,
             IReadOnlyList<TrackedOpening> trackedOpenings,
             Vec3d playerEarPos,
             float skyCoverage,
@@ -162,8 +164,16 @@ namespace soundphysicsadapted
             var config = SoundPhysicsAdaptedModSystem.Config;
             if (config == null || !config.EnableThunderPositioning) return;
 
-            long gameTimeMs = capi.World.ElapsedMilliseconds;
+            // Compute volume from our own enclosure system — no VS deepnessSub dependency
+            float nearestRainDist = GetNearestRainDistance(trackedOpenings, playerEarPos);
+            float volume = CalculateThunderVolume(rawIntensity, skyCoverage, occlusionFactor, nearestRainDist);
 
+            if (volume < 0.01f) return;
+
+            // Pitch: slight occlusion damping (muffled indoors)
+            float pitch = basePitch * (1f - occlusionFactor * 0.15f);
+
+            long gameTimeMs = capi.World.ElapsedMilliseconds;
             float minSky = config.PositionalMinSkyCoverage;
 
             if (skyCoverage < minSky)
@@ -186,8 +196,8 @@ namespace soundphysicsadapted
             }
 
             ThunderDebugLog(
-                $"AMBIENT: asset={asset.Path} vol={volume:F2} pitch={pitch:F2} " +
-                $"sky={skyCoverage:F2} occl={occlusionFactor:F2} " +
+                $"AMBIENT: asset={asset.Path} rawInt={rawIntensity:F2} vol={volume:F2} pitch={pitch:F2} " +
+                $"sky={skyCoverage:F2} occl={occlusionFactor:F2} rainDist={nearestRainDist:F1} " +
                 $"openings={trackedOpenings?.Count ?? 0} mode=" +
                 (skyCoverage < minSky ? "OUTDOOR" :
                  trackedOpenings?.Count > 0 ? "INDOOR+OPENINGS" : "ENCLOSED"));
@@ -225,10 +235,16 @@ namespace soundphysicsadapted
             float minSky = config.PositionalMinSkyCoverage;
             long gameTimeMs = capi.World.ElapsedMilliseconds;
 
-            // Select asset + volume by distance (matching VS exactly)
+            // Select asset + base volume by distance, then apply enclosure
             AssetLocation asset = GetAssetForDistance(distance);
-            float volume = CalculateBoltIntensity(distance);
-            if (volume <= 0f) return;
+            float baseVolume = CalculateBoltIntensity(distance);
+            if (baseVolume <= 0f) return;
+
+            // Apply our enclosure system to bolt volume
+            float nearestRainDist = GetNearestRainDistance(trackedOpenings, playerEarPos);
+            float enclosureMod = CalculateThunderVolume(1.0f, skyCoverage, occlusionFactor, nearestRainDist);
+            float volume = baseVolume * enclosureMod;
+            if (volume < 0.01f) return;
 
             if (skyCoverage < minSky)
             {
@@ -252,6 +268,7 @@ namespace soundphysicsadapted
                             SkyCoverage = skyCoverage,
                             OcclusionFactor = occlusionFactor,
                             CombinedEnclosure = 0f,
+                            NearestRainDistance = nearestRainDist,
                             IsOutdoor = true,
                             OutdoorDir = dir,
                             OutdoorPlaceDist = placeDist
@@ -285,6 +302,7 @@ namespace soundphysicsadapted
                         SkyCoverage = skyCoverage,
                         OcclusionFactor = occlusionFactor,
                         CombinedEnclosure = combined,
+                        NearestRainDistance = nearestRainDist,
                         IsOutdoor = false
                     });
                 }
@@ -293,7 +311,8 @@ namespace soundphysicsadapted
             string mode = skyCoverage < minSky ? "OUTDOOR" :
                            (trackedOpenings?.Count > 0 ? "INDOOR+L1+L2" : "ENCLOSED+L1");
             ThunderDebugLog(
-                $"BOLT: dist={distance:F0} sky={skyCoverage:F2} occl={occlusionFactor:F2} " +
+                $"BOLT: dist={distance:F0} baseVol={baseVolume:F2} vol={volume:F2} " +
+                $"sky={skyCoverage:F2} occl={occlusionFactor:F2} rainDist={nearestRainDist:F1} " +
                 $"openings={trackedOpenings?.Count ?? 0} mode={mode}");
         }
 
@@ -469,10 +488,8 @@ namespace soundphysicsadapted
             var config = SoundPhysicsAdaptedModSystem.Config;
             if (config == null) return;
 
-            // Scale volume by config + occlusion (more enclosed = quieter)
-            float volumeLoss = occlusionFactor * 0.5f;
-            float layer1Vol = volume * config.ThunderLayer1Volume * (1f - volumeLoss);
-            layer1Vol = GameMath.Clamp(layer1Vol, 0f, 1f);
+            // Volume already fully computed by CalculateThunderVolume — just apply config scale
+            float layer1Vol = GameMath.Clamp(volume * config.ThunderLayer1Volume, 0f, 1f);
 
             if (layer1Vol < 0.01f) return;
 
@@ -789,11 +806,13 @@ namespace soundphysicsadapted
         /// </summary>
         private void FireDelayedCrack(PendingDelayedCrack crack, long gameTimeMs)
         {
-            float volume = CalculateBoltIntensity(crack.Distance);
-            if (volume <= 0f) return;
+            float baseVolume = CalculateBoltIntensity(crack.Distance);
+            if (baseVolume <= 0f) return;
 
-            // Scale crack volume slightly lower than initial bolt sound
-            volume *= 0.7f;
+            // Apply enclosure + scale crack volume slightly lower than initial bolt sound
+            float enclosureMod = CalculateThunderVolume(1.0f, crack.SkyCoverage, crack.OcclusionFactor, crack.NearestRainDistance);
+            float volume = baseVolume * enclosureMod * 0.7f;
+            if (volume < 0.01f) return;
 
             if (crack.IsOutdoor && crack.OutdoorDir != null)
             {
@@ -852,6 +871,159 @@ namespace soundphysicsadapted
         // ════════════════════════════════════════════════════════════════
         // HELPERS
         // ════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Compute thunder volume entirely from our enclosure metrics — no VS deepnessSub.
+        /// Uses sky coverage, occlusion factor, and nearest rain distance as a hard gate.
+        /// </summary>
+        /// <param name="rawIntensity">Base intensity (0.3=distant, 0.7=near, 1.0=verynear, or bolt intensity)</param>
+        /// <param name="skyCoverage">Sky coverage 0=outdoor, 1=fully covered</param>
+        /// <param name="occlusionFactor">Block occlusion 0=air, 1=solid</param>
+        /// <param name="nearestRainDistance">Distance to nearest rain-exposed point</param>
+        private float CalculateThunderVolume(float rawIntensity, float skyCoverage, float occlusionFactor, float nearestRainDistance)
+        {
+            // Sky factor: less covered sky = louder. At full sky coverage, 30% remains (bass penetration)
+            float skyFactor = 1.0f - skyCoverage * 0.7f;
+
+            // Occlusion multiplier: more material = quieter. At full occlusion, 50% remains
+            float occlusionMult = 1.0f - occlusionFactor * 0.5f;
+
+            // Rain distance factor: hard gate — no thunder if far from any rain column
+            float rainDistFactor;
+            if (nearestRainDistance <= 3f)
+            {
+                rainDistFactor = 1.0f;
+            }
+            else if (nearestRainDistance <= 20f)
+            {
+                // Lerp 1.0 → 0.3 over 3..20 blocks
+                rainDistFactor = 1.0f - (nearestRainDistance - 3f) / 17f * 0.7f;
+            }
+            else if (nearestRainDistance <= 40f)
+            {
+                // Soft tail: lerp 0.3 → 0.0 over 20..40 blocks
+                rainDistFactor = 0.3f - (nearestRainDistance - 20f) / 20f * 0.3f;
+            }
+            else
+            {
+                // Hard gate: >40 blocks from rain = silence
+                rainDistFactor = 0f;
+            }
+
+            return rawIntensity * skyFactor * occlusionMult * rainDistFactor;
+        }
+
+        /// <summary>
+        /// Find the nearest distance to a rain-exposed point from the player.
+        /// Primary: uses tracked openings (known paths to sky).
+        /// Fallback: samples 32 heightmap columns in 8 directions at 4 distances.
+        /// Returns float.MaxValue if no rain-exposed point found.
+        /// </summary>
+        private float GetNearestRainDistance(IReadOnlyList<TrackedOpening> trackedOpenings, Vec3d playerEarPos)
+        {
+            float nearest = float.MaxValue;
+
+            // Primary: check tracked opening distances
+            if (trackedOpenings != null && trackedOpenings.Count > 0)
+            {
+                for (int i = 0; i < trackedOpenings.Count; i++)
+                {
+                    float dist = (float)trackedOpenings[i].WorldPos.DistanceTo(playerEarPos);
+                    if (dist < nearest)
+                        nearest = dist;
+                }
+            }
+
+            // Also sample heightmap columns — gives smoother gradient than openings alone
+            float sampled = SampleAverageRainDistance(playerEarPos);
+            if (sampled < nearest)
+                nearest = sampled;
+
+            return nearest;
+        }
+
+        /// <summary>
+        /// Sample 32 heightmap columns (8 directions x 4 distances) for rain exposure.
+        /// Collects the 9 nearest rain-exposed columns and returns their average distance.
+        /// Averaging prevents a single nearby column from dominating — gives smooth gradient
+        /// as player moves deeper into a cave or building.
+        /// Returns float.MaxValue if no rain-exposed columns found.
+        /// </summary>
+        private float SampleAverageRainDistance(Vec3d playerEarPos)
+        {
+            var blockAccessor = capi.World.BlockAccessor;
+            int playerX = (int)Math.Floor(playerEarPos.X);
+            int playerY = (int)Math.Floor(playerEarPos.Y);
+            int playerZ = (int)Math.Floor(playerEarPos.Z);
+
+            const int MAX_SAMPLES = 9;
+
+            // Fixed-size array to avoid allocation — sorted insert keeps nearest N
+            float[] nearestDists = new float[MAX_SAMPLES];
+            for (int i = 0; i < MAX_SAMPLES; i++)
+                nearestDists[i] = float.MaxValue;
+            int foundCount = 0;
+
+            // 8 cardinal + diagonal directions
+            int[] dx = { 1, 1, 0, -1, -1, -1, 0, 1 };
+            int[] dz = { 0, 1, 1, 1, 0, -1, -1, -1 };
+
+            // 4 distance steps: 3, 6, 9, 12 blocks
+            int[] distances = { 3, 6, 9, 12 };
+
+            for (int d = 0; d < 8; d++)
+            {
+                for (int r = 0; r < 4; r++)
+                {
+                    int sampleX = playerX + dx[d] * distances[r];
+                    int sampleZ = playerZ + dz[d] * distances[r];
+
+                    try
+                    {
+                        int rainHeight = blockAccessor.GetRainMapHeightAt(sampleX, sampleZ);
+
+                        // If player Y is at or above rain height, this column is rain-exposed
+                        if (playerY >= rainHeight - 1)
+                        {
+                            float hDist = distances[r];
+                            float vDist = Math.Abs(playerY - rainHeight);
+                            float dist = MathF.Sqrt(hDist * hDist + vDist * vDist);
+
+                            // Insert into sorted array if closer than the current worst
+                            if (dist < nearestDists[MAX_SAMPLES - 1])
+                            {
+                                nearestDists[MAX_SAMPLES - 1] = dist;
+                                if (foundCount < MAX_SAMPLES) foundCount++;
+
+                                // Bubble sort the new entry into place
+                                for (int j = MAX_SAMPLES - 1; j > 0 && nearestDists[j] < nearestDists[j - 1]; j--)
+                                {
+                                    float tmp = nearestDists[j];
+                                    nearestDists[j] = nearestDists[j - 1];
+                                    nearestDists[j - 1] = tmp;
+                                }
+                            }
+
+                            // No need to check further distances in this direction
+                            break;
+                        }
+                    }
+                    catch
+                    {
+                        // Chunk not loaded — skip
+                    }
+                }
+            }
+
+            if (foundCount == 0) return float.MaxValue;
+
+            // Average the nearest N distances found
+            float sum = 0f;
+            for (int i = 0; i < foundCount; i++)
+                sum += nearestDists[i];
+
+            return sum / foundCount;
+        }
 
         /// <summary>
         /// Combine sky coverage and block occlusion into a single enclosure factor.

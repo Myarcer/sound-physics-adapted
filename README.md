@@ -55,7 +55,9 @@ git clone https://github.com/Myarcer/sound-physics-adapted.git
 cd sound-physics-adapted
 ```
 
-Copy these DLLs from your Vintage Story install into a `lib/` folder:
+**Important Legal Note**: Due to copyright restrictions, the proprietary Vintage Story game engine (`VintagestoryLib.dll`) and official survival content (`VSSurvivalMod.dll`) cannot be distributed with this repository.
+
+You must copy these DLLs from your own game installation into the `lib/` folder:
 - `VintagestoryAPI.dll`
 - `VintagestoryLib.dll`
 - `VSSurvivalMod.dll`
