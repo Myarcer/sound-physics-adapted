@@ -115,8 +115,8 @@ namespace soundphysicsadapted
                 debugTag: "THUNDER",
                 mode: PositionalSourcePool.PoolMode.OneShot);
 
-            // Thunder uses the nearest sound asset for Layer 2 crack
-            oneShotPool.AssetResolver = (_) => VERY_NEAR;
+            // Layer 2 crack at openings: use NODISTANCE for snappy impact
+            oneShotPool.AssetResolver = (_) => NODISTANCE;
             oneShotPool.SoundRange = 64f;
 
             // Layer 1 EFX filter (shared, reused across events)
@@ -235,7 +235,10 @@ namespace soundphysicsadapted
             float minSky = config.PositionalMinSkyCoverage;
             long gameTimeMs = capi.World.ElapsedMilliseconds;
 
-            // Select asset + base volume by distance, then apply enclosure
+            // Vanilla cutoff: no bolt sound past 320m
+            if (distance >= 320f) return;
+
+            // Select asset + base volume by distance (vanilla per-tier curves)
             AssetLocation asset = GetAssetForDistance(distance);
             float baseVolume = CalculateBoltIntensity(distance);
             if (baseVolume <= 0f) return;
@@ -422,19 +425,13 @@ namespace soundphysicsadapted
             double y = playerEarPos.Y + dir.Y * placeDist;
             double z = playerEarPos.Z + dir.Z * placeDist;
 
-            // Select asset by distance (controls sound character: crack vs rumble)
-            AssetLocation asset;
-            if (distance < 80)
-                asset = VERY_NEAR;  // Sharp crack dominates
-            else if (distance < 180)
-                asset = NEAR;       // Balanced crack + rumble
-            else
-                asset = DISTANT;    // Rumble dominates
+            // Select asset by distance — matches vanilla LightningFlash.ClientInit thresholds
+            AssetLocation asset = GetAssetForDistance(distance);
 
-            // Use unified two-tier volume curve
+            // Volume curve per tier — matches vanilla's linear falloff per asset
             float volume = CalculateBoltIntensity(distance);
 
-            if (distance >= 500 || volume <= 0f) return;
+            if (volume <= 0f) return;
 
             // Use LoadSound instead of PlaySoundAt so we can set rolloff factor = 0.
             // This disables OpenAL's distance attenuation entirely — our volume curve
@@ -806,12 +803,12 @@ namespace soundphysicsadapted
         /// </summary>
         private void FireDelayedCrack(PendingDelayedCrack crack, long gameTimeMs)
         {
-            float baseVolume = CalculateBoltIntensity(crack.Distance);
-            if (baseVolume <= 0f) return;
+            // Vanilla: nodistance.ogg uses steep 1 - dist/70 curve, clamped at 0.1
+            float crackVol = Math.Max(0.1f, 1f - crack.Distance / 70f);
 
-            // Apply enclosure + scale crack volume slightly lower than initial bolt sound
+            // Apply our enclosure attenuation on top
             float enclosureMod = CalculateThunderVolume(1.0f, crack.SkyCoverage, crack.OcclusionFactor, crack.NearestRainDistance);
-            float volume = baseVolume * enclosureMod * 0.7f;
+            float volume = crackVol * enclosureMod;
             if (volume < 0.01f) return;
 
             if (crack.IsOutdoor && crack.OutdoorDir != null)
@@ -826,7 +823,7 @@ namespace soundphysicsadapted
 
                 // Slight volume falloff at the outer edge of placement
                 float crackFalloff = crackPlaceDist < 20f ? 1f : 1f - (crackPlaceDist - 20f) / 30f;
-                float crackVol = volume * Math.Max(crackFalloff, 0.5f);
+                float finalVol = volume * Math.Max(crackFalloff, 0.5f);
 
                 try
                 {
@@ -837,7 +834,7 @@ namespace soundphysicsadapted
                         RelativePosition = false,
                         Position = new Vec3f((float)x, (float)y, (float)z),
                         DisposeOnFinish = true,
-                        Volume = crackVol,
+                        Volume = finalVol,
                         SoundType = EnumSoundType.Weather,
                         Range = range
                     };
@@ -858,7 +855,7 @@ namespace soundphysicsadapted
                     ThunderDebugLog($"  DELAYED CRACK FAILED: {ex.Message}");
                 }
 
-                ThunderDebugLog($"  DELAYED CRACK (outdoor): vol={crackVol:F2} placeDist={crackPlaceDist:F0} rolloff=0");
+                ThunderDebugLog($"  DELAYED CRACK (outdoor): vol={finalVol:F2} placeDist={crackPlaceDist:F0} rolloff=0");
             }
             else
             {
@@ -1148,34 +1145,25 @@ namespace soundphysicsadapted
         }
 
         /// <summary>Calculate bolt intensity from distance.
-        /// Two-tier curve: near strikes (< 200) have a natural sqrt falloff for visceral impact,
-        /// distant strikes (200-500) have a very gentle falloff since the distant OGG files
-        /// are inherently quiet and shouldn't be further reduced. Extended to 500 to match
-        /// visual lightning range — transpiler suppresses VS sounds globally.</summary>
+        /// Matches vanilla LightningFlash.ClientInit per-tier linear falloff.
+        /// Each tier has its own denominator — vanilla uses hard transitions.
+        /// Our enclosure system (sky/occlusion/rain) applies on top.</summary>
         private float CalculateBoltIntensity(float distance)
         {
-            if (distance >= 500f) return 0f;
-
+            if (distance < 150f)
+                return Math.Max(0.1f, 1f - distance / 180f);   // verynear tier
             if (distance < 200f)
-            {
-                // Near: sqrt falloff for natural sound
-                float t = distance / 200f;
-                return Math.Max(0.5f, MathF.Sqrt(1f - t * 0.5f));
-            }
-            else
-            {
-                // Far: very gentle linear falloff (0.7 at 200 → 0.45 at 500)
-                // The distant OGG files are inherently quiet, don't compound that
-                float t = (distance - 200f) / 300f;
-                return Math.Max(0.45f, 0.7f - t * 0.25f);
-            }
+                return Math.Max(0.1f, 1f - distance / 250f);   // near tier
+            if (distance < 320f)
+                return Math.Max(0.1f, 1f - distance / 500f);   // distant tier
+            return 0f;  // beyond 320 = no bolt sound (vanilla cutoff)
         }
 
-        /// <summary>Select thunder asset by distance type.</summary>
+        /// <summary>Select thunder asset by distance — matches vanilla LightningFlash.ClientInit thresholds.</summary>
         public static AssetLocation GetAssetForDistance(float distance)
         {
-            if (distance < 80) return VERY_NEAR;
-            if (distance < 180) return NEAR;
+            if (distance < 150) return VERY_NEAR;
+            if (distance < 200) return NEAR;
             return DISTANT;
         }
 

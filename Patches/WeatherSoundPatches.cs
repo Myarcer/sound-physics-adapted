@@ -536,7 +536,7 @@ namespace soundphysicsadapted.Patches
                 Vec3d earPos = player.Pos.XYZ.Add(player.LocalEyePos);
                 float distance = (float)earPos.DistanceTo(boltPos);
 
-                if (distance > 500) return; // Must cover visual range — transpiler suppresses VS sounds at ALL distances
+                if (distance >= 320) return; // Match vanilla bolt sound cutoff
 
                 float skyCoverage = _weatherManager.SkyCoverage;
                 float occlusionFactor = _weatherManager.OcclusionFactor;
