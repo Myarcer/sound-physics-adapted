@@ -960,6 +960,9 @@ namespace soundphysicsadapted
             Vec3d playerPos = player.Pos.XYZ.Add(player.LocalEyePos);
             Vec3d soundPosD = new Vec3d(soundPos.X, soundPos.Y, soundPos.Z);
 
+            // Adjust sound position for multi-block sources (e.g. doors) before initial occlusion
+            soundPosD = SoundSourceAdjuster.Adjust(soundPosD, world.BlockAccessor);
+
             float occlusion = OcclusionCalculator.Calculate(soundPosD, playerPos, world.BlockAccessor);
 
             if (occlusion <= 0)
@@ -992,6 +995,9 @@ namespace soundphysicsadapted
 
             Vec3d playerPos = player.Pos.XYZ.Add(player.LocalEyePos);
             Vec3d soundPosD = new Vec3d(soundPos.X, soundPos.Y, soundPos.Z);
+
+            // Adjust sound position for multi-block sources (e.g. doors) before initial occlusion
+            soundPosD = SoundSourceAdjuster.Adjust(soundPosD, cachedBlockAccessor);
 
             float occlusion = OcclusionCalculator.Calculate(soundPosD, playerPos, cachedBlockAccessor);
 
