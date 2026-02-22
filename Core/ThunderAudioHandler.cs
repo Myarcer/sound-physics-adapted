@@ -7,22 +7,36 @@ using Vintagestory.API.MathTools;
 namespace soundphysicsadapted
 {
     /// <summary>
-    /// Phase 5C: Thunder audio handler — full custom Layer 1 + Layer 2.
+    /// Thunder audio handler — full custom Layer 1 + Layer 2 + delayed crack.
     ///
     /// ALL thunder sounds (ambient + bolt) are fully replaced by our system.
     /// Ambient thunder: Harmony prefix on WeatherSimulationLightning.ClientTick.
     /// Bolt thunder: Harmony transpiler suppresses VS's PlaySoundAt + postfix plays ours.
     ///
+    /// Sound assets and distance tiers (bolt thunder — matches vanilla thresholds):
+    ///   verynear.ogg  — sharp crack, plays for bolts &lt; 150m
+    ///   near.ogg      — balanced crack + rumble, plays for bolts 150-200m
+    ///   distant.ogg   — rolling rumble, plays for bolts 200-320m
+    ///   nodistance.ogg — pure instant crack, plays as delayed extra layer for bolts &lt; 200m
+    ///
+    /// Volume curves (bolt thunder — per-tier linear, matching vanilla):
+    ///   verynear:  1 - dist/180  (1.0 at 0m, 0.17 at 149m)
+    ///   near:      1 - dist/250  (0.40 at 150m, 0.20 at 200m)
+    ///   distant:   1 - dist/500  (0.60 at 200m, 0.36 at 320m)
+    ///   crack:     pow(1-dist/200, 1.5) — realistic atmospheric HF absorption
+    ///
     /// Three modes based on enclosure state:
     ///
     /// OUTDOOR (skyCoverage below threshold):
-    ///   Ambient thunder: positioned one-shot in random sky direction.
-    ///   Bolt thunder: positioned one-shot toward bolt from player.
+    ///   Bolt: positioned one-shot toward strike, rolloff=0, our volume curve only.
+    ///   Ambient: positioned one-shot in random sky direction (hill-aware).
+    ///   Crack: delayed nodistance.ogg positioned toward bolt direction.
     ///   No LPF — full spectrum thunder with 3D directionality.
     ///
     /// INDOOR WITH OPENINGS (partial enclosure + tracked openings):
-    ///   Layer 1: Omnidirectional rumble, listener-relative, heavy LPF, reduced volume.
-    ///   Layer 2: Positional one-shot at best opening (biased by bolt direction if known).
+    ///   Layer 1: Omnidirectional rumble, listener-relative, LPF from enclosure.
+    ///   Layer 2: Positional nodistance.ogg one-shot at best opening (bolt-biased).
+    ///   Crack: delayed nodistance.ogg as Layer 1 with LPF.
     ///   The contrast between muffled rumble and clear crack from the doorway is the effect.
     ///
     /// FULLY ENCLOSED (no openings):
@@ -30,14 +44,11 @@ namespace soundphysicsadapted
     ///   No Layer 2 — no openings to hear through.
     ///
     /// Architecture:
-    /// - Ambient thunder (WeatherSimulationLightning.ClientTick): fully replaced via Harmony prefix.
-    ///   We re-implement the random roll logic and play both Layer 1 + Layer 2 + outdoor.
-    /// - Bolt thunder (LightningFlash.ClientInit): VS sounds suppressed via Harmony transpiler.
-    ///   Postfix reads bolt position and plays our custom Layer 1 + Layer 2.
-    /// - LightningFlash.Render: VS's nodistance.ogg suppressed via transpiler.
-    ///   We queue our own delayed crack sound fired from OnGameTick.
-    /// - Layer 2 sources go through PositionalSourcePool (OneShot mode) with pre-applied
-    ///   LPF to avoid transient bypass (filter attached before Start()).
+    /// - Ambient thunder (WeatherSimulationLightning.ClientTick): fully replaced via prefix.
+    /// - Bolt thunder (LightningFlash.ClientInit): VS suppressed via transpiler, postfix plays ours.
+    /// - Bolt crack (LightningFlash.Render): VS suppressed, we queue delayed crack via OnGameTick.
+    /// - Layer 2 uses PositionalSourcePool (OneShot, nodistance.ogg) with pre-applied LPF.
+    /// - Enclosure attenuation (sky/occlusion/rain) applies on top of vanilla volume curves.
     /// </summary>
     public class ThunderAudioHandler : IDisposable
     {

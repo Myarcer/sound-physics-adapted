@@ -533,10 +533,12 @@ namespace soundphysicsadapted
 
         // ============================================================
         // THUNDER POSITIONING
-        // Two-layer positioned thunder audio.
-        // Layer 1: omnidirectional rumble with LPF (heard through walls).
-        // Layer 2: positional one-shots at detected openings (crack from doorway).
-        // Outdoors: thunder positioned toward bolt direction.
+        // Replaces all vanilla bolt + ambient thunder with positioned audio.
+        // Bolt: distance-based asset selection (verynear/near/distant) + delayed
+        //       nodistance.ogg crack layer with realistic atmospheric falloff.
+        // Indoor: Layer 1 (omnidirectional LPF rumble) + Layer 2 (crack at opening).
+        // Outdoor: 3D positioned toward bolt/random sky direction.
+        // Volume: vanilla per-tier linear curves + our enclosure attenuation.
         // ============================================================
 
         /// <summary>
