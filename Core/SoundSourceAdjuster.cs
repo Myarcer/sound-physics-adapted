@@ -30,6 +30,8 @@ namespace soundphysicsadapted
             Block block = blockAccessor.GetBlock(_checkPos);
             if (block == null || block.Id == 0) return soundPos;
 
+            string code = block.Code?.Path ?? "(null)";
+
             // --- Door adjustment ---
             // VS plays door sounds at (pos.X+0.5, pos.InternalY+0.5, pos.Z+0.5)
             // For multi-block-tall doors, shift Y to the vertical center.
@@ -40,10 +42,20 @@ namespace soundphysicsadapted
                 adjusted.Y += doorShift;
 
                 SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"[SoundAdjust] Door at ({_checkPos.X},{_checkPos.Y},{_checkPos.Z}) " +
+                    $"[SoundAdjust] Door '{code}' at ({_checkPos.X},{_checkPos.Y},{_checkPos.Z}) " +
                     $"shifted Y +{doorShift:F1} -> ({adjusted.X:F1},{adjusted.Y:F1},{adjusted.Z:F1})");
 
                 return adjusted;
+            }
+
+            // Debug: log what block we found if it looks like it could be a door sound
+            // (only when debug mode is on, to avoid spam)
+            if (code.Contains("door"))
+            {
+                int height = block.Attributes?["height"]?.AsInt(0) ?? 0;
+                SoundPhysicsAdaptedModSystem.DebugLog(
+                    $"[SoundAdjust] Found door block '{code}' at ({_checkPos.X},{_checkPos.Y},{_checkPos.Z}) " +
+                    $"height={height} (no shift needed)");
             }
 
             // --- Future: add other multi-block adjustments here ---
@@ -69,10 +81,13 @@ namespace soundphysicsadapted
             int height = block.Attributes?["height"]?.AsInt(1) ?? 1;
             if (height <= 1) return 0f;
 
-            // Shift up by half the extra height to center between all blocks.
-            // height=2: shift +0.5 (center between Y+0.5 and Y+1.5)
-            // height=3: shift +1.0 (center between Y+0.5 and Y+2.5)
-            return (height - 1) * 0.5f;
+            // Shift sound to the TOP block center, not geometric center.
+            // VS places sound at bottom_block_Y + 0.5. We want top_block_Y + 0.5.
+            // height=2: shift +1.0 (from Y+0.5 to Y+1.5, top block center)
+            // height=3: shift +2.0 (from Y+0.5 to Y+2.5, top block center)
+            // This clears floor-level obstacles (chests, barrels) that a geometric
+            // center shift (+0.5 for height=2) would still clip at short range.
+            return (float)(height - 1);
         }
     }
 }
