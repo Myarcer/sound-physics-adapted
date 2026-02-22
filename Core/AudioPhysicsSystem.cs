@@ -141,7 +141,10 @@ namespace soundphysicsadapted
         /// </summary>
         public void Update(Vec3d playerPos, IBlockAccessor blockAccessor, long currentTimeMs)
         {
-            if (playerPos == null || blockAccessor == null) return;
+            soundphysicsadapted.Core.ExecutionTracer.Enter("AudioPhysicsSystem", "Update");
+            try
+            {
+                if (playerPos == null || blockAccessor == null) return;
 
             updatedThisTick = 0;
             cachedThisTick = 0;
@@ -169,6 +172,11 @@ namespace soundphysicsadapted
 
             UpdateSkyProbe(playerPos, blockAccessor, currentTimeMs);
             UpdateAllSounds(playerPos, blockAccessor, currentTimeMs);
+            }
+            finally
+            {
+                soundphysicsadapted.Core.ExecutionTracer.Exit("AudioPhysicsSystem", "Update");
+            }
         }
 
         /// <summary>
@@ -195,7 +203,10 @@ namespace soundphysicsadapted
 
         private void UpdateAllSounds(Vec3d playerPos, IBlockAccessor blockAccessor, long currentTimeMs)
         {
-            var activeSounds = AudioRenderer.GetActiveSounds();
+            soundphysicsadapted.Core.ExecutionTracer.Enter("AudioPhysicsSystem", "UpdateAllSounds");
+            try
+            {
+                var activeSounds = AudioRenderer.GetActiveSounds();
             int count = 0;
             _candidates.Clear();
             _soundDistances.Clear();
@@ -343,6 +354,11 @@ namespace soundphysicsadapted
                     $"skipped={skippedThisTick} deferred={deferredThisTick} playerPos={playerPosThisTick} " +
                     $"total={totalActive} outdoor={isOutdoors}{cellCacheInfo}{throttleInfo}");
             }
+            }
+            finally
+            {
+                soundphysicsadapted.Core.ExecutionTracer.Exit("AudioPhysicsSystem", "UpdateAllSounds");
+            }
         }
 
         /// <summary>
@@ -369,7 +385,10 @@ namespace soundphysicsadapted
         private void ProcessSoundRaycast(ILoadedSound sound, SoundCacheEntry cache, Vec3d soundPos,
             float distance, Vec3d playerPos, IBlockAccessor blockAccessor, long currentTimeMs)
         {
-            string soundName = sound.Params?.Location?.ToShortString() ?? "unknown";
+            soundphysicsadapted.Core.ExecutionTracer.Enter("AudioPhysicsSystem", "ProcessSoundRaycast", sound.Params?.Location?.ToShortString());
+            try
+            {
+                string soundName = sound.Params?.Location?.ToShortString() ?? "unknown";
 
             // === PLAYER-POSITION FAST PATH ===
             // Sounds at player position (UI clicks, block breaking, bow draw) skip ALL calculations.
@@ -675,6 +694,11 @@ namespace soundphysicsadapted
             cache.CachedOcclusion = occlusion;
             cache.LastUpdateTimeMs = currentTimeMs;
             cache.LastRaycastTimeMs = currentTimeMs;
+            }
+            finally
+            {
+                soundphysicsadapted.Core.ExecutionTracer.Exit("AudioPhysicsSystem", "ProcessSoundRaycast");
+            }
         }
 
         private void UpdateSkyProbe(Vec3d playerPos, IBlockAccessor blockAccessor, long currentTimeMs)

@@ -4,7 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace SoundPhysics.Core
+namespace soundphysicsadapted.Core
 {
     public static class ExecutionTracer
     {

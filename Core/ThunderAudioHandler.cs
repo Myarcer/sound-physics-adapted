@@ -934,31 +934,35 @@ namespace soundphysicsadapted
                 }
             }
 
-            // Fallback: if no openings (or openings are far), sample heightmap columns
-            if (nearest > 20f)
-            {
-                float sampled = SampleNearestRainColumn(playerEarPos);
-                if (sampled < nearest)
-                    nearest = sampled;
-            }
+            // Also sample heightmap columns — gives smoother gradient than openings alone
+            float sampled = SampleAverageRainDistance(playerEarPos);
+            if (sampled < nearest)
+                nearest = sampled;
 
             return nearest;
         }
 
         /// <summary>
         /// Sample 32 heightmap columns (8 directions x 4 distances) for rain exposure.
-        /// O(1) per lookup via GetRainMapHeightAt — very cheap.
-        /// Returns distance to nearest column where player Y is above rain height,
-        /// or float.MaxValue if none found.
+        /// Collects the 9 nearest rain-exposed columns and returns their average distance.
+        /// Averaging prevents a single nearby column from dominating — gives smooth gradient
+        /// as player moves deeper into a cave or building.
+        /// Returns float.MaxValue if no rain-exposed columns found.
         /// </summary>
-        private float SampleNearestRainColumn(Vec3d playerEarPos)
+        private float SampleAverageRainDistance(Vec3d playerEarPos)
         {
             var blockAccessor = capi.World.BlockAccessor;
             int playerX = (int)Math.Floor(playerEarPos.X);
             int playerY = (int)Math.Floor(playerEarPos.Y);
             int playerZ = (int)Math.Floor(playerEarPos.Z);
 
-            float nearest = float.MaxValue;
+            const int MAX_SAMPLES = 9;
+
+            // Fixed-size array to avoid allocation — sorted insert keeps nearest N
+            float[] nearestDists = new float[MAX_SAMPLES];
+            for (int i = 0; i < MAX_SAMPLES; i++)
+                nearestDists[i] = float.MaxValue;
+            int foundCount = 0;
 
             // 8 cardinal + diagonal directions
             int[] dx = { 1, 1, 0, -1, -1, -1, 0, 1 };
@@ -981,13 +985,24 @@ namespace soundphysicsadapted
                         // If player Y is at or above rain height, this column is rain-exposed
                         if (playerY >= rainHeight - 1)
                         {
-                            // Distance from player to this column (horizontal + vertical)
                             float hDist = distances[r];
                             float vDist = Math.Abs(playerY - rainHeight);
                             float dist = MathF.Sqrt(hDist * hDist + vDist * vDist);
 
-                            if (dist < nearest)
-                                nearest = dist;
+                            // Insert into sorted array if closer than the current worst
+                            if (dist < nearestDists[MAX_SAMPLES - 1])
+                            {
+                                nearestDists[MAX_SAMPLES - 1] = dist;
+                                if (foundCount < MAX_SAMPLES) foundCount++;
+
+                                // Bubble sort the new entry into place
+                                for (int j = MAX_SAMPLES - 1; j > 0 && nearestDists[j] < nearestDists[j - 1]; j--)
+                                {
+                                    float tmp = nearestDists[j];
+                                    nearestDists[j] = nearestDists[j - 1];
+                                    nearestDists[j - 1] = tmp;
+                                }
+                            }
 
                             // No need to check further distances in this direction
                             break;
@@ -1000,7 +1015,14 @@ namespace soundphysicsadapted
                 }
             }
 
-            return nearest;
+            if (foundCount == 0) return float.MaxValue;
+
+            // Average the nearest N distances found
+            float sum = 0f;
+            for (int i = 0; i < foundCount; i++)
+                sum += nearestDists[i];
+
+            return sum / foundCount;
         }
 
         /// <summary>

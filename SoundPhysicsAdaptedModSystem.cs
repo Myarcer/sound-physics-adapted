@@ -258,6 +258,7 @@ namespace soundphysicsadapted
         public override void StartClientSide(ICoreClientAPI api)
         {
             base.StartClientSide(api);
+            soundphysicsadapted.Core.ExecutionTracer.Initialize();
             clientApi = api;
             ClientChannel = api.Network.GetChannel("soundphysicsadapted")
                 .RegisterMessageType(typeof(ResonatorSyncPacket));  // Must register to send!
@@ -777,6 +778,8 @@ namespace soundphysicsadapted
 
             // Dispose sound override manager
             Core.SoundOverrideManager.Dispose();
+            
+            soundphysicsadapted.Core.ExecutionTracer.Close();
 
             base.Dispose();
         }
