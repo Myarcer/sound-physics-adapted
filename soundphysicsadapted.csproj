@@ -1,0 +1,99 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>soundphysicsadapted</AssemblyName>
+    <RootNamespace>soundphysicsadapted</RootNamespace>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DebugType>full</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <DefineConstants>TRACE</DefineConstants>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="VintagestoryAPI">
+      <HintPath>lib\VintagestoryAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="VintagestoryLib">
+      <HintPath>lib\VintagestoryLib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="VSSurvivalMod">
+      <HintPath>lib\VSSurvivalMod.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="protobuf-net">
+      <HintPath>lib\protobuf-net.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="resources\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.3.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="research\**" />
+    <Compile Remove="references\**" />
+    <Compile Remove="src\**" />
+    <EmbeddedResource Remove="research\**" />
+    <EmbeddedResource Remove="references\**" />
+    <EmbeddedResource Remove="src\**" />
+    <None Remove="research\**" />
+    <None Remove="references\**" />
+    <None Remove="src\**" />
+  </ItemGroup>
+
+  <Target Name="Package" AfterTargets="Build">
+    <ItemGroup>
+      <ModFiles Include="$(OutputPath)$(AssemblyName).dll" />
+    </ItemGroup>
+
+    <MakeDir Directories="Releases" />
+    <MakeDir Directories=".modpackage" />
+    <MakeDir Directories=".modpackage\assets" />
+
+    <!-- Copy modinfo.json to root -->
+    <Copy SourceFiles="resources\modinfo.json" DestinationFiles=".modpackage\modinfo.json" />
+
+    <!-- Copy mod icon to root -->
+    <Copy SourceFiles="resources\modicon.png" DestinationFiles=".modpackage\modicon.png" Condition="Exists('resources\modicon.png')" />
+
+    <!-- Copy assets folder -->
+    <ItemGroup>
+      <AssetsFiles Include="resources\assets\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AssetsFiles)" DestinationFiles="@(AssetsFiles->'.modpackage\assets\%(RecursiveDir)%(Filename)%(Extension)')" />
+
+    <!-- Copy README to root -->
+    <Copy SourceFiles="README.md" DestinationFiles=".modpackage\README.md" Condition="Exists('README.md')" />
+
+    <!-- Copy DLL to root -->
+    <Copy SourceFiles="@(ModFiles)" DestinationFolder=".modpackage" />
+
+    <!-- Create ZIP -->
+    <ZipDirectory SourceDirectory=".modpackage" DestinationFile="Releases\soundphysicsadapted_v0.1.3.zip" Overwrite="true" />
+    <RemoveDir Directories=".modpackage" />
+
+    <!-- Deploy to VS mods folder -->
+    <Message Text="Deploying to $(AppData)\VintagestoryData\Mods\..." Importance="high" />
+    <Copy SourceFiles="Releases\soundphysicsadapted_v0.1.3.zip" DestinationFolder="$(AppData)\VintagestoryData\Mods\" />
+  </Target>
+</Project>

@@ -1,0 +1,29 @@
+# Build output
+bin/
+obj/
+.modpackage/
+
+# Game reference DLLs (copyrighted, users must supply their own)
+lib/
+
+# Reference materials (decompiled mods, research)
+references/
+
+# Release archives
+Releases/
+
+# Internal dev docs
+docs/
+TODO.md
+
+# IDE / editor
+.vs/
+.vscode/
+.github/
+*.user
+*.suo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
