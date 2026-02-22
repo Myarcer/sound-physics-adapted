@@ -1,111 +1,135 @@
 # Sound Physics Adapted
 
-Realistic sound physics for [Vintage Story](https://vintagestory.at/). Raycast-based occlusion muffles sounds through walls, dynamic reverb reflects off cave and room geometry, and weather audio responds to your shelter level.
+Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the difference walls, caves, and weather make.
 
-Inspired by Minecraft's [Sound Physics Remastered](https://github.com/henkelmax/sound-physics-remastered), built from scratch for Vintage Story's unique world and audio engine.
-
----
-
-## Features
-
-### 🔇 Sound Occlusion
-- **Raycast-based obstruction** — sounds are muffled realistically when blocked by walls, floors, or terrain
-- **Material-aware filtering** — wood, stone, metal, and other materials have distinct occlusion values
-- **Smooth transitions** — filters ramp up/down naturally as you move around
-- **Door & trapdoor awareness** — interactable blocks affect occlusion dynamically based on open/closed state
-
-### 🏔️ Dynamic Reverb
-- **4-slot EFX reverb** — short, medium, and long decay reverb calculated from your environment
-- **Ray-traced geometry detection** — 32 rays sample surrounding surfaces to determine room size and shape
-- **Material reflectivity** — stone caves echo, wooden rooms absorb, metal rooms ring
-- **Reverb cell cache** — efficient spatial caching so reverb calculations don't repeat needlessly
-
-### 🔊 Sound Repositioning
-- **Sound paths through openings** — occluded sounds reposition to the nearest doorway or opening
-- **Smoothed transitions** — no jarring jumps when moving around corners
-- **Hysteresis** — prevents rapid flipping between competing sound paths
-
-### 🌧️ Weather Audio
-- **Positional rain, wind, and hail** — weather sounds spawn at openings around you
-- **Shelter detection** — enclosure calculator determines how sheltered you are
-- **Gradual attenuation** — weather fades smoothly, not binary on/off
-- **Directional thunder** — thunder sources placed above the horizon with realistic positioning
-
-### 🎵 Block Integration
-- **Resonator/music block support** — custom audio handling for resonator blocks with proper lifecycle management
-- **Boombox remote sync** — multiplayer synchronization for boombox blocks
-- **Sound override system** — replace vanilla sounds with custom audio assets
-
-### ⚙️ Mod API
-- Runtime API for other mods to configure material overrides, occlusion values, and reflectivity
-- `SoundPhysicsAPI` static class for easy integration
+[![VS Version](https://img.shields.io/badge/Vintage%20Story-1.21.0%2B-green)](https://vintagestory.at/)
+[![Side](https://img.shields.io/badge/Side-Client-blue)]()
 
 ---
 
-## Installation
+## What It Does
 
-1. Download the latest release ZIP from the [Releases](https://github.com/Myarcer/sound-physics-adapted/releases) page
-2. Place the ZIP file in your `VintagestoryData/Mods/` folder
-3. Launch the game — the mod will generate its config file on first run
+**Occlusion** — Sounds behind walls get muffled. Different materials block different amounts: stone walls muffle heavily, wooden doors let more through. Open and close a door and hear the difference immediately.
+
+**Reverb** — Caves echo. Small rooms sound tight. Open fields sound dry. The mod traces rays from your position to detect surrounding geometry and applies matching reverb in real time.
+
+**Sound Repositioning** — When a sound source is behind a wall but there's a nearby doorway, the sound shifts to come from the opening instead of phasing through solid blocks.
+
+**Weather Audio** — Rain, wind, and hail are positioned at openings around you. Step inside a shelter and weather sounds fade based on how enclosed you are — not a binary cutoff.
+
+**Thunder** — Thunder cracks are placed directionally above the horizon with realistic distance falloff.
+
+**Block Integration** — Resonators, boomboxes, and music blocks are fully supported with proper audio lifecycle management and multiplayer sync.
 
 ---
 
-## Configuration
+## Install
 
-Config file location: `%appdata%/VintagestoryData/ModConfig/soundphysicsadapted.json`
+1. Download the latest `.zip` from [Releases](https://github.com/Myarcer/sound-physics-adapted/releases)
+2. Drop it into your `VintagestoryData/Mods/` folder
+3. Launch the game
 
-The mod is highly configurable. Key settings include:
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `EnableOcclusion` | `true` | Toggle raycast-based sound occlusion |
-| `EnableCustomReverb` | `true` | Toggle dynamic reverb processing |
-| `ReverbRayCount` | `32` | Number of rays for environment sampling |
-| `ReverbBounces` | `4` | Max reflection bounces per ray |
-| `EnableWeatherAudio` | `true` | Toggle weather audio enhancements |
-| `EnableSoundRepositioning` | `true` | Toggle sound path redirection through openings |
-| `DebugOcclusion` | `false` | Log occlusion calculations |
-| `DebugReverb` | `false` | Log reverb calculations |
-
-All settings can be adjusted in-game via the mod config menu.
+Config generates automatically at `VintagestoryData/ModConfig/soundphysicsadapted.json`. Everything is tweakable from the in-game mod settings menu.
 
 ---
 
 ## Building from Source
 
-**Requirements**: .NET 8 SDK, Vintage Story game DLLs
+Requires .NET 8 SDK.
 
-1. Clone the repository
-2. Copy the following DLLs from your Vintage Story installation into a `lib/` folder:
-   - `VintagestoryAPI.dll`
-   - `VintagestoryLib.dll`
-   - `VSSurvivalMod.dll`
-   - `protobuf-net.dll`
-3. Build:
-   ```
-   dotnet build soundphysicsadapted.csproj -c Release
-   ```
-4. The built mod ZIP will be in `Releases/` and auto-deployed to your mods folder
+```
+git clone https://github.com/Myarcer/sound-physics-adapted.git
+cd sound-physics-adapted
+```
+
+Copy these DLLs from your Vintage Story install into a `lib/` folder:
+- `VintagestoryAPI.dll`
+- `VintagestoryLib.dll`
+- `VSSurvivalMod.dll`
+- `protobuf-net.dll`
+
+```
+dotnet build soundphysicsadapted.csproj -c Release
+```
+
+The mod ZIP lands in `Releases/` and auto-deploys to your mods folder.
+
+---
+
+## Repository Structure
+
+```
+├── SoundPhysicsAdaptedModSystem.cs   # Mod entry point
+├── Config/                           # Configuration classes
+├── Core/                             # Audio processing, raycasting, weather
+├── Network/                          # Multiplayer sync packets
+├── Patches/                          # Harmony patches for audio interception
+├── resources/                        # Mod assets (modinfo, icon, sounds, lang)
+├── soundphysicsadapted.csproj        # Build config
+├── build.bat                         # Build helper
+├── CHANGELOG.md                      # Release history
+└── README.md
+```
 
 ---
 
 ## Compatibility
 
-- **Vintage Story**: 1.21.0+
-- **Side**: Client-side (not required on server)
-- **Known compatible mods**: CarryOn (dedicated compatibility patches included)
+| | |
+|---|---|
+| **Vintage Story** | 1.21.0+ |
+| **Required on server** | No |
+| **Required on client** | No (but only the client running it hears the effects) |
+| **CarryOn** | Compatible (dedicated patches) |
 
 ---
 
-## License
+## Mod API
 
-See [LICENSE](LICENSE) for details.
+Other mods can interact at runtime via `SoundPhysicsAPI`:
+
+```csharp
+// Override occlusion for a specific block
+SoundPhysicsAPI.SetOcclusionOverride("game:door-*", 0.4f);
+
+// Set material reflectivity
+SoundPhysicsAPI.SetMaterialReflectivity("metal", 0.95f);
+
+// Get the full config instance
+var config = SoundPhysicsAPI.GetMaterialConfig();
+```
+
+---
+
+## Development Roadmap
+
+<details>
+<summary>Phase progress (click to expand)</summary>
+
+### Phase 1: Basic Occlusion ✅
+Raycast-based sound occlusion, lowpass filtering, volume reduction, per-sound filter management.
+
+### Phase 2: Material System ✅
+Per-material occlusion values, JSON configuration, block-specific overrides.
+
+### Phase 3: Enhanced Reverb ✅
+4-slot EFX reverb, ray-traced environment detection, material reflectivity, send filter gains.
+
+### Phase 4: Shared Airspace & Sound Paths ✅
+Shared airspace detection, sound repositioning through doorways/openings.
+
+### Phase 5: Weather & Ambient ✅
+Positional weather audio, shelter detection, gradual attenuation, directional thunder.
+
+### Phase 6: Polish — In Progress
+Air absorption, performance optimization, debug visualization.
+
+</details>
 
 ---
 
 ## Links
 
-- [Vintage Story Mod DB Page](#) *(coming soon)*
 - [Sound Physics Remastered (Minecraft)](https://github.com/henkelmax/sound-physics-remastered) — original inspiration
 - [VS Modding Wiki](https://wiki.vintagestory.at/Modding:Getting_Started)
-- [VS API Documentation](https://apidocs.vintagestory.at/)
+- [VS API Docs](https://apidocs.vintagestory.at/)
