@@ -1,0 +1,334 @@
+{
+	"code": "chiseledfirepit",
+	"class": "BlockDecoFirepit",
+	"entityClass": "BEDecoFirepit",
+	
+	"creativeinventory": {
+		"general": [ "*-extinct" ],"chiseltools": [ "*-extinct" ]
+	},
+	"variantgroups": [
+		{
+			"code": "burnstate",
+			"states": [ "extinct", "lit", "cold" ]
+		}
+		
+	],
+	"behaviors": [
+		{"name": "BBChiseledCover"},
+		{ "name": "Container" },
+
+		{ "name": "Ignitable" },
+		{ "name": "HeatSource" }
+		
+	],
+	entityBehaviors: [{"name": "BEBChiseledCover"}],
+	"renderpass": "OpaqueNoCull",
+	"shape": { "base": "block/decofirepit" },
+	
+	"blockmaterial": "Metal",
+	"lightAbsorption": 0,
+	"lightHsvByType": {
+		"chiseledfirepit-extinct": [ 7, 7, 3 ],
+		"chiseledfirepit-lit": [ 7, 7, 16 ]
+	},
+	"particlePropertiesByType": {
+		"chiseledfirepit-extinct": [
+			{
+				"hsvaColor": [
+					{
+						"avg": 0,
+						"var": 0
+					},
+					{
+						"avg": 0,
+						"var": 0
+					},
+					{
+						"avg": 70,
+						"var": 30
+					},
+					{
+						"avg": 220,
+						"var": 50
+					}
+				],
+				"opacityEvolve": {
+					"transform": "quadratic",
+					"factor": -16
+				},
+				"gravityEffect": {
+					"avg": 0,
+					"var": 0
+				},
+				"posOffset": [
+					{
+						"avg": 0,
+						"var": 0.2
+					},
+					{
+						"avg": -0.4,
+						"var": 0
+					},
+					{
+						"avg": 0,
+						"var": 0.2
+					}
+				],
+				"velocity": [
+					{
+						"avg": 0,
+						"var": 0.05
+					},
+					{
+						"avg": 0.1,
+						"var": 0.05
+					},
+					{
+						"avg": 0,
+						"var": 0.05
+					}
+				],
+				"quantity": { "avg": 0.02 },
+				"size": {
+					"avg": 0.3,
+					"var": 0.05
+				},
+				"sizeEvolve": {
+					"transform": "linear",
+					"factor": 1.5
+				},
+				"particleModel": "Quad",
+				"windAffectednes": 0.7
+			}
+		],
+		"chiseledfirepit-lit": [
+			{
+				"__comment": "Ember cubicles",
+				"hsvaColor": [
+					{
+						"avg": 30,
+						"var": 20
+					},
+					{
+						"avg": 255,
+						"var": 50
+					},
+					{
+						"avg": 255,
+						"var": 50
+					},
+					{
+						"avg": 255,
+						"var": 0
+					}
+				],
+				"gravityEffect": {
+					"dist": "invexp",
+					"avg": -0.1,
+					"var": 0.4
+				},
+				"posOffset": [
+					{
+						"avg": 0,
+						"var": 0.2
+					},
+					{
+						"avg": -0.4,
+						"var": 0
+					},
+					{
+						"avg": 0,
+						"var": 0.2
+					}
+				],
+				"velocity": [
+					{
+						"avg": 0,
+						"var": 0.15
+					},
+					{
+						"avg": 0.5,
+						"var": 0.1
+					},
+					{
+						"avg": 0,
+						"var": 0.15
+					}
+				],
+				"quantity": { "avg": 0.015 },
+				"size": {
+					"avg": 0.4,
+					"var": 0
+				},
+				"sizeEvolve": {
+					"transform": "quadratic",
+					"factor": -0.7
+				},
+				"lifeLength": { "avg": 1.5 },
+				"vertexFlags": 128,
+				"windAffectednes": 0.2
+			},
+			{
+				"__comment": "Smoke quads",
+				"hsvaColor": [
+					{
+						"avg": 0,
+						"var": 0
+					},
+					{
+						"avg": 0,
+						"var": 0
+					},
+					{
+						"avg": 220,
+						"var": 30
+					},
+					{
+						"avg": 220,
+						"var": 50
+					}
+				],
+				"opacityEvolve": {
+					"transform": "linear",
+					"factor": -255
+				},
+				"gravityEffect": {
+					"avg": 0,
+					"var": 0
+				},
+				"posOffset": [
+					{
+						"avg": 0.29,
+						"var": 0.1
+					},
+					{
+						"avg": -0.05,
+						"var": 0
+					},
+					{
+						"avg": 0.5,
+						"var": 0.1
+					}
+				],
+				"velocity": [
+					{
+						"avg": 0,
+						"var": 0.025
+					},
+					{
+						"avg": 0.2,
+						"var": 0.05
+					},
+					{
+						"avg": 0,
+						"var": 0.025
+					}
+				],
+				"quantity": { "avg": 0.1 },
+				"size": {
+					"avg": 0.3,
+					"var": 0.05
+				},
+				"sizeEvolve": {
+					"transform": "linear",
+					"factor": 1.5
+				},
+				"particleModel": "Quad",
+				"lifeLength": { "avg": 18 },
+				"selfPropelled": true,
+				"windAffectednes": 0.1
+			},
+			{
+				"__comment": "Fire quads",
+				"hsvaColor": [
+					{
+						"avg": 20,
+						"var": 20
+					},
+					{
+						"avg": 255,
+						"var": 50
+					},
+					{
+						"avg": 255,
+						"var": 50
+					},
+					{
+						"avg": 255,
+						"var": 0
+					}
+				],
+				"opacityEvolve": {
+					"transform": "quadratic",
+					"factor": -16
+				},
+				"gravityEffect": {
+					"avg": 0,
+					"var": 0
+				},
+				"posOffset": [
+					{
+						"avg": 0,
+						"var": 0.2
+					},
+					{
+						"avg": -0.9,
+						"var": 0
+					},
+					{
+						"avg": 0,
+						"var": 0.2
+					}
+				],
+				"velocity": [
+					{
+						"avg": 0,
+						"var": 0.1
+					},
+					{
+						"avg": 0.125,
+						"var": 0.05
+					},
+					{
+						"avg": 0,
+						"var": 0.1
+					}
+				],
+				"quantity": { "avg": 0.2 },
+				"size": {
+					"avg": 0.15,
+					"var": 0.05
+				},
+				"lifeLength": { "avg": 0.25 },
+				"sizeEvolve": {
+					"transform": "linear",
+					"factor": 0.5
+				},
+				"particleModel": "Quad",
+				"vertexFlags": 128,
+				"windAffectednes": 0
+			}
+		]
+
+	},
+	"sidesolid": {
+		"top": true,
+		"bottom": false,
+		"horizontals": false
+	},
+	"sideopaque": {
+		"all": false
+	},
+	"replaceable": 10,
+	"resistance": 2.5,
+
+	
+
+	"materialDensity": 600,
+
+	"sounds": {
+		"place": "game:block/anvil",
+		"hit": "game:block/anvil",
+		"break": "game:block/anvil"
+	}
+}

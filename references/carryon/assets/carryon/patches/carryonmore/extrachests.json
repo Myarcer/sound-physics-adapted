@@ -1,0 +1,114 @@
+[
+  {
+    "op": "add",
+    "path": "/behaviors/-",
+    "file": "extrachests:blocktypes/chests",
+    "side": "Server",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "override": true,
+        "translation": [
+          0.0625,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          180,
+          0
+        ],
+        "slots": {
+          "Hands": {},
+          "Back": {
+            "walkSpeedModifier": -0.2
+          }
+        },
+        "patchPriority": 1
+      }
+    },
+    "condition": {
+      "when": "carryon:AllowLargeChestsOnBack",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "extrachests"
+      }
+    ]
+  },
+  {
+    "op": "add",
+    "path": "/behaviors/-",
+    "file": "extrachests:blocktypes/labeledchests",
+    "side": "Server",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "override": true,
+        "translation": [
+          0.0625,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          180,
+          0
+        ],
+        "slots": {
+          "Hands": {},
+          "Back": {
+            "walkSpeedModifier": -0.2
+          }
+        },
+        "patchPriority": 1
+      }
+    },
+    "condition": {
+      "when": "carryon:AllowLargeChestsOnBack",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "extrachests"
+      }
+    ]
+  },
+  {
+    "file": "extrachests:blocktypes/chests",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract"
+    },
+    "condition": {
+      "when": "carryon:InteractStorageEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "extrachests"
+      }
+    ]
+  },
+  {
+    "file": "extrachests:blocktypes/labeledchests",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract"
+    },
+    "condition": {
+      "when": "carryon:InteractStorageEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "extrachests"
+      }
+    ]
+  }
+]

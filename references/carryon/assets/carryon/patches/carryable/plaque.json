@@ -1,0 +1,32 @@
+[
+  {
+    "file": "game:blocktypes/metal/plaque",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors",
+    "value": [
+      {
+        "name": "Carryable",
+        "properties": {
+          "translation": [
+            0,
+            -0.25,
+            0.5
+          ],
+          "rotation": [
+            0,
+            -90,
+            0
+          ],
+          "slots": {
+            "Hands": {"walkSpeedModifier": -0.5}
+          }
+        }
+      }
+    ],
+    "condition": {
+      "when": "carryon:SignEnabled",
+      "isValue": "true"
+    }
+  }
+]

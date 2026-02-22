@@ -1,0 +1,126 @@
+{
+	code: "chiseledchest",
+	class: "BlockGenericDecoTypedContainer",
+	entityclass: "BEDecoContainer",
+	attributes: {
+		partialAttachable: true,
+		inventoryClassName: "chest",
+		defaultType: "normal-generic",
+		types: ["normal-generic"],
+		
+		rotatatableInterval: {
+			"normal-generic": "22.5degnot45deg"
+		
+		},
+		drop: {
+			"normal-generic": true
+			
+		},
+		quantitySlots: {
+			"normal-generic": 28
+			
+		},
+		dialogTitleLangCode: {
+			"normal-generic": "chestcontents"
+			
+		},
+		storageType: {
+			"normal-generic": 189
+			
+		},
+		retrieveOnly: {
+			"normal-generic": false
+			
+		},
+		shape: {
+			"normal-generic": "game:block/wood/chest/normal"
+			
+		},
+
+		spoilSpeedMulByFoodCat: {
+			"normal-generic": {
+				"vegetable": 0.45,
+				"grain": 0.45,
+				"protein": 0.45
+			}
+		},
+
+		typedOpenSound: {
+			"normal-generic": "game:sounds/effect/latch"
+			
+		},
+		typedCloseSound: {
+			"normal-generic": "game:sounds/effect/latch"
+			
+		},
+		variantByGroup: "side",
+		variantByGroupInventory: null,
+		"maxTransferPerTick": 8,
+      "maxRange":16,
+      "tickTime":250
+	},
+
+	behaviors: [{"name": "BBChiseledCover"},{name: "Lockable" }, {name: "Container"},{ name: "BoatableGenericTypedContainer" }],
+	entityBehaviors: [{"name": "BEBChiseledCover"},{ name: "Animatable" }],
+	variantgroups: [
+		
+		{ code:"side", loadFromProperties: "abstract/horizontalorientation" }
+	],
+	"creativeinventory": {
+		"general": ["*-east"],
+		"chiseltools": [ "*-east" ]
+	},
+	
+	heldTpIdleAnimation: "holdunderarm",
+	shapeInventory: { base: "game:block/wood/chest/normal", rotateY: 270 },
+	shapeByType: {
+		"*-north": { base: "game:block/wood/chest/normal", rotateY: 0 },
+		"*-east": { base: "game:block/wood/chest/normal", rotateY: 270 },
+		"*-west": { base: "game:block/wood/chest/normal", rotateY: 90 },
+		"*-south": { base: "game:block/wood/chest/normal", rotateY: 180 },
+	},
+	"_comment": "Must declare textures so they get added to the block texture atlas",
+	textures: {
+		"normal-generic-sides2": { base: "game:block/wood/trunk/sides" },
+		"normal-generic-lid": { base: "game:block/wood/trunk/lid" },
+		"normal-generic-accessories": { base: "game:block/wood/trunk/accessories" }
+	},
+	blockmaterial: "Wood",
+	replaceable: 900,
+	resistance: 3,
+	lightAbsorption: 0,
+	sideAo: { all: false },
+	sidesolid: {
+		all: true
+	},
+	sideopaque: {
+		all: false
+	},
+	collisionbox: {
+		x1: 0, y1: 0, z1: 0, x2: 1, y2: 1, z2: 1
+	},
+	selectionbox: {
+		x1: 0.0625, y1: 0, z1: 0.0625, x2: 0.9375, y2: 0.8125, z2: 0.9375
+	},
+	combustibleProps: {
+		burnTemperature: 600,
+		burnDuration: 35,
+	},
+sounds: {
+		"place": "block/planks",
+		"hit": "block/planks",
+		"break": "block/planks",
+		"walk": "walk/wood"
+	},
+	materialDensity: 600,
+	tpHandTransform: {
+		translation: { x: -0.9, y: -0.5, z: -0.3 },
+		rotation: { x: 0, y: 90, z: -102 },
+		scale: 0.56
+	},
+	guiTransform: {
+		origin: { x: 0.5, y: 0.4, z: 0.5 },
+		scale: 1.16
+	}
+	
+}

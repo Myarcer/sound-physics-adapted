@@ -1,0 +1,45 @@
+{
+  "blockhelp-pickup": "Nést",
+  "drop-notice": "Vyhodili jste {0} ze svého {1}.",
+  "drop-notice-destroyed": "Vyhodili jste {0} ze svého {1} a to bylo zničeno.",
+  "drop-notice-destroyed-spill-contents": "Vyhodili jste {0} ze svého {1} a to bylo zničeno, obsah se rozlil.",
+  "drop-notice-spill-contents": "Vyhodili jste {0} ze svého {1} a to se otevřelo, obsah se rozlil.",
+  "slot-hands": "ruce",
+  "slot-back": "záda",
+  "slot-shoulder": "ramena",
+  "pickup-hotkey": "CarryOn - Zvednout / položit",
+  "swap-back-hotkey": "CarryOn - Přehodit na záda",
+  "toggle-hotkey": "CarryOn - Povolit / zakázat interakci",
+
+  "quickdrop-hotkey": "CarryOn - Rychlé sražení",
+  "blockhelp-attach": "Připojit nesený",
+  "blockhelp-detach": "Odpojit a nést",
+
+  "carryon-enabled": "CarryOn povoleno",
+  "carryon-disabled": "CarryOn zakázáno",
+  "attachable-behavior-not-found": "Připojitelný chování nebylo nalezeno na entitě",
+  "slot-not-found": "Cílový slot není platný",
+  "slot-not-empty": "Cílový slot je obsazen",
+  "slot-empty": "Cílový slot je prázdný",
+  "slot-not-carryable": "Blok nelze nést",
+  "slot-data-missing": "Nelze připojit blok, chybí data",
+  "slot-incompatible-block": "Nelze umístit nesený blok do slotu",
+  "slot-inventory-open": "Aktuálně používá jiný hráč",
+  "cannot-swap-back": "Nelze dát nesený předmět na záda",
+  "nothing-carried": "Na zádech není nic neseno",
+  "entity-not-found": "Cílová entita nebyla nalezena",
+  "entity-out-of-reach": "Cílová entita je příliš daleko",
+  "attach-failed": "Při připojování bloku se něco pokazilo",
+  "attach-unavailable": "Nelze připojit předmět k cíli",
+  "detach-unavailable": "Nelze odpojit předmět od cíle",
+  "place-down-failed": "Nelze umístit nesený blok zde",
+  "place-down-failed-entityintersecting": "Nelze umístit nesený blok zde, entita překáží",
+  "place-down-failed-requiresolidground": "Nelze umístit nesený blok zde, vyžaduje pevnou zem",
+  "place-down-failed-requirehorizontalattachable": "Nelze umístit nesený blok zde, vyžaduje zeď",
+
+  "double-tap-dismount-enabled": "Dvojité klepnutí pro sesednutí povoleno",
+  "double-tap-dismount-disabled": "Dvojité klepnutí pro sesednutí zakázáno",
+  "toggle-double-tap-dismount-hotkey": "CarryOn - Přepnout dvojité klepnutí pro sesednutí"
+}
+
+

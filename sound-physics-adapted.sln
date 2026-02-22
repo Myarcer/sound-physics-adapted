@@ -1,0 +1,41 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "soundphysicsadapted", "soundphysicsadapted.csproj", "{D4F7A1FB-36C9-1A86-9DC5-6BEF1D59FF2B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VSEssentialsMod", "references\vsessentialsmod\VSEssentialsMod.csproj", "{A9314D3D-B291-6AF1-AE13-181C4811E37F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VSSurvivalMod", "references\vssurvivalmod\VSSurvivalMod.csproj", "{EEA14B79-A520-9B6A-66B2-756488EF0B84}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D4F7A1FB-36C9-1A86-9DC5-6BEF1D59FF2B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D4F7A1FB-36C9-1A86-9DC5-6BEF1D59FF2B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D4F7A1FB-36C9-1A86-9DC5-6BEF1D59FF2B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D4F7A1FB-36C9-1A86-9DC5-6BEF1D59FF2B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A9314D3D-B291-6AF1-AE13-181C4811E37F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A9314D3D-B291-6AF1-AE13-181C4811E37F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A9314D3D-B291-6AF1-AE13-181C4811E37F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A9314D3D-B291-6AF1-AE13-181C4811E37F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EEA14B79-A520-9B6A-66B2-756488EF0B84}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EEA14B79-A520-9B6A-66B2-756488EF0B84}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EEA14B79-A520-9B6A-66B2-756488EF0B84}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EEA14B79-A520-9B6A-66B2-756488EF0B84}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{D4F7A1FB-36C9-1A86-9DC5-6BEF1D59FF2B} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{A9314D3D-B291-6AF1-AE13-181C4811E37F} = {6F541E33-C800-E7AC-2B01-E8B2D19F86AA}
+		{EEA14B79-A520-9B6A-66B2-756488EF0B84} = {6F541E33-C800-E7AC-2B01-E8B2D19F86AA}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {4BF0FC98-D167-4CD3-B6E9-718767196FBF}
+	EndGlobalSection
+EndGlobal

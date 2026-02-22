@@ -1,0 +1,12 @@
+{
+	ingredient: { type: "item", code: "game:ingot-*", name: "metal", allowedVariants: ["copper","bismuthbronze","tinbronze","blackbronze","steel","meteoriciron","iron"] },
+	pattern: [[
+		
+		"_####_#####",
+		"#_###__#_#_",
+		"_####_#####"
+		
+	]],
+	name: "Lock Tool",
+	output: { type: "item", code: "locktool-{metal}"   }
+}

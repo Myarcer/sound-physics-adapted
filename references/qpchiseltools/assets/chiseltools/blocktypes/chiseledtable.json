@@ -1,0 +1,60 @@
+{
+	code: "table",
+	"class": "BlockDeco",
+	behaviors: [{"name": "BBChiseledCover"} ],
+	entityBehaviors: [{"name": "BEBChiseledCover"}],
+	variantgroups: [
+		{ code:"type", states: ["chiseled" ] },
+	],
+	attributes: {
+		"pieFormingSurface": true
+	},
+	shape: { base: "game:block/wood/table" },
+	heldTpIdleAnimation: "holdunderarm",
+	creativeinventoryByType: {
+		
+		
+		"*-chiseled": { "general": ["*"],"chiseltools": ["*"] }
+	},
+	blockmaterial: "Wood",
+	replaceable: 900,
+	resistance: 1.5,
+	lightAbsorption: 1,
+	sidesolid: {
+		up: true,
+		all: false
+	},	
+	sideopaque: {
+		up: true,
+		all: false
+	},
+	sounds: {
+		"place": "block/planks",
+		"hit": "block/planks",
+		"break": "block/planks",
+		"walk": "walk/wood"
+	},
+	combustibleProps: {
+		burnTemperature: 600,
+		burnDuration: 35,
+	},
+	"texturesByType": {
+		
+		"chiseled": {
+			"sides": { base: "game:block/wood/table/oak/sides" },
+			"top": { base: "game:block/wood/table/oak/top" },
+			"bottom": { base: "game:block/wood/table/oak/bottom" },
+			"legs": { base: "game:block/wood/table/oak/legs" }
+		}
+	},
+	materialDensity: 400,
+	tpHandTransform: {
+		translation: { x: -0.7, y: -0.6, z: -0.9 },
+		rotation: { x: 80, y: 0, z: 0 },
+		scale: 0.56
+	},
+	fpHandTransform: {
+		translation: { x: 0.08, y: -0.2, z: 0.6 },
+		rotation: { x: 33, y: 134, z: -102 }
+	}
+}

@@ -1,0 +1,11 @@
+{
+	ingredientPattern: "L	H",
+	ingredients: {
+		"L": { type: "item", code: "truechisel-*", quantity: 1, "isTool": true },
+		"H": { type: "block", code: "game:clayplanter-*", quantity: 1 }
+	},
+	width: 1,
+	height: 2,
+	name: "Decorative Planter",
+	output: { type: "block", code: "chiseledplanter-deco"  }
+}

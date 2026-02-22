@@ -1,0 +1,18 @@
+[
+  {
+    "file": "game:blocktypes/clay/fired/planter",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "scale": 0.6
+      }
+    },
+    "condition": {
+      "when": "carryon:PlanterEnabled",
+      "isValue": "true"
+    }
+  }
+]

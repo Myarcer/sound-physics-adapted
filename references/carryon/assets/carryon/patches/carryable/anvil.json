@@ -1,0 +1,34 @@
+[
+  {
+    "file": "game:blocktypes/metal/anvil",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "interactDelay": 1.5,
+        "translation": [
+          0.05,
+          -0.1,
+          -0.25
+        ],
+        "rotation": [
+          0,
+          90,
+          10
+        ],
+        "scale": 0.8,
+        "slots": {
+          "Hands": {
+            "walkSpeedModifier": -0.5
+          }
+        }
+      }
+    },
+    "condition": {
+      "when": "carryon:AnvilEnabled",
+      "isValue": "true"
+    }
+  }
+]

@@ -1,0 +1,11 @@
+[
+  {
+    "file": "game:entities/humanoid/player",
+    "side": "Server",
+    "op": "add",
+    "path": "/server/behaviors/-",
+    "value": {
+      "code": "carryon:dropondamage"
+    }
+  }
+]

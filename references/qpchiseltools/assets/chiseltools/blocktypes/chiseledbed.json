@@ -1,0 +1,88 @@
+{
+	code: "chiseledbed",
+	class: "BlockDecoBed",
+	entityClassByType: {
+		"*-head-*": "Bed",
+	},
+	behaviors: [{"name": "BBChiseledCover"}],
+	entityBehaviors: [{"name": "BEBChiseledCover"}],
+	variantgroups: [
+		{ code: "material", states: ["wood"] },
+		{ code: "part", states: ["head"] },
+		{ code: "side", loadFromProperties: "abstract/horizontalorientation" }
+	],
+	attributes: {
+		sleepEfficiencyByType: {
+			"chiseledbed-*": 0.70833333
+			
+		},
+		handbook: {
+			groupBy: ["bed-{material}-*"]
+		}
+	},
+	
+	shapeinventoryByType: {
+	
+		"*": { base: "game:block/wood/bed/{material}-inventory" }
+	},
+	shapebytype: {
+		"*-head-north": { base: "game:block/wood/bed/{material}-inventory", rotateY: 90 },
+		"*-head-east": { base: "game:block/wood/bed/{material}-inventory", rotateY: 0 },
+		"*-head-south": { base: "game:block/wood/bed/{material}-inventory", rotateY: 270 },
+		"*-head-west": { base: "game:block/wood/bed/{material}-inventory", rotateY: 180 }
+		
+	},
+	sidesolid: {
+		all: false
+	},
+	sideopaque: {
+		all: false
+	},
+	heldTpIdleAnimation: "holdunderarm",
+	creativeinventory: { "general": ["*-head-north"], "chiseltools": ["*-head-north"] },
+	blockmaterial: "Wood",
+	replaceable: 550,
+	resistance: 2,
+	lightAbsorption: 0,
+	maxStackSize: 2,
+	guitransform: {
+		scale: 0.75,
+	},
+	combustibleProps: {
+		burnTemperature: 600,
+		burnDuration: 40,
+	},
+	
+	sounds: {
+		"place": "game:block/planks",
+		"hit": "game:block/planks",
+		"break": "game:block/planks",
+		"walk": "game:walk/wood"
+	},
+	materialDensity: 600,
+	fpHandTransform: {
+		translation: { x: 0.31, y: -0.2, z: 0 },
+		rotation: { x: -67, y: -33, z: 77 },
+		origin: { x: 0.5, y: 0.2, z: 0.5 },
+		scale: 1.35
+	},
+	groundTransform: {
+		origin: { x: 0.5, y: 0, z: 0.5 },
+		scale: 2
+	},
+	tpHandTransformByType: {
+		
+		"*": {
+			translation: { x: -0.9, y: -0.3, z: -0.9 },
+			rotation: { x: -80, y: -37, z: 17 },
+			scale: 0.45
+		}
+	},
+	guiTransformByType: {
+		
+		"bed-wood-*": {
+			origin: { x: 0.5, y: 0.4, z: 0.5 },
+			scale: 0.75
+		}
+	}
+}

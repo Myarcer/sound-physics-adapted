@@ -1,0 +1,44 @@
+[
+  {
+    ingredientPattern: "P",
+    ingredients: {
+      "P": { type: "item", code: "simplepantograph-*", name: "metal", allowedVariants: ["bismuthbronze","tinbronze","blackbronze","steel","meteoriciron","iron"] },
+     
+    },
+
+    width: 1,
+    height: 1,
+
+    name: "Simple Pantograph To Regular",
+    
+    output: { type: "item", code: "pantograph-{metal}"   }
+  },
+  {
+    ingredientPattern: "P",
+    ingredients: {
+      "P": { type: "item", code: "pantograph-*", name: "metal", allowedVariants: ["bismuthbronze","tinbronze","blackbronze","steel","meteoriciron","iron"] },
+     
+    },
+
+    width: 1,
+    height: 1,
+
+    name: "Regular Pantograph To Door Tool",
+    
+    output: { type: "item", code: "doortool-{metal}"   }
+  },
+  {
+    ingredientPattern: "P",
+    ingredients: {
+      "P": { type: "item", code: "doortool-*", name: "metal", allowedVariants: ["bismuthbronze","tinbronze","blackbronze","steel","meteoriciron","iron"] },
+     
+    },
+
+    width: 1,
+    height: 1,
+
+    name: "Door Tool to Simple Pantograph",
+    
+    output: { type: "item", code: "simplepantograph-{metal}"   }
+  }
+]

@@ -1,0 +1,23 @@
+{
+	code: "pathedchiseledblock",
+	class: "BlockChisel",
+	entityClass: "Chisel",
+	attributes: {
+		dropSelf: true
+	},
+	walkspeedmultiplier: 1.50,
+	creativeinventory: { "general": [] },
+	shape: { base: "game:block/basic/cube" },
+	replaceable: 90,
+	drops: [],
+	sidesolid: { all: false },
+	sideopaque: { all: false },
+	sideao: { all: true },
+	textures: {
+		all: { 
+			base: "game:block/stone/path/normal1"
+			
+		}
+	},
+	lightAbsorption: 99
+}

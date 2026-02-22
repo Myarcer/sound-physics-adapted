@@ -1,0 +1,10 @@
+{
+	ingredient: { type: "item", code: "game:ingot-*", name: "metal", allowedVariants: ["iron", "meteoriciron", "steel","tinbronze","blackbronze","bismuthbronze"] },
+	pattern: [[
+		"________#####__",
+		"_########_#_#__",
+		"________#####__",
+	]],
+	name: "Path Maker",
+	output: { type: "item", code: "pathmaker-{metal}"   }
+}

@@ -1,0 +1,12 @@
+{
+	ingredientPattern: "LP",
+	ingredients: {
+		"L": { type: "item", code: "game:chisel-*",name: "metal", allowedVariants: ["blackbronze","tinbronze","bismuthbronze","iron", "meteoriciron"]},
+		"P": { "type": "item","code": "pantograph-*","isTool": true}
+		
+	},
+	width: 2,
+	height: 1,
+	name: "The True Chisel",
+	output: { type: "item", code: "truechisel-{metal}"  }
+}

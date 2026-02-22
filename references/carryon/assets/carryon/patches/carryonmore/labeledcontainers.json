@@ -1,0 +1,43 @@
+[
+  {
+    "file": "lc:blocktypes/stationarybasket",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "interactDelay": 0.4,
+        "slots": {
+          "Hands": {
+            "animation": "carryon:holdlight",
+            "walkSpeedModifier": -0.15
+          },
+          "Back": {
+            "walkSpeedModifier": 0.0,
+            "translation": [
+              0.09375,
+              0,
+              0.03125
+            ],
+            "rotation": [
+              0,
+              0,
+              -90
+            ],
+            "scale": 0.6
+          }
+        }
+      }
+    },
+    "condition": {
+      "when": "carryon:StationaryBasketEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "lc"
+      }
+    ]  
+  }
+]

@@ -1,0 +1,28 @@
+[
+  {
+    "file": "game:blocktypes/wood/woodtyped/fencegate",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract"
+    },
+    "condition": {
+      "when": "carryon:InteractDoorEnabled",
+      "isValue": "true"
+    } 
+  },
+  {
+    "file": "game:blocktypes/wood/woodtyped/roughhewnfencegate",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract"
+    },
+    "condition": {
+      "when": "carryon:InteractDoorEnabled",
+      "isValue": "true"
+    } 
+  }
+]

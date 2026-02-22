@@ -1,0 +1,11 @@
+{
+	ingredientPattern: "L	H",
+	ingredients: {
+		"L": { type: "item", code: "game:chisel-*", quantity: 1, "isTool": true },
+		"H": { type: "block", code: "game:clayoven-*", quantity: 1 }
+	},
+	width: 1,
+	height: 2,
+	name: "Decorative Chest",
+	output: { type: "block", code: "chiseledoven-north"  }
+}

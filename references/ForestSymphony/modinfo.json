@@ -1,0 +1,10 @@
+{
+    "type": "code",
+    "side": "client",
+    "requiredOnClient": true,
+    "modid": "forestsymphony",
+    "name": "Forest Symphony",
+    "description": "Gives forests life.",
+    "authors": ["SaltyWater"],
+    "version": "1.0.6"
+}

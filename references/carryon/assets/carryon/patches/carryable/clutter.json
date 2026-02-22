@@ -1,0 +1,37 @@
+[
+  {
+    "file": "game:blocktypes/clutter",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          -90,
+          0
+        ],
+        "slots": {
+          "Hands": {},
+          "Back": {
+            "rotation": [
+              0,
+              0,
+              -90
+            ]
+          }
+        }
+      }
+    },
+    "condition": {
+      "when": "carryon:ClutterEnabled",
+      "isValue": "true"
+    }
+  }
+]

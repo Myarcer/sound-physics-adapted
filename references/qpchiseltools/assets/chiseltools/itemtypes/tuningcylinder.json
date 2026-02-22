@@ -1,0 +1,133 @@
+{
+  "code": "tuningcylinder",
+  behaviors: [
+    {
+      name: "GroundStorable",
+      properties: {
+        layout: 'Quadrants',
+        collisionBox: {
+          x1: 0,
+          y1: 0,
+          z1: 0,
+          x2: 1,
+          y2: 0.125,
+          z2: 1
+        }
+      }
+    }
+  ],
+  attributes: {
+    scrollrackable: true,
+    onscrollrackTransform: {
+      translation: {
+        x: -0.52,
+        y: -0.28,
+        z: 0.5
+      },
+      rotation: {
+        x: -47,
+        y: 5,
+        z: -95
+      },
+      origin: {
+        x: 0.5,
+        y: 0.2,
+        z: 0.5
+      }
+    },
+    isPlayableDisc: true,
+    musicTrackByType: {
+      "*-ct1": "chiseltools:music/tuningcylinder/ptahs anthem.ogg",
+      "*-ct2": "chiseltools:music/tuningcylinder/for dave and gears.ogg",
+      "*-ct3": "chiseltools:music/tuningcylinder/for dave and gears heavy.ogg",
+      "*-ct4": "chiseltools:music/tuningcylinder/redacted",
+      "*-ct5": "chiseltools:music/tuningcylinder/ctr"
+    }
+  },
+  creativeinventory: { "chiseltools": [ "" ] },
+  variantgroups: [
+    {
+      code: "type",
+      states: [ "ct1","ct2","ct3","ct4","ct5" ]
+    }
+  ],
+  shape: { base: "game:block/machine/resonator-cylinder" },
+  textures: {
+    colorByType: {
+      "*-ct1": { base: "game:block/liquid/dye/red" },
+      "*-ct2": { base: "game:block/liquid/dye/red" },
+      "*-ct3": { base: "game:block/liquid/dye/red" },
+      "*-ct4": { base: "game:block/liquid/dye/red" },
+      "*-ct5": { base: "game:block/liquid/dye/red" }
+
+    }
+  },
+  maxstacksize: 1,
+  guiTransform: {
+    translation: {
+      x: 2,
+      y: 0,
+      z: 0
+    },
+    rotation: {
+      x: 147,
+      y: -14,
+      z: -31
+    },
+    origin: {
+      x: 0.5,
+      y: 0.3,
+      z: 0.5
+    },
+    scale: 2.39
+  },
+  fpHandTransform: {
+    translation: {
+      x: -0.05,
+      y: 0,
+      z: 0
+    },
+    rotation: {
+      x: 15,
+      y: 99,
+      z: -30
+    },
+    origin: {
+      x: 0.5,
+      y: 0.1,
+      z: 0.5
+    },
+    scale: 1.75
+  },
+  tpHandTransform: {
+    translation: {
+      x: -1.1,
+      y: -0.7,
+      z: -0.7
+    },
+    rotation: {
+      x: 95,
+      y: -1,
+      z: -76
+    },
+    scale: 0.65
+  },
+  groundTransform: {
+    translation: {
+      x: 0,
+      y: 0,
+      z: 0
+    },
+    rotation: {
+      x: 90,
+      y: 0,
+      z: 0
+    },
+    origin: {
+      x: 0.5,
+      y: 0.5,
+      z: 0.58
+    },
+    scale: 4.1
+  }
+}

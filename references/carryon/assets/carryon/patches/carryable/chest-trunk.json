@@ -1,0 +1,43 @@
+[
+  {
+    "file": "game:blocktypes/wood/chest-trunk",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          0.0625,
+          0,
+          -0.5
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "slots": {
+          "Hands": {
+            "animation": "carryon:holdheavy",
+            "walkSpeedModifier": -0.5
+          },
+          "Back": {
+            "walkSpeedModifier": -0.2,
+            "rotation": [
+              0,
+              180,
+              0
+            ],
+            "keepWhenTrue": "carryon:AllowChestTrunksOnBack"
+          }
+        },
+        "multiblockOffset": [0, 0, 1]
+      }
+    },
+    "condition": {
+      "when": "carryon:ChestTrunkEnabled",
+      "isValue": "true"
+    }
+  }
+]

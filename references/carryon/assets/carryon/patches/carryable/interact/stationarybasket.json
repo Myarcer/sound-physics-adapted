@@ -1,0 +1,15 @@
+[
+  {
+    "file": "game:blocktypes/reed/reedchest",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract"
+    },
+    "condition": {
+      "when": "carryon:InteractStorageEnabled",
+      "isValue": "true"
+    }  
+  }
+]

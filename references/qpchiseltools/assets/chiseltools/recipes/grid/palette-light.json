@@ -1,0 +1,88 @@
+[
+  
+  {
+    ingredientPattern: "PFL",
+    ingredients: {
+      "P": {type: "item",code: "chiseltools:palette-standard","quantity": 1},
+      
+      "F": {type: "item",code: "game:ingot-cupronickel"},
+      "L": {"type": "block","code": "game:lantern-up","quantity": 8}
+    },
+
+    width: 3,
+    height: 1,
+    
+    name: "Lighting Palette From Palette",
+    
+    output: {
+      type: "item",
+      code: "palette-light"
+    }
+  },
+  {
+    ingredientPattern: "PF_	MCQ",
+    ingredients: {
+      "P": {type: "item",code: "chiseltools:palette-standard","quantity": 1},
+      
+      "F": {type: "item",code: "game:ingot-cupronickel"},
+      
+      "M": {type: "item",code: "game:metalplate-*","quantity": 8},
+      "C": {type: "item",code: "game:candle","quantity": 8},
+      "Q": {type: "item",code: "game:clearquartz","quantity": 16}
+    },
+
+    width: 3,
+    height: 2,
+    
+    name: "Lighting Palette From Parts",
+    
+    output: {
+      type: "item",
+      code: "palette-light"
+    }
+  },
+  {
+    ingredientPattern: "PF_	MCQ",
+    ingredients: {
+      "P": {type: "item",code: "chiseltools:palette-standard","quantity": 1},
+      
+      "F": {type: "item",code: "game:ingot-cupronickel"},
+      
+      "M": {type: "item",code: "game:metalplate-*","quantity": 8},
+      "C": {type: "item",code: "game:candle","quantity": 8},
+      "Q": {type: "item",code: "game:clearquartz","quantity": 16}
+    },
+
+    width: 3,
+    height: 2,
+    
+    name: "Lighting Palette From Parts",
+    
+    output: {
+      type: "item",
+      code: "palette-light"
+    }
+  },
+  {
+    ingredientPattern: "PF_	MCQ",
+    ingredients: {
+      "P": {type: "item",code: "chiseltools:palette-standard","quantity": 1},
+      
+      "F": {type: "item",code: "game:ingot-cupronickel"},
+      
+      "M": {type: "item",code: "game:metalplate-*","quantity": 8},
+      "C": {type: "item",code: "game:candle","quantity": 8},
+      "Q": {type: "block",code: "game:glassslab-*","quantity": 16}
+    },
+
+    width: 3,
+    height: 2,
+    
+    name: "Lighting Palette From Slabs",
+    
+    output: {
+      type: "item",
+      code: "palette-light"
+    }
+  }
+]

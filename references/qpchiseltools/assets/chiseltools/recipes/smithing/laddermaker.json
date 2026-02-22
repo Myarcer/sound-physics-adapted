@@ -1,0 +1,10 @@
+{
+	ingredient: { type: "item", code: "game:ingot-*", name: "metal", allowedVariants: ["iron", "meteoriciron", "steel"] },
+	pattern: [[
+		"________#####__",
+		"_########_#_#__",
+		"________#####__",
+	]],
+	name: "Ladder Maker",
+	output: { type: "item", code: "laddermaker-{metal}"   }
+}

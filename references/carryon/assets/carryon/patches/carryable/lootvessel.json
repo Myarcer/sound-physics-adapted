@@ -1,0 +1,26 @@
+[
+  {
+    "file": "game:blocktypes/clay/lootvessel",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          -0.125,
+          0,
+          0
+        ],
+        "slots": {
+          "Hands": {},
+          "Back": {}
+        }
+      }
+    },
+    "condition": {
+      "when": "carryon:LootVesselEnabled",
+      "isValue": "true"
+    }
+  }
+]

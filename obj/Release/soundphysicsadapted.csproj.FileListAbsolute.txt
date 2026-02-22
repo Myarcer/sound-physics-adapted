@@ -1,0 +1,4 @@
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.csproj.AssemblyReference.cache
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.GeneratedMSBuildEditorConfig.editorconfig
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.csproj.CoreCompileInputs.cache
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.sourcelink.json

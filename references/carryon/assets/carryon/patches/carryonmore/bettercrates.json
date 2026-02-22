@@ -1,0 +1,27 @@
+[
+  { 
+    "file": "bettercrates:blocktypes/bettercrates*",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [ 0.0625, 0, 0 ],
+        "rotation": [ 0, 180, 0 ],
+        "slots": {
+          "Hands": {},
+          "Back": {
+            "walkSpeedModifier": -0.2,
+            "keepWhenTrue": "carryon:AllowCratesOnBack"            
+          }
+        },
+        "patchPriority": 1
+      }
+    },
+    "condition": {
+      "when": "carryon:CrateEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [ { "modid": "bettercrates" } ]
+  }
+]

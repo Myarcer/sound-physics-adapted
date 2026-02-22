@@ -1,0 +1,23 @@
+[
+  {
+    "file": "game:blocktypes/stone/quern",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "interactDelay": 1.0,
+        "slots": {
+          "Hands": {
+            "walkSpeedModifier": -0.4
+          }
+        }
+      }
+    },
+    "condition": {
+      "when": "carryon:QuernEnabled",
+      "isValue": "true"
+    }
+  }
+]

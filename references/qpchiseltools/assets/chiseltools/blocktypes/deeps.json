@@ -1,0 +1,27 @@
+{
+	code: "deeps",
+	shape: { base: "block/basic/cube" },
+	attributes: {
+		handbook: {
+			exclude: true
+		}
+	},
+	variantgroups: [
+		{ code: "num", states: ["880000","008800","000088","008888","888800","880088"] },
+	],
+	drawtype: "cube",
+	creativeinventory: { "general": ["*"], "chiseltools": ["*"] },
+	blockmaterial: "Stone",
+	replaceable: 900,
+	lightAbsorption: 99,
+	textures: {
+		all: { base: "deep-{num}" }
+	},
+	resistance: 1,
+	sideopaque: {
+		all: true
+	},
+	sidesolid: {
+		all: true
+	}
+}

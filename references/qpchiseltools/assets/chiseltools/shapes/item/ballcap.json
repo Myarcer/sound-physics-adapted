@@ -1,0 +1,143 @@
+{
+	"editor": {
+		"collapsedPaths": "Root/hidehat/front 1,Root/bandN/toothR1,Root/bandN/toothL1,Root/hidehat/front 2",
+		"allAngles": true,
+		"entityTextureMode": false
+	},
+	"textureWidth": 16,
+	"textureHeight": 16,
+	"textureSizes": {
+		"headwear2": [16,16]
+	},
+	"textures": {
+		"ballcap": "ballcap"
+	},
+	"elements": [
+		{
+			"name": "hidehat",
+			"stepParentName": "Head",
+			"from": [ 2.9, 5.0, 2.3 ],
+			"to": [ 2.9, 5.0, 2.3 ],
+			"rotationOrigin": [ 2.9, 5.0, 2.3 ],
+			"faces": {
+				"north": { "texture": "#headwear2", "uv": [ 0.0, 0.0, 0.5, 0.5 ] },
+				"east": { "texture": "#headwear2", "uv": [ 0.0, 0.0, 0.5, 0.5 ] },
+				"south": { "texture": "#headwear2", "uv": [ 0.0, 0.0, 0.5, 0.5 ] },
+				"west": { "texture": "#headwear2", "uv": [ 0.0, 0.0, 0.5, 0.5 ] },
+				"up": { "texture": "#headwear2", "uv": [ 0.0, 0.0, 0.5, 0.5 ] },
+				"down": { "texture": "#headwear2", "uv": [ 0.0, 0.0, 0.5, 0.5 ] }
+			},
+			"children": [
+				{
+					"name": "ballcaporigiin",
+					"from": [ -1.5, 0.0, 0.0 ],
+					"to": [ -0.5, 1.0, 1.0 ],
+					"rotationOrigin": [ -1.0, 0.0, 0.0 ],
+					"faces": {
+					},
+					"children": [
+						{
+							"name": "HatMain",
+							"from": [ -2.0, -1.0, -3.0 ],
+							"to": [ 5.0, 1.0, 3.0 ],
+							"rotationOrigin": [ -2.0, -1.0, -3.0 ],
+							"faces": {
+								"north": { "texture": "#ballcap", "uv": [ 14.0, 9.0, 16.0, 11.0 ], "autoUv": false },
+								"east": { "texture": "#ballcap", "uv": [ 14.0, 9.0, 16.0, 11.0 ], "autoUv": false },
+								"south": { "texture": "#ballcap", "uv": [ 14.0, 9.0, 16.0, 11.0 ], "autoUv": false },
+								"west": { "texture": "#ballcap", "uv": [ 3.0, 7.0, 13.0, 11.0 ], "autoUv": false },
+								"up": { "texture": "#ballcap", "uv": [ 0.0, 0.0, 4.0, 3.0 ], "autoUv": false },
+								"down": { "texture": "#ballcap", "uv": [ 4.5, 12.0, 11.5, 16.0 ], "autoUv": false }
+							},
+							"children": [
+								{
+									"name": "HatMid",
+									"from": [ 0.5, 2.0, 0.5 ],
+									"to": [ 6.5, 3.0, 5.5 ],
+									"rotationOrigin": [ 1.0, 2.0, 1.0 ],
+									"faces": {
+										"north": { "texture": "#ballcap", "uv": [ 0.0, 0.0, 6.0, 1.0 ] },
+										"east": { "texture": "#ballcap", "uv": [ 0.0, 0.0, 5.0, 1.0 ] },
+										"south": { "texture": "#ballcap", "uv": [ 0.0, 0.0, 6.0, 1.0 ] },
+										"west": { "texture": "#ballcap", "uv": [ 4.0, 3.5, 12.0, 5.5 ], "autoUv": false },
+										"up": { "texture": "#ballcap", "uv": [ 0.0, 0.0, 6.0, 5.0 ], "autoUv": false }
+									},
+									"children": [
+										{
+											"name": "Button",
+											"from": [ 2.75, 1.0, 2.25 ],
+											"to": [ 3.25, 1.25, 2.75 ],
+											"rotationOrigin": [ 3.0, 1.0, 2.0 ],
+											"faces": {
+												"north": { "texture": "#ballcap", "uv": [ 7.5, 13.0, 8.0, 13.5 ] },
+												"east": { "texture": "#ballcap", "uv": [ 6.5, 14.5, 7.0, 15.0 ] },
+												"south": { "texture": "#ballcap", "uv": [ 7.0, 13.5, 7.5, 14.0 ] },
+												"west": { "texture": "#ballcap", "uv": [ 8.0, 14.5, 8.5, 15.0 ] },
+												"up": { "texture": "#ballcap", "uv": [ 7.5, 12.5, 8.0, 13.0 ] }
+											}
+										}
+									]
+								}
+							]
+						},
+						{
+							"name": "HatBrim",
+							"from": [ -4.0, -1.0, -3.0 ],
+							"to": [ -2.0, -0.75, 0.0 ],
+							"rotationOrigin": [ -4.0, -1.0, -4.0 ],
+							"rotationX": -3.0,
+							"faces": {
+								"north": { "texture": "#ballcap", "uv": [ 14.0, 14.5, 16.0, 15.0 ] },
+								"east": { "texture": "#ballcap", "uv": [ 12.5, 14.5, 15.5, 15.0 ] },
+								"west": { "texture": "#ballcap", "uv": [ 12.5, 14.5, 15.5, 15.0 ] },
+								"up": { "texture": "#ballcap", "uv": [ 0.0, 12.0, 5.0, 16.0 ], "rotation": 90, "autoUv": false },
+								"down": { "texture": "#ballcap", "uv": [ 6.5, 12.0, 8.5, 15.0 ] }
+							}
+						},
+						{
+							"name": "HatBrim2",
+							"from": [ -4.0, -1.0, 0.0 ],
+							"to": [ -2.0, -0.75, 3.0 ],
+							"rotationOrigin": [ -4.0, -1.0, 4.0 ],
+							"rotationX": 3.0,
+							"faces": {
+								"east": { "texture": "#ballcap", "uv": [ 12.5, 14.0, 15.5, 14.5 ] },
+								"south": { "texture": "#ballcap", "uv": [ 13.0, 14.5, 15.0, 15.0 ] },
+								"west": { "texture": "#ballcap", "uv": [ 11.5, 14.0, 14.5, 14.5 ] },
+								"up": { "texture": "#ballcap", "uv": [ 13.0, 12.5, 15.0, 15.5 ] },
+								"down": { "texture": "#ballcap", "uv": [ 13.0, 12.0, 15.0, 15.0 ] }
+							}
+						},
+						{
+							"name": "HatBrimtipR",
+							"from": [ -4.5, -0.95, -2.5 ],
+							"to": [ -4.0, -0.7, 0.0 ],
+							"rotationOrigin": [ -4.0, -1.0, -3.0 ],
+							"rotationX": -3.0,
+							"faces": {
+								"north": { "texture": "#ballcap", "uv": [ 4.5, 14.0, 5.0, 14.5 ] },
+								"east": { "texture": "#ballcap", "uv": [ 6.0, 14.0, 8.5, 14.5 ] },
+								"west": { "texture": "#ballcap", "uv": [ 5.5, 14.5, 8.0, 15.0 ] },
+								"up": { "texture": "#ballcap", "uv": [ 6.0, 13.0, 6.5, 15.5 ] },
+								"down": { "texture": "#ballcap", "uv": [ 4.5, 12.5, 5.0, 15.0 ] }
+							}
+						},
+						{
+							"name": "HatBrimTipL",
+							"from": [ -4.5, -1.0, 0.0 ],
+							"to": [ -4.0, -0.75, 2.5 ],
+							"rotationOrigin": [ -4.0, -1.0, 4.0 ],
+							"rotationX": 3.0,
+							"faces": {
+								"east": { "texture": "#ballcap", "uv": [ 6.5, 14.5, 9.0, 15.0 ] },
+								"south": { "texture": "#ballcap", "uv": [ 2.0, 14.0, 2.5, 14.5 ] },
+								"west": { "texture": "#ballcap", "uv": [ 10.0, 14.0, 12.5, 14.5 ] },
+								"up": { "texture": "#ballcap", "uv": [ 12.5, 12.5, 13.0, 15.0 ] },
+								"down": { "texture": "#ballcap", "uv": [ 8.0, 13.0, 8.5, 15.5 ] }
+							}
+						}
+					]
+				}
+			]
+		}
+	]}

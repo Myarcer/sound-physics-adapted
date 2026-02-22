@@ -1,0 +1,23 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "CarryOn/1.12.1": {
+        "runtime": {
+          "CarryOn.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "CarryOn/1.12.1": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

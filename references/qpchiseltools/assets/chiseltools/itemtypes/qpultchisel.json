@@ -1,0 +1,78 @@
+{
+	"code": "truechisel",
+	class: "TrueChisel",
+	tool: "sword",
+	attributes: {
+		handbook: {
+			groupBy: ["truechisel-*"]
+		},
+		toolrackTransform: {
+			translation: { x: 0, y: 0.61, z: 0 },
+			rotation: { x: 5, y: 180, z: -1 },
+			scale: 1.25
+		},
+		groundStorageTransform: {
+			translation: { x: 0, y: -0.06, z: 0.015 },
+			rotation: { x: 26, y: 88, z: -87 },
+			scale: 0.88
+		}
+	},
+	"attributesByType": {
+		"*-ult": {"needshammer": false},
+		
+	},
+	behaviors: [{ 
+		name: "GroundStorable",
+		properties: {
+			layout: 'WallHalves',
+			wallOffY: 1,
+			sprintKey: true,
+			selectionBox: { x1: 0, y1: 0, z1: 0, x2: 1, y2: 0.1, z2: 1 },
+			collisionBox: { x1: 0, y1: 0, z1: 0, x2: 0, y2: 0, z2: 0 },
+		}
+	}],
+	variantgroups: [
+		{ code: "material", states: ["ult" ] }
+	],
+	shape: { base: "item/tool/qpultchisel" },
+	tool: "Chisel",
+	enabled: true,
+	heldTpHitAnimation: "hammerandchisel",
+	heldTpUseAnimation: "hammerandchisel",
+	creativeinventory: { "chiseltools": [ "" ] },
+	textures: {
+		metal: { base: "game:block/metal/ingot/cupronickel" },
+		"linen": { "base": "game:block/creative/col19" },
+		"shaft": { "base": "game:block/creative/col36" }
+	},
+	guiTransform: {
+		translation: { x: 0, y: 0, z: 0 },
+		rotation: { x: 9, y: 137, z: -53 },
+		origin: { x: 0.44, y: 0, z: 0.38 },
+		scale: 2.92
+	},
+	fpHandTransform: {
+		translation: { x: -0.1, y: 0.2, z: 0 },
+		rotation: { x: 90, y: 99, z: -42 },
+		origin: { x: 0.5, y: 0, z: 0.5 },
+		scale: 2.15
+	},
+	groundTransform: {
+		translation: { x: 0, y: 0, z: 0 },
+		rotation: { x: 0, y: 0, z: 0 },
+		origin: { x: 0.5, y: 0, z: 0.5 },
+		scale: 4.31
+	},
+	tpHandTransform: {
+		translation: { x: -0.78, y: -0.09, z: -0.67 },
+		rotation: { x: 9, y: -1, z: -16 },
+		origin: { x: 0.5, y: 0, z: 0.5 },
+		scale: 0.76
+	},
+	durabilitybytype: {
+		
+		"truechisel-ult": 24000
+		
+	}
+	
+	}

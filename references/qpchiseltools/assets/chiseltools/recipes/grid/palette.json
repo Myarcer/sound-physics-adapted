@@ -1,0 +1,62 @@
+[
+  {
+    ingredientPattern: "CMF",
+    ingredients: {
+      "C": {type: "item",code: "game:quicklime","quantity": 4},
+      "M": {type: "item",code: "game:fruit-*","quantity": 64},
+      "F": {type: "item",code: "game:plank-*"}
+    },
+
+    width: 3,
+    height: 1,
+
+    name: "Palette From Fruit",
+    
+    output: {
+      type: "item",
+      code: "palette-standard"
+    }
+  },
+  {
+    ingredientPattern: "CMF",
+    ingredients: {
+      "C": {type: "item",code: "game:quicklime","quantity": 4},
+      "M": {type: "item",code: "game:vegetable-*","quantity": 32},
+      "F": {type: "item",code: "game:plank-*"}
+    },
+
+    width: 3,
+    height: 1,
+
+    name: "Palette From Veg",
+    
+    output: {
+      type: "item",
+      code: "palette-standard"
+    }
+  },
+  {
+    ingredientPattern: "CMF",
+    ingredients: {
+      "C": {type: "item",code: "game:quicklime","quantity": 4},
+      "M": {type: "block",code: "game:woodbucket"},
+      "F": {type: "item",code: "game:plank-*"}
+    },
+
+    width: 3,
+    height: 1,
+    attributes: {
+			liquidContainerProps: {
+				requiresContent: { type: "item", code: "dye-white" },
+				requiresLitres: 10,
+				consumeContainer: false
+			}
+		},
+    name: "Palette From Ink",
+    
+    output: {
+      type: "item",
+      code: "palette-standard"
+    }
+  }
+]

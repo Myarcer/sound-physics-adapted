@@ -1,0 +1,134 @@
+{
+	code: "clothes",
+	class: "ItemWearable",
+	variantgroups: [
+		{ code: "category",  states: ["head"] },
+		{ code: "head", states: [
+			"ptahs-diadem","ballcap","nights"
+			
+		] }
+	],
+	
+	shapeByType: { 
+		"*-ptahs-diadem": {	base: "item/ptahsdiadem" },
+		"*-ballcap": {	base: "item/ballcap" },
+		"*-nights": {	base: "item/jesterhat" }
+	},
+	storageFlags: 128,
+	attributes: {
+		clothescategory: "head",
+		wearableAttachment: true
+	},
+	attributesByType: {
+		"@.*-(ptahs-diadem,ballcap,nights)": { displaycaseable: true, onDisplayTransform: { translation: { x: 0, y: -1.8, z: 0 } }  },
+		
+		"*": {	disableElements: ["ponytailhigh", "hideme", "sidehigh", "sidelow", "bangs"], warmth: 1 }
+	},
+	texturesByType: {
+		"*-ptahs-diadem": {
+			"seraph": { base: "game:block/transparent" },
+			"headwear2": {"base": "game:block/creative/col19"},
+			"horn": {"base": "game:block/creative/col36"},
+			"gemmain": {"base": "game:block/stone/polishedrock/chert"}
+		},
+		"*-ballcap": {
+			"seraph": { base: "game:block/transparent" },
+			"ballcap":{ base: "chiseltools:ballcap" }
+		},
+		"*-nights": {
+			"seraph": { base: "game:block/transparent" },
+			"ballcap":{ base: "chiseltools:ballcap" }
+		}
+	},
+	creativeinventory: { "chiseltools": [""] },
+	fpHandTransformByType: {
+		"*-ptahs-diadem": {
+			translation: { x: 0.1, y: -1.6, z: 0.4 },
+			rotation: { x: 180, y: -108, z: -180 },
+			origin: { x: 0.5, y: -0.3, z: 0.5 },
+			scale: 2.15
+		},
+		"*-ballcap": {
+			translation: { x: 0.1, y: -1.6, z: 0.4 },
+			rotation: { x: 180, y: -108, z: -180 },
+			origin: { x: 0.5, y: -0.3, z: 0.5 },
+			scale: 2.15
+		},
+		"*-nights": {
+			translation: { x: 0.1, y: -1.6, z: 0.4 },
+			rotation: { x: 180, y: -108, z: -180 },
+			origin: { x: 0.5, y: -0.3, z: 0.5 },
+			scale: 2.15
+		}
+	},
+	tpHandTransformByType: {
+
+		"@.*-(ptahs-diadem,ballcap,nights)": {
+			translation: { x: -0.87, y: -2.8, z: -0.57 },
+			rotation: { x: -88, y: 180, z: 7 },
+			origin: { x: 0.5, y: 1.5, z: 0.5 },
+			scale: 0.57
+		},
+		
+		"*": {
+			translation: { x: -0.97, y: -3, z: -1 },
+			rotation: { x: -13, y: -80, z: 12 },
+			origin: { x: 0.5, y: 1.5, z: 0.5 },
+			scale: 0.55
+		}
+	},
+	guiTransformByType: {
+		
+		"*-ptahs-diadem": {
+			rotate: false,
+			translation: { x: 0, y: 0, z: 0 },
+			rotation: { x: 174, y: -112, z: 19 },
+			origin: { x: 1.55, y: 1.3, z: 0.03 },
+			scale: 3.62
+		},
+		"*-ballcap": {
+			rotate: false,
+			translation: { x: 0, y: 0, z: 0 },
+			rotation: { x: 174, y: -112, z: 19 },
+			origin: { x: 1.55, y: 1.3, z: 0.03 },
+			scale: 3.62
+		},
+		"*-nights": {
+			rotate: false,
+			translation: { x: 0, y: 0, z: 0 },
+			rotation: { x: 174, y: -112, z: 19 },
+			origin: { x: 1.55, y: 1.3, z: 0.03 },
+			scale: 3.62
+		},
+		
+		"*": {
+			rotate: false,
+			translation: { x: 0, y: 0, z: 19 },
+			rotation: { x: 174, y: -45, z: 23 },
+			origin: { x: 0.52, y: 1.6, z: 0.5 },
+			scale: 1.99
+		}
+	},
+	groundTransformByType: {
+		"*-ptahs-diadem": {
+			translation: { x: 0.05, y: -0.55, z: 0 },
+			rotation: { x: 0, y: 0, z: 0 },
+			scale: 2
+		},
+		"*-ballcap": {
+			translation: { x: 0.05, y: -0.55, z: 0 },
+			rotation: { x: 0, y: 0, z: 0 },
+			scale: 2
+		},
+		"*-nights": {
+			translation: { x: 0.05, y: -0.55, z: 0 },
+			rotation: { x: 0, y: 0, z: 0 },
+			scale: 2
+		},
+		"*": {
+			translation: { x: 0.05, y: -0.3, z: 0 },
+			rotation: { x: 0, y: 0, z: 0 },
+			scale: 2
+		}
+	}
+}

@@ -1,0 +1,11 @@
+{
+	ingredientPattern: "L	L	H",
+	ingredients: {
+		"L": { type: "item", code: "game:chisel-steel", quantity: 1 },
+		"H": { type: "item", code: "game:hammer-steel", quantity: 1 }
+	},
+	width: 1,
+	height: 3,
+	name: "The True Chisel",
+	output: { type: "item", code: "truechisel-steel"  }
+}

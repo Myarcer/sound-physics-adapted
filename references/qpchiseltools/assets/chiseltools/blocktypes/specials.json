@@ -1,0 +1,27 @@
+{
+	code: "specials",
+	shape: { base: "block/basic/cube" },
+	attributes: {
+		handbook: {
+			exclude: true
+		}
+	},
+	variantgroups: [
+		{ code: "num", states: ["mars","burntsandstone","bluemortar","fadedbluemortar","fadedgreenmortar","fadedmortar","mud"] }
+	],
+	drawtype: "cube",
+	creativeinventory: { "general": ["*"], "chiseltools": ["*"] },
+	blockmaterial: "Stone",
+	replaceable: 900,
+	lightAbsorption: 99,
+	textures: {
+		all: { base: "special-{num}" }
+	},
+	resistance: 1,
+	sideopaque: {
+		all: true
+	},
+	sidesolid: {
+		all: true
+	}
+}

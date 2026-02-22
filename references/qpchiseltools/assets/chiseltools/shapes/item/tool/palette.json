@@ -1,0 +1,134 @@
+{
+	"editor": {
+		"allAngles": false,
+		"entityTextureMode": false
+	},
+	"textureWidth": 16,
+	"textureHeight": 16,
+	"textureSizes": {
+		"metal": [16,16],
+		"linen": [16,16],
+		"handle": [8,8]
+	},
+	"textures": {
+		"palette": "palette"
+	},
+	"elements": [
+		{
+			"name": "origin",
+			"from": [ 11.0, 0.5, 8.5 ],
+			"to": [ 11.0, 0.5, 8.5 ],
+			"rotationOrigin": [ 9.5, 0.0, 9.0 ],
+			"faces": {
+				"north": { "texture": "#string", "uv": [ 0.0, 0.0, 0.5, 0.5 ] },
+				"east": { "texture": "#string", "uv": [ 0.0, 0.0, 0.5, 0.5 ] },
+				"south": { "texture": "#string", "uv": [ 0.0, 0.0, 0.5, 0.5 ] },
+				"west": { "texture": "#string", "uv": [ 0.0, 0.0, 0.5, 0.5 ] },
+				"up": { "texture": "#string", "uv": [ 0.0, 0.0, 0.5, 0.5 ] },
+				"down": { "texture": "#string", "uv": [ 0.0, 0.0, 0.5, 0.5 ] }
+			},
+			"children": [
+				{
+					"name": "Handle",
+					"from": [ -6.0, -0.5, -3.0 ],
+					"to": [ -1.0, -0.4, 2.0 ],
+					"rotationOrigin": [ -2.0, 0.0, -2.5 ],
+					"faces": {
+						"north": { "texture": "#metal", "uv": [ 0.0, 5.5, 5.0, 6.0 ] },
+						"south": { "texture": "#metal", "uv": [ 0.0, 10.5, 5.0, 11.0 ] },
+						"west": { "texture": "#metal", "uv": [ 14.0, 10.0, 19.0, 10.5 ] },
+						"up": { "texture": "#metal", "uv": [ 0.0, 2.5, 5.0, 7.5 ] },
+						"down": { "texture": "#metal", "uv": [ 0.0, 5.0, 5.0, 10.0 ] }
+					}
+				},
+				{
+					"name": "Handle2",
+					"from": [ -5.0, -0.5, -4.0 ],
+					"to": [ -1.0, -0.4, -3.0 ],
+					"rotationOrigin": [ -1.0, 0.0, -3.5 ],
+					"faces": {
+						"north": { "texture": "#metal", "uv": [ 0.0, 5.5, 4.0, 6.0 ] },
+						"east": { "texture": "#metal", "uv": [ 0.5, 0.5, 1.5, 1.0 ] },
+						"west": { "texture": "#metal", "uv": [ 14.0, 10.0, 15.0, 10.5 ] },
+						"up": { "texture": "#metal", "uv": [ 0.0, 2.5, 4.0, 3.5 ] },
+						"down": { "texture": "#metal", "uv": [ 0.0, 5.0, 4.0, 6.0 ] }
+					}
+				},
+				{
+					"name": "Handle3",
+					"from": [ -5.0, -0.5, 2.0 ],
+					"to": [ -1.0, -0.4, 4.0 ],
+					"rotationOrigin": [ -1.0, 0.0, 2.5 ],
+					"faces": {
+						"east": { "texture": "#metal", "uv": [ 0.5, 0.5, 2.5, 1.0 ] },
+						"south": { "texture": "#metal", "uv": [ 0.0, 10.5, 4.0, 11.0 ] },
+						"west": { "texture": "#metal", "uv": [ 14.0, 10.0, 16.0, 10.5 ] },
+						"up": { "texture": "#metal", "uv": [ 0.0, 2.5, 4.0, 4.5 ] },
+						"down": { "texture": "#metal", "uv": [ 0.0, 5.0, 4.0, 7.0 ] }
+					}
+				},
+				{
+					"name": "front",
+					"from": [ -1.0, -0.5, -3.0 ],
+					"to": [ 0.0, -0.4, 3.0 ],
+					"rotationOrigin": [ 3.0, 0.0, -2.5 ],
+					"faces": {
+						"north": { "texture": "#metal", "uv": [ 0.0, 5.5, 1.0, 6.0 ] },
+						"east": { "texture": "#metal", "uv": [ 0.5, 0.5, 6.5, 1.0 ] },
+						"south": { "texture": "#metal", "uv": [ 0.0, 10.5, 1.0, 11.0 ] },
+						"west": { "texture": "#metal", "uv": [ 14.0, 10.0, 20.0, 10.5 ] },
+						"up": { "texture": "#metal", "uv": [ 0.0, 2.5, 1.0, 8.5 ] },
+						"down": { "texture": "#metal", "uv": [ 0.0, 5.0, 1.0, 11.0 ] }
+					}
+				},
+				{
+					"name": "color",
+					"from": [ -2.0, -0.3, -3.5 ],
+					"to": [ -1.0, -0.2, -2.0 ],
+					"rotationOrigin": [ -1.6, 0.0, -2.2 ],
+					"rotationY": 22.5,
+					"faces": {
+						"up": { "texture": "#palette", "uv": [ 0.5, 0.5, 5.5, 4.5 ], "autoUv": false }
+					}
+				},
+				{
+					"name": "color2",
+					"from": [ -1.5, -0.3, -2.0 ],
+					"to": [ -0.5, -0.2, -0.5 ],
+					"rotationOrigin": [ -1.6, 0.0, -0.2 ],
+					"faces": {
+						"up": { "texture": "#palette", "uv": [ 6.0, 0.5, 11.0, 4.5 ], "autoUv": false }
+					}
+				},
+				{
+					"name": "color3",
+					"from": [ -1.5, -0.3, -0.5 ],
+					"to": [ -0.5, -0.2, 1.0 ],
+					"rotationOrigin": [ -1.6, 0.0, 0.8 ],
+					"faces": {
+						"up": { "texture": "#palette", "uv": [ 11.0, 0.5, 16.0, 4.5 ], "autoUv": false }
+					}
+				},
+				{
+					"name": "color4",
+					"from": [ -1.6, -0.3, 1.0 ],
+					"to": [ -0.6, -0.2, 2.5 ],
+					"rotationOrigin": [ -1.6, 0.0, 1.8 ],
+					"rotationY": -22.5,
+					"faces": {
+						"up": { "texture": "#palette", "uv": [ 10.5, 4.0, 15.5, 8.0 ], "autoUv": false }
+					}
+				},
+				{
+					"name": "color5",
+					"from": [ -2.6, -0.3, 2.0 ],
+					"to": [ -1.6, -0.2, 3.5 ],
+					"rotationOrigin": [ -2.6, 0.0, 2.8 ],
+					"rotationY": -90.0,
+					"faces": {
+						"up": { "texture": "#palette", "uv": [ 6.0, 7.5, 11.0, 11.5 ], "autoUv": false }
+					}
+				}
+			]
+		}
+	]}

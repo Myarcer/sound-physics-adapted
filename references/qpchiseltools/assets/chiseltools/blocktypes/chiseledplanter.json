@@ -1,0 +1,80 @@
+{
+	code: "chiseledplanter",
+	classByType: {
+		
+		"*": "BlockDecoPlantContainer"
+	},
+	entityClass: "BEDecoPlantContainer",
+	behaviorsByType: {
+		
+		"*": [{"name": "BBChiseledCover"}]
+	},
+	entityBehaviors: [{"name": "BEBChiseledCover"}],
+	attributes: {
+		sitHeight: 0.75,
+		beeFeedByType: {
+			"*-empty": false,
+			"*": true
+		},
+		butterflyFeedByType: {
+			"*-empty": false,
+			"*": true
+		},
+		plantContainerSize: "large",
+		filledShape: { base: "game:block/clay/planter/full" },
+		fillHeight: 0.5
+	},
+	variantgroups: [
+		{ code: "type", states: ["deco"] }
+	],
+	creativeinventory: { "general": ["*-deco"],"chiseltools": ["*-deco"] },
+	shapeByType: {
+		
+		"*": { base: "game:block/clay/planter/empty" }
+	},
+	blockmaterial: "Ceramic",
+	replaceable: 900,
+	resistance: 1.5,
+	lightAbsorption: 1,
+	maxStackSize: 8,
+	texturesByType: {
+		
+		"*": { 
+			sides: {  base: "game:block/clay/planter/soil" },
+			soil: { base: "game:block/clay/planter/soil" }
+		},
+	},
+	sidesolid: {
+		all: false
+	},	
+	sideopaque: {
+		all: false
+	},
+	emitsideao: {
+		all: false
+	},
+	sounds: {
+		"walk": "walk/stone",
+		"break": "block/ceramicplace",
+		"hit": "block/ceramichit",
+		"place": "block/ceramicplace"
+	},
+	combustiblePropsByType: {
+		"clayplanter-raw": {
+			meltingPoint: 600,
+			meltingDuration: 30,
+			smeltedRatio: 1,
+			smeltingType: "fire",
+			smeltedStack: { type: "block", code: "clayplanter-burnt" },
+			requiresContainer: false
+		}
+	},
+	collisionbox: {
+		x1: 0.125, y1: 0, z1: 0.125,
+		x2: 0.875, y2: 0.5625, z2: 0.875
+	},
+	selectionbox: {
+		x1: 0.125, y1: 0, z1: 0.125,
+		x2: 0.875, y2: 0.5625, z2: 0.875
+	}
+}

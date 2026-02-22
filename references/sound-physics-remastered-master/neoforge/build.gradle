@@ -1,0 +1,31 @@
+plugins {
+    id 'net.neoforged.gradle.userdev' version "${neogradle_version}"
+}
+
+apply plugin: 'com.gradleup.shadow'
+apply plugin: 'de.maxhenkel.cursegradle'
+apply plugin: 'com.modrinth.minotaur'
+apply plugin: 'mod-update'
+
+apply from: "https://raw.githubusercontent.com/henkelmax/mod-gradle-scripts/${mod_gradle_script_version}/mod.gradle"
+
+processResources {
+    filesMatching('**/*.toml') {
+        expand 'mod_version': mod_version,
+                'neoforge_dependency': neoforge_dependency,
+                'minecraft_version': minecraft_version,
+                'cloth_config_version': cloth_config_version,
+                'voicechat_api_version': voicechat_api_version
+    }
+}
+
+repositories {
+    maven { url = 'https://maven.shedaniel.me/' }
+}
+
+dependencies {
+    implementation "de.maxhenkel.voicechat:voicechat-api:${voicechat_api_version}"
+    runtimeOnly "maven.modrinth:simple-voice-chat:neoforge-${voicechat_mod_version}"
+    //implementation "me.shedaniel.cloth:cloth-config-neoforge:${cloth_config_version}"
+    compileOnly "me.shedaniel.cloth:cloth-config-neoforge:${cloth_config_version}"
+}

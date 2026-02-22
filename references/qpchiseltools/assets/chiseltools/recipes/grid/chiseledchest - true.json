@@ -1,0 +1,11 @@
+{
+	ingredientPattern: "L	H",
+	ingredients: {
+		"L": { type: "item", code: "truechisel-*", quantity: 1, "isTool": true },
+		"H": { type: "block", code: "game:chest-*", quantity: 1 }
+	},
+	width: 1,
+	height: 2,
+	name: "Decorative Chest",
+	output: { type: "block", code: "chiseledchestnerfed-east"  }
+}

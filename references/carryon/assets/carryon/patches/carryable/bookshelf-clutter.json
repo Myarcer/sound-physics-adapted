@@ -1,0 +1,42 @@
+[
+  {
+    "file": "game:blocktypes/wood/bookshelf-clutter*",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors",
+    "value":  []
+    ,
+    "condition": {
+      "when": "carryon:BookshelfAndClutterEnabled",
+      "isValue": "true"
+    }    
+  },
+  {
+    "file": "game:blocktypes/wood/bookshelf-clutter*",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          -0.125,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          -90,
+          0
+        ],          
+        "slots": {
+          "Hands": {}
+        }
+      }
+    },
+    "condition": {
+      "when": "carryon:BookshelfAndClutterEnabled",
+      "isValue": "true"
+    }    
+  }
+]

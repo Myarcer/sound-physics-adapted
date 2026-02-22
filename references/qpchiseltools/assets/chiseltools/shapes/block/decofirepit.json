@@ -1,0 +1,28 @@
+{
+	"editor": {
+		"allAngles": false,
+		"entityTextureMode": false
+	},
+	"textureWidth": 16,
+	"textureHeight": 16,
+	"textureSizes": {
+	},
+	"textures": {
+		"special-mars": "special-mars"
+	},
+	"elements": [
+		{
+			"name": "Cube2",
+			"from": [ 1.0, 0.0, 1.0 ],
+			"to": [ 15.0, 1.0, 15.0 ],
+			"rotationOrigin": [ 1.0, 0.0, 1.0 ],
+			"faces": {
+				"north": { "texture": "#special-mars", "uv": [ 0.0, 0.0, 14.0, 1.0 ] },
+				"east": { "texture": "#special-mars", "uv": [ 0.0, 0.0, 14.0, 1.0 ] },
+				"south": { "texture": "#special-mars", "uv": [ 0.0, 0.0, 14.0, 1.0 ] },
+				"west": { "texture": "#special-mars", "uv": [ 0.0, 0.0, 14.0, 1.0 ] },
+				"up": { "texture": "#special-mars", "uv": [ 0.0, 0.0, 14.0, 14.0 ] },
+				"down": { "texture": "#special-mars", "uv": [ 0.0, 0.0, 14.0, 14.0 ] }
+			}
+		}
+	]}

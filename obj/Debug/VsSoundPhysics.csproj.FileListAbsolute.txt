@@ -1,0 +1,13 @@
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\bin\Debug\resources\assets\game\sounds\creature\beehive-wild.ogg
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\bin\Debug\resources\assets\vssoundphysics\lang\en.json
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\bin\Debug\resources\modinfo.json
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\bin\Debug\vssoundphysics.deps.json
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\bin\Debug\vssoundphysics.dll
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\bin\Debug\vssoundphysics.pdb
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\obj\Debug\vssoundphysics.csproj.AssemblyReference.cache
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\obj\Debug\vssoundphysics.GeneratedMSBuildEditorConfig.editorconfig
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\obj\Debug\vssoundphysics.csproj.CoreCompileInputs.cache
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\obj\Debug\vssoundphysics.sourcelink.json
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\obj\Debug\vssoundphysics.dll
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\obj\Debug\vssoundphysics.pdb
+Y:\ClaudeWINDOWS\projects\vs-sound-physics\bin\Debug\resources\modicon.png

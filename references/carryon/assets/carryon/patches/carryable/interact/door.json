@@ -1,0 +1,61 @@
+[
+  {
+    "file": "game:blocktypes/legacy/door",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract"
+    },
+    "condition": {
+      "when": "carryon:InteractDoorEnabled",
+      "isValue": "true"
+    } 
+  },  
+  {
+    "file": "game:blocktypes/wood/woodtyped/door",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract"
+    },
+    "condition": {
+      "when": "carryon:InteractDoorEnabled",
+      "isValue": "true"
+    } 
+  },   
+  {
+    "file": "game:blocktypes/metal/door*",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract",
+      "properties": {
+        "interactDelay": 1.3
+      }      
+    },
+    "condition": {
+      "when": "carryon:InteractDoorEnabled",
+      "isValue": "true"
+    } 
+  },
+  {
+    "file": "game:blocktypes/clay/door-kiln",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract",
+      "properties": {
+        "interactDelay": 1.3
+      }
+    },
+    "condition": {
+      "when": "carryon:InteractDoorEnabled",
+      "isValue": "true"
+    } 
+  }   
+
+]

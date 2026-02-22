@@ -1,0 +1,30 @@
+[
+  {
+    "file": "game:blocktypes/wood/displaycase*",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          0.0625,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          180,
+          0
+        ],
+        "slots": {
+          "Hands": {}
+        }
+      }
+    },
+    "condition": {
+      "when": "carryon:DisplayCaseEnabled",
+      "isValue": "true"
+    }
+  }
+]

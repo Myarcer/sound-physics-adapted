@@ -1,0 +1,12 @@
+{
+	ingredient: { type: "item", code: "game:ingot-*", name: "metal", allowedVariants: ["iron", "meteoriciron", "steel","tinbronze","bismuthbronze","blackbronze","copper"] },
+	pattern: [[
+		"________##",
+		"_#########",
+		"_##_____##",
+		"_#########",
+		"_##_______"
+	]],
+	name: "Paint Scrapers (x2)",
+	output: { type: "item", code: "paintscraper-{metal}", "stacksize": 2   }
+}

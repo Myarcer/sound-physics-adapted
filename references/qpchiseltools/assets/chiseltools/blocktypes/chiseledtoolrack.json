@@ -1,0 +1,62 @@
+{
+	code: "chiseledtoolrack",
+	class: "BlockDecoToolRack",
+	entityclass: "BEDecoToolRack",
+	creativeinventory: { "general": ["chiseledtoolrack-north"],"chiseltools": ["chiseledtoolrack-north"] },
+	behaviors: [{"name": "BBChiseledCover"},{ name: "HorizontalOrientable", properties: {  dropBlockFace: "north" }}],
+	entityBehaviors: [{"name": "BEBChiseledCover"}],
+	attributes: {
+		toolTransforms: {
+			
+		},
+		handbook: {
+			groupBy: ["toolrack-*"]
+		},
+	},
+	variantgroups: [
+		{ code: "side", loadFromProperties: "abstract/horizontalorientation" }
+	],
+	shapebytype: {
+		"*-north": { base: "game:block/wood/toolrack", rotateY: 180 },
+		"*-east": { base: "game:block/wood/toolrack", rotateY: 90 },
+		"*-south": { base: "game:block/wood/toolrack", rotateY: 0 },
+		"*-west": { base: "game:block/wood/toolrack", rotateY: 270		 }
+	},
+	blockmaterial: "Wood",
+	lightAbsorption: 0,
+	faceCullMode: "NeverCull",
+	sidesolid: {
+		all: false
+	},
+	sideopaque: {
+		all: false
+	},
+	replaceable: 999,
+	resistance: 1.5,
+	collisionbox: null,
+	selectionbox: {
+		x1: 0, y1: 0, z1: 0, 
+		x2: 1, y2: 1, z2: 0.125,
+		rotateYByType: {
+			"*-east": 270,
+			"*-south": 180,
+			"*-west": 90,
+			"*-north": 0
+		}
+	},
+	combustibleProps: {
+		burnTemperature: 600,
+		burnDuration: 10,
+	},
+	sounds: {
+		"place": "block/planks",
+		"hit": "block/planks",
+		"break": "block/planks",
+		"hit": "block/planks"
+	},
+	rainPermeable: true,
+	materialDensity: 600,
+	guiTransform: {
+		origin: { x: 0.5, y: 0.5, z: 0 }
+	}
+}

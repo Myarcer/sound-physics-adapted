@@ -1,0 +1,11 @@
+{
+	ingredientPattern: "L	H",
+	ingredients: {
+		"L": { type: "item", code: "game:chisel-*", quantity: 1, "isTool": true },
+		"H": { type: "item", code: "game:firewood", quantity: 4 }
+	},
+	width: 1,
+	height: 2,
+	name: "Decorative Firepit",
+	output: { type: "block", code: "chiseledfirepit-extinct"  }
+}

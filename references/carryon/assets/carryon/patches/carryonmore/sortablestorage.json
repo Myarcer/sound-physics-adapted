@@ -1,0 +1,38 @@
+[
+  {
+    "file": "sortablestorage:blocktypes/stationarybasketsortable",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract"
+    },
+    "condition": {
+      "when": "carryon:InteractStorageEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "sortablestorage"
+      }
+    ]  
+  },
+  {
+    "file": "sortablestorage:blocktypes/wood/chestsortable-labeled",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract"
+    },
+    "condition": {
+      "when": "carryon:InteractStorageEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "sortablestorage"
+      }
+    ]  
+  }  
+]

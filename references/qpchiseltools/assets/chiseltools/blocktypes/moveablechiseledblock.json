@@ -1,0 +1,13 @@
+{
+	code: "moveablechiseledblock",
+	class: "BlockFunctionalChiseled",
+	entityClass: "BEFunctionChiseled",
+	creativeinventory: { "chiseltools": [""] },
+	shape: { base: "game:block/basic/cube" },
+	replaceable: 90,
+	sidesolid: { all: false },
+	sideopaque: { all: false },
+	sideao: { all: true },
+	lightAbsorption: 99
+
+}

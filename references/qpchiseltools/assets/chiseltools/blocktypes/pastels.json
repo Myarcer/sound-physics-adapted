@@ -1,0 +1,27 @@
+{
+	code: "pastel",
+	shape: { base: "block/basic/cube" },
+	attributes: {
+		handbook: {
+			exclude: true
+		}
+	},
+	variantgroups: [
+		{ code: "num", states: ["ff0000","ffff00","00ff00","00ffff","0000ff","0088ff","00ff88","8800ff","88ff00","ff0088","ff8800"] },
+	],
+	drawtype: "cube",
+	creativeinventory: { "general": ["*"], "chiseltools": ["*"] },
+	blockmaterial: "Stone",
+	replaceable: 900,
+	lightAbsorption: 99,
+	textures: {
+		all: { base: "pastel-{num}" },
+	},
+	resistance: 1,
+	sideopaque: {
+		all: true
+	},
+	sidesolid: {
+		all: true
+	}
+}

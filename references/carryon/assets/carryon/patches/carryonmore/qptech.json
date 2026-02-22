@@ -1,0 +1,39 @@
+[
+  {
+    "file": "machines:blocktypes/metal/temporalpocket",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          0.0625,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": 0.6,
+        "slots": {
+          "Hands": {
+            "animation": "carryon:holdheavy",
+            "walkSpeedModifier": -0.5
+          }
+        }
+      }
+    },
+    "condition": {
+      "when": "carryon:ChestTrunkEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "qptech"
+      }
+    ]  
+  }
+]

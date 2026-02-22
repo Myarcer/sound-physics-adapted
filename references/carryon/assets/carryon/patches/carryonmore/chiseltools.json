@@ -1,0 +1,423 @@
+[
+  {
+    "file": "chiseltools:blocktypes/chiseledchest*",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          0.0625,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          180,
+          0
+        ],
+        "slots": {
+          "Hands": {},
+          "Back": {}
+        },
+        "preventAttaching": true
+      }
+    },
+    "condition": {
+      "when": "carryon:ChestEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ]  
+  }, 
+  
+  {
+    "file": "chiseltools:blocktypes/chiseledchest*",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "CarryableInteract"
+    },
+    "condition": {
+      "when": "carryon:InteractStorageEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ]  
+  }, 
+    
+
+
+  {
+    "file": "chiseltools:blocktypes/chiseledbarrel",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          -0.0625,
+          0,
+          0
+        ],
+        "slots": {
+          "Hands": {},
+          "Back": {}
+        },
+        "preventAttaching": true
+      }
+    },
+    "condition": {
+      "when": "carryon:BarrelEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ]    
+  },
+  {
+    "file": "chiseltools:blocktypes/chiseledforge.json",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          0.0625,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          180,
+          0
+        ],
+        "slots": {
+          "Hands": {}
+        },
+        "preventAttaching": true
+      }
+    },
+    "condition": {
+      "when": "carryon:ForgeEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ]  
+  },
+  {
+    "file": "chiseltools:blocktypes/chiseledanvil",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "interactDelay": 1.5,
+        "translation": [
+          0.05,
+          -0.1,
+          -0.25
+        ],
+        "rotation": [
+          0,
+          90,
+          10
+        ],
+        "scale": 0.8,
+        "slots": {
+          "Hands": {
+            "walkSpeedModifier": -0.5
+          }
+        },
+        "preventAttaching": true      }
+    },
+    "condition": {
+      "when": "carryon:AnvilEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ]  
+  },
+    {
+    "file": "chiseltools:blocktypes/chiseledflowerpot.json",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviorsByType/*/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          0.3175,
+          0.1,
+          0
+        ],
+        "rotation": [
+          0,
+          180,
+          0
+        ],
+        "scale": 1,
+        "slots": {
+          "Hands": {
+            "animation": "carryon:holdlight"
+          },
+          "Back": {}
+        },
+        "preventAttaching": true
+      }
+    },
+    "condition": {
+      "when": "carryon:FlowerpotEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ]  
+  },
+  {
+    "file": "chiseltools:blocktypes/chiseleddisplaycase",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          0.0625,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          180,
+          0
+        ],
+        "slots": {
+          "Hands": {}
+        },
+        "preventAttaching": true
+      }
+    },
+    "condition": {
+      "when": "carryon:DisplayCaseEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ]  
+  },
+  {
+    "file": "chiseltools:blocktypes/chiseledoven",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          0.0625,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          180,
+          0
+        ],
+        "slots": {
+          "Hands": {}
+        },
+        "preventAttaching": true
+      }
+    },
+    "condition": {
+      "when": "carryon:OvenEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ] 
+  },
+  {
+    "file": "chiseltools:blocktypes/chiseledplanter",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviorsByType/*/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "scale": 0.6,
+        "preventAttaching": true
+      }
+    },
+    "condition": {
+      "when": "carryon:PlanterEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ] 
+  },
+  {
+    "file": "chiseltools:blocktypes/chiseledshelf",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          0.0625,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          180,
+          0
+        ],
+        "slots": {
+          "Hands": {},
+          "Back": {}
+        },
+        "preventAttaching": true
+      }
+    },
+    "condition": {
+      "when": "carryon:ShelfEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ] 
+  },
+  {
+    "file": "chiseltools:blocktypes/chiseledsign",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors",
+    "value": [
+      {
+        "name": "Carryable",
+        "properties": {
+          "translation": [
+            0.0625,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            -90,
+            0
+          ],
+          "slots": {
+            "Hands": {}
+          },
+          "preventAttaching": true
+        }
+      }
+    ],
+    "condition": {
+      "when": "carryon:SignEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ] 
+  },
+  {
+    "file": "chiseltools:blocktypes/chiseledstoragevessel",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviorsByType/*/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          -0.125,
+          0,
+          0
+        ],
+        "slots": {
+          "Hands": {},
+          "Back": {}
+        },
+        "preventAttaching": true
+      }
+    },
+    "condition": {
+      "when": "carryon:StorageVesselEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ] 
+  },
+  {
+    "file": "chiseltools:blocktypes/chiseledtoolrack",
+    "side": "Server",
+    "op": "add",
+    "path": "/behaviors/-",
+    "value": {
+      "name": "Carryable",
+      "properties": {
+        "translation": [
+          0.0625,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          90,
+          90
+        ],
+        "slots": {
+          "Hands": {}
+        },
+        "preventAttaching": true
+      }
+    },
+    "condition": {
+      "when": "carryon:ToolRackEnabled",
+      "isValue": "true"
+    },
+    "dependsOn": [
+      {
+        "modid": "chiseltools"
+      }
+    ] 
+  }                  
+]
