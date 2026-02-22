@@ -1,0 +1,13 @@
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Debug\resources\assets\game\sounds\creature\beehive-wild.ogg
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Debug\resources\modicon.png
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Debug\resources\assets\soundphysicsadapted\lang\en.json
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Debug\resources\modinfo.json
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Debug\soundphysicsadapted.deps.json
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Debug\soundphysicsadapted.dll
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Debug\soundphysicsadapted.pdb
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Debug\soundphysicsadapted.csproj.AssemblyReference.cache
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Debug\soundphysicsadapted.GeneratedMSBuildEditorConfig.editorconfig
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Debug\soundphysicsadapted.csproj.CoreCompileInputs.cache
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Debug\soundphysicsadapted.sourcelink.json
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Debug\soundphysicsadapted.dll
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Debug\soundphysicsadapted.pdb

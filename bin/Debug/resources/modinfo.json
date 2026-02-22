@@ -1,7 +1,7 @@
 {
     "type": "code",
-    "modid": "vssoundphysics",
-    "name": "VS Sound Physics",
+    "modid": "soundphysicsadapted",
+    "name": "Sound Physics Adapted",
     "authors": [
         "Nyarc"
     ],
@@ -13,6 +13,6 @@
     "dependencies": {
         "game": "1.21.0"
     },
-    "website": "https://github.com/Myarcer/vs-sound-physics",
+    "website": "https://github.com/Myarcer/sound-physics-adapted",
     "contributors": []
 }

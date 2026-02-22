@@ -231,6 +231,9 @@ namespace soundphysicsadapted
                 }
                 if (soundPos == null) continue;
 
+                // Adjust sound position for multi-block sources (e.g. doors)
+                soundPos = SoundSourceAdjuster.Adjust(soundPos, blockAccessor);
+
                 float distance = (float)playerPos.DistanceTo(soundPos);
                 cache.Distance = distance;
 
