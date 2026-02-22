@@ -2,3 +2,12 @@ Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.
 Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.GeneratedMSBuildEditorConfig.editorconfig
 Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.csproj.CoreCompileInputs.cache
 Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.sourcelink.json
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Release\resources\assets\game\sounds\creature\beehive-wild.ogg
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Release\resources\modicon.png
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Release\resources\assets\soundphysicsadapted\lang\en.json
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Release\resources\modinfo.json
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Release\soundphysicsadapted.deps.json
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Release\soundphysicsadapted.dll
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Release\soundphysicsadapted.pdb
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.dll
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.pdb
