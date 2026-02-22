@@ -4,7 +4,7 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.1.4] - 2026-02-22
 
 ### Added
 - Runtime API for other mods to configure material overrides, occlusion, and reflectivity
@@ -17,7 +17,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Throttle churn at budget boundary (distance hysteresis)
 - Thunder sound placement underground/underwater (direction clamping)
 - Weather source spawning through closed doors
-- Sound repositioning jumps when walking around corners
 
 ## [0.1.3] - 2026-02-09
 
@@ -25,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Sound override system (custom sound assets replacing vanilla)
 - Beehive sound override as first implementation
 - CarryOn mod compatibility patches
+- Sound repositioning jumps when walking around corners
 
 ### Changed
 - Resonator patches refactored into consolidated file
