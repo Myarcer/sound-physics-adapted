@@ -81,12 +81,14 @@ namespace soundphysicsadapted
         private static readonly AssetLocation VERY_NEAR = new AssetLocation("sounds/weather/lightning-verynear.ogg");
         private static readonly AssetLocation NODISTANCE = new AssetLocation("sounds/weather/lightning-nodistance.ogg");
 
-        /// <summary>Tracks a Layer 1 one-shot sound for cleanup.</summary>
+        /// <summary>Tracks a Layer 1 one-shot sound for cleanup and dynamic enclosure.</summary>
         private class ManagedThunderSound
         {
             public ILoadedSound Sound;
             public long StartTimeMs;
             public int FilterId; // 0 = no filter (outdoor), >0 = managed by handler's shared filter
+            public float BaseVolume;      // The un-attenuated volume at spawn
+            public float NearestRainDist; // Rain distance at spawn time
         }
 
         /// <summary>Queued delayed crack sound (nodistance.ogg), fired ~50ms after bolt spawn.</summary>
@@ -196,14 +198,13 @@ namespace soundphysicsadapted
             {
                 // INDOOR WITH OPENINGS: Layer 1 rumble + Layer 2 at opening
                 float combined = CalculateCombinedEnclosure(skyCoverage, occlusionFactor, config);
-                PlayLayer1Rumble(asset, volume, pitch, combined, gameTimeMs);
+                PlayLayer1Rumble(asset, rawIntensity, pitch, skyCoverage, occlusionFactor, nearestRainDist, gameTimeMs);
                 PlayLayer2AtBestOpening(null, trackedOpenings, playerEarPos, volume, combined, config);
             }
             else
             {
                 // FULLY ENCLOSED: Layer 1 rumble only (heavy LPF)
-                float combined = CalculateCombinedEnclosure(skyCoverage, occlusionFactor, config);
-                PlayLayer1Rumble(asset, volume, pitch, combined, gameTimeMs);
+                PlayLayer1Rumble(asset, rawIntensity, pitch, skyCoverage, occlusionFactor, nearestRainDist, gameTimeMs);
             }
 
             ThunderDebugLog(
@@ -296,7 +297,7 @@ namespace soundphysicsadapted
                 float combined = CalculateCombinedEnclosure(skyCoverage, occlusionFactor, config);
 
                 // Layer 1: Muffled rumble with LPF
-                PlayLayer1Rumble(asset, volume, 1f, combined, gameTimeMs);
+                PlayLayer1Rumble(asset, baseVolume, 1f, skyCoverage, occlusionFactor, nearestRainDist, gameTimeMs);
 
                 // Layer 2: Crack at best opening (if any exist)
                 if (trackedOpenings != null && trackedOpenings.Count > 0)
@@ -490,19 +491,21 @@ namespace soundphysicsadapted
         // LAYER 1: Omnidirectional rumble with LPF (indoor)
         // ════════════════════════════════════════════════════════════════
 
-        private void PlayLayer1Rumble(AssetLocation asset, float volume, float pitch,
-            float occlusionFactor, long gameTimeMs)
+        private void PlayLayer1Rumble(AssetLocation asset, float baseVolume, float pitch,
+            float currentSkyCoverage, float currentOcclusionFactor, float nearestRainDist, long gameTimeMs)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
             if (config == null) return;
 
-            // Volume already fully computed by CalculateThunderVolume — just apply config scale
-            float layer1Vol = GameMath.Clamp(volume * config.ThunderLayer1Volume, 0f, 1f);
+            // Calculate initial volume for the first frame
+            float enclosureMod = CalculateThunderVolume(1.0f, currentSkyCoverage, currentOcclusionFactor, nearestRainDist);
+            float currentVol = baseVolume * enclosureMod;
+            float layer1Vol = GameMath.Clamp(currentVol * config.ThunderLayer1Volume, 0f, 1f);
 
             if (layer1Vol < 0.01f) return;
 
             // Calculate LPF gainHF from occlusion
-            float gainHF = CalculateThunderGainHF(occlusionFactor, config);
+            float gainHF = CalculateThunderGainHF(currentOcclusionFactor, config);
 
             try
             {
@@ -536,15 +539,17 @@ namespace soundphysicsadapted
 
                 sound.Start();
 
-                // Track for cleanup
+                // Track for cleanup and dynamic updates
                 activeLayer1Sounds.Add(new ManagedThunderSound
                 {
                     Sound = sound,
                     StartTimeMs = gameTimeMs,
-                    FilterId = 0 // Uses shared filter
+                    FilterId = layer1FilterId, // 0 if no EFX, otherwise shared filter
+                    BaseVolume = baseVolume,
+                    NearestRainDist = nearestRainDist
                 });
 
-                ThunderDebugLog($"  L1 RUMBLE: vol={layer1Vol:F2} gainHF={gainHF:F3} occl={occlusionFactor:F2}");
+                ThunderDebugLog($"  L1 RUMBLE: base={baseVolume:F2} vol={layer1Vol:F2} gainHF={gainHF:F3} occl={currentOcclusionFactor:F2}");
             }
             catch (Exception ex)
             {
@@ -726,7 +731,8 @@ namespace soundphysicsadapted
         /// Call each weather tick.
         /// </summary>
         /// <param name="currentSkyCoverage">Current smoothed sky coverage from WeatherAudioManager (0=outdoors, 1=covered)</param>
-        public void OnGameTick(float currentSkyCoverage)
+        /// <param name="currentOcclusionFactor">Current smoothed occlusion factor</param>
+        public void OnGameTick(float currentSkyCoverage, float currentOcclusionFactor)
         {
             if (!initialized || disposed) return;
 
@@ -781,6 +787,30 @@ namespace soundphysicsadapted
                 }
                 catch { }
                 activeLayer1Sounds.RemoveAt(0);
+            }
+
+            // Update dynamic enclosure for all active Layer 1 rumbles
+            if (activeLayer1Sounds.Count > 0)
+            {
+                // 1. Update shared EFX filter LPF if supported (applies instantly to all L1 sources)
+                if (layer1FilterId > 0 && EfxHelper.IsAvailable)
+                {
+                    float gainHF = CalculateThunderGainHF(currentOcclusionFactor, config);
+                    EfxHelper.SetLowpassGainHF(layer1FilterId, gainHF);
+                }
+
+                // 2. Update individual volumes based on dynamic enclosure
+                for (int i = 0; i < activeLayer1Sounds.Count; i++)
+                {
+                    var managed = activeLayer1Sounds[i];
+                    if (managed.Sound != null && managed.Sound.IsPlaying)
+                    {
+                        float enclosureMod = CalculateThunderVolume(1.0f, currentSkyCoverage, currentOcclusionFactor, managed.NearestRainDist);
+                        float currentVol = managed.BaseVolume * enclosureMod;
+                        float layer1Vol = GameMath.Clamp(currentVol * config.ThunderLayer1Volume, 0f, 1f);
+                        managed.Sound.SetVolume(layer1Vol);
+                    }
+                }
             }
 
             // Fire pending delayed cracks (nodistance.ogg ~50ms after bolt spawn)
@@ -873,8 +903,8 @@ namespace soundphysicsadapted
             else
             {
                 // Indoor/Enclosed: play as L1 with LPF
-                PlayLayer1Rumble(NODISTANCE, volume, 1f, crack.CombinedEnclosure, gameTimeMs);
-                ThunderDebugLog($"  DELAYED CRACK (indoor): vol={volume:F2} encl={crack.CombinedEnclosure:F2}");
+                PlayLayer1Rumble(NODISTANCE, crackVol, 1f, crack.SkyCoverage, crack.OcclusionFactor, crack.NearestRainDistance, gameTimeMs);
+                ThunderDebugLog($"  DELAYED CRACK (indoor): baseVol={crackVol:F2} encl={crack.CombinedEnclosure:F2}");
             }
         }
 
