@@ -13,17 +13,17 @@ namespace soundphysicsadapted
     /// Ambient thunder: Harmony prefix on WeatherSimulationLightning.ClientTick.
     /// Bolt thunder: Harmony transpiler suppresses VS's PlaySoundAt + postfix plays ours.
     ///
-    /// Sound assets and distance tiers (bolt thunder — matches vanilla thresholds):
+    /// Sound assets and distance tiers (bolt thunder):
     ///   verynear.ogg  — sharp crack, plays for bolts &lt; 150m
     ///   near.ogg      — balanced crack + rumble, plays for bolts 150-200m
-    ///   distant.ogg   — rolling rumble, plays for bolts 200-320m
-    ///   nodistance.ogg — pure instant crack, plays as delayed extra layer for bolts &lt; 200m
+    ///   distant.ogg   — rolling rumble, plays for bolts 200-500m
+    ///   nodistance.ogg — pure instant crack, plays as delayed extra layer for bolts &lt; 300m
     ///
-    /// Volume curves (bolt thunder — per-tier linear, matching vanilla):
-    ///   verynear:  1 - dist/180  (1.0 at 0m, 0.17 at 149m)
-    ///   near:      1 - dist/250  (0.40 at 150m, 0.20 at 200m)
-    ///   distant:   1 - dist/500  (0.60 at 200m, 0.36 at 320m)
-    ///   crack:     pow(1-dist/200, 1.5) — realistic atmospheric HF absorption
+    /// Volume curves (bolt thunder — enhanced, louder than vanilla):
+    ///   verynear:  1 - dist/250  (1.0 at 0m, 0.40 at 149m)
+    ///   near:      1 - dist/400  (0.63 at 150m, 0.50 at 200m)
+    ///   distant:   1 - dist/700  (0.71 at 200m, 0.29 at 500m)
+    ///   crack:     pow(1-dist/300, 0.8) — punchy, audible to 300m
     ///
     /// Three modes based on enclosure state:
     ///
@@ -247,8 +247,9 @@ namespace soundphysicsadapted
             float minSky = config.PositionalMinSkyCoverage;
             long gameTimeMs = capi.World.ElapsedMilliseconds;
 
-            // Vanilla cutoff: no bolt sound past 320m
-            if (distance >= 320f) return;
+            // Extended cutoff: bolts audible to 500m (vanilla was 320m)
+            // Real thunder travels much further; VS spawns bolts you can see beyond 320m
+            if (distance >= 500f) return;
 
             // Select asset + base volume by distance (vanilla per-tier curves)
             AssetLocation asset = GetAssetForDistance(distance);
@@ -267,7 +268,8 @@ namespace soundphysicsadapted
                 PlayOutdoorBoltThunder(boltWorldPos, distance, playerEarPos);
 
                 // Queue delayed nodistance.ogg crack (outdoor positioned)
-                if (distance < 200)
+                // Extended from 200m to 300m — cracks audible further out
+                if (distance < 300)
                 {
                     Vec3d dir = NormalizeBoltDirection(boltWorldPos, playerEarPos);
                     if (dir != null)
@@ -300,13 +302,15 @@ namespace soundphysicsadapted
                 PlayLayer1Rumble(asset, baseVolume, 1f, skyCoverage, occlusionFactor, nearestRainDist, gameTimeMs);
 
                 // Layer 2: Crack at best opening (if any exist)
+                // L2 represents sound punching THROUGH the opening — it should use baseVolume,
+                // not the enclosure-crushed volume. The opening IS the unoccluded path.
                 if (trackedOpenings != null && trackedOpenings.Count > 0)
                 {
-                    PlayLayer2AtBestOpening(boltWorldPos, trackedOpenings, playerEarPos, volume, combined, config);
+                    PlayLayer2AtBestOpening(boltWorldPos, trackedOpenings, playerEarPos, baseVolume, combined, config);
                 }
 
                 // Queue delayed nodistance.ogg crack (indoor, same LPF as L1)
-                if (distance < 200)
+                if (distance < 300)
                 {
                     pendingCracks.Add(new PendingDelayedCrack
                     {
@@ -559,17 +563,22 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Convert occlusion factor to LPF gainHF for thunder.
-        /// Thunder is already bass-heavy, so the LPF curve is moderate.
+        /// Uses cubic curve so partial occlusion (cave entrance) stays more audible.
+        /// Enforces minimum gainHF of 0.05 (~1100Hz) regardless of config.
         /// </summary>
         private float CalculateThunderGainHF(float occlusionFactor, SoundPhysicsConfig config)
         {
-            // Quadratic curve: occlusionFactor 0→1 maps to gainHF 1.0→min
-            float t = occlusionFactor * occlusionFactor;
+            // Cubic curve: much gentler at partial occlusion than quadratic.
+            // occl=0.5: cubic=0.125 vs quadratic=0.25 (less filtering at moderate enclosure)
+            // occl=0.98: cubic=0.941 vs quadratic=0.960 (similar at extremes)
+            float t = occlusionFactor * occlusionFactor * occlusionFactor;
 
             // Convert min cutoff Hz to approximate gainHF (0-1)
-            // gainHF ≈ cutoff / 22000 (rough linear approximation for perception)
-            float minGainHF = config.ThunderLPFMinCutoff / 22000f;
-            minGainHF = GameMath.Clamp(minGainHF, 0.005f, 1f);
+            float minGainHF = Math.Max(config.ThunderLPFMinCutoff, 500f) / 22000f;
+
+            // Hardcoded absolute floor: never go below 0.05 (~1100Hz).
+            // At 200Hz (gainHF=0.009) thunder is inaudible on normal speakers/headphones.
+            minGainHF = GameMath.Clamp(minGainHF, 0.05f, 1f);
 
             float gainHF = 1f - t * (1f - minGainHF);
             return GameMath.Clamp(gainHF, minGainHF, 1f);
@@ -844,10 +853,19 @@ namespace soundphysicsadapted
         /// </summary>
         private void FireDelayedCrack(PendingDelayedCrack crack, long gameTimeMs)
         {
-            // Realistic crack falloff: pow(1.5) curve over 200m range.
-            // Real thunder cracks (>2kHz) attenuate ~6dB per distance doubling.
-            // pow(1.5) gives fast initial drop + gentle tail — audible to ~200m.
-            float crackVol = MathF.Pow(Math.Max(0f, 1f - crack.Distance / 200f), 1.5f);
+            // Crack volume: full blast within 30 blocks, then very gentle pow(0.5) falloff to 300m.
+            // Cracks must cut through rain — pow(0.5) gives MUCH flatter curve than pow(0.8).
+            // At 200m: pow(0.5)=0.61 vs pow(0.8)=0.41. At 250m: 0.43 vs 0.24.
+            float crackVol;
+            if (crack.Distance <= 30f)
+            {
+                crackVol = 1.0f;
+            }
+            else
+            {
+                // 30-300m: very gradual falloff, pow(0.5) keeps crack audible at range
+                crackVol = MathF.Pow(Math.Max(0f, 1f - (crack.Distance - 30f) / 270f), 0.5f);
+            }
 
             // Apply our enclosure attenuation on top
             float enclosureMod = CalculateThunderVolume(1.0f, crack.SkyCoverage, crack.OcclusionFactor, crack.NearestRainDistance);
@@ -864,9 +882,9 @@ namespace soundphysicsadapted
                 double z = crack.PlayerEarPos.Z + crack.OutdoorDir.Z * crackPlaceDist;
                 float range = Math.Max(crackPlaceDist * 4f, 200f);
 
-                // Slight volume falloff at the outer edge of placement
-                float crackFalloff = crackPlaceDist < 20f ? 1f : 1f - (crackPlaceDist - 20f) / 30f;
-                float finalVol = volume * Math.Max(crackFalloff, 0.5f);
+                // Volume is fully controlled by our distance curve + enclosure.
+                // No placement-distance falloff — rolloff=0 means OpenAL won't attenuate.
+                float finalVol = volume;
 
                 try
                 {
@@ -898,13 +916,13 @@ namespace soundphysicsadapted
                     ThunderDebugLog($"  DELAYED CRACK FAILED: {ex.Message}");
                 }
 
-                ThunderDebugLog($"  DELAYED CRACK (outdoor): vol={finalVol:F2} placeDist={crackPlaceDist:F0} rolloff=0");
+                ThunderDebugLog($"  DELAYED CRACK (outdoor): asset={NODISTANCE.Path} vol={finalVol:F2} dist={crack.Distance:F0} placeDist={crackPlaceDist:F0} rolloff=0");
             }
             else
             {
                 // Indoor/Enclosed: play as L1 with LPF
                 PlayLayer1Rumble(NODISTANCE, crackVol, 1f, crack.SkyCoverage, crack.OcclusionFactor, crack.NearestRainDistance, gameTimeMs);
-                ThunderDebugLog($"  DELAYED CRACK (indoor): baseVol={crackVol:F2} encl={crack.CombinedEnclosure:F2}");
+                ThunderDebugLog($"  DELAYED CRACK (indoor): asset={NODISTANCE.Path} baseVol={crackVol:F2} encl={crack.CombinedEnclosure:F2}");
             }
         }
 
@@ -922,35 +940,37 @@ namespace soundphysicsadapted
         /// <param name="nearestRainDistance">Distance to nearest rain-exposed point</param>
         private float CalculateThunderVolume(float rawIntensity, float skyCoverage, float occlusionFactor, float nearestRainDistance)
         {
-            // Sky factor: less covered sky = louder. At full sky coverage, 30% remains (bass penetration)
-            float skyFactor = 1.0f - skyCoverage * 0.7f;
+            // Enclosure factor: use the STRONGER of sky coverage vs occlusion, not both.
+            // Sky coverage and block occlusion measure the same physical thing (being under rock).
+            // At full enclosure: 50% remains (bass penetration through rock).
+            // At cave entrance (sky=0.99, occl=0.98): ~50% remains — audible with LPF muffling.
+            float enclosurePenalty = Math.Max(skyCoverage * 0.50f, occlusionFactor * 0.45f);
+            float enclosureFactor = 1.0f - enclosurePenalty;
 
-            // Occlusion multiplier: more material = quieter. At full occlusion, 50% remains
-            float occlusionMult = 1.0f - occlusionFactor * 0.5f;
-
-            // Rain distance factor: hard gate — no thunder if far from any rain column
+            // Rain distance factor: proximity to outdoor rain = how much sound reaches you.
+            // Close rain (<8 blocks) = full volume, then gentle falloff.
             float rainDistFactor;
-            if (nearestRainDistance <= 3f)
+            if (nearestRainDistance <= 8f)
             {
                 rainDistFactor = 1.0f;
             }
-            else if (nearestRainDistance <= 20f)
+            else if (nearestRainDistance <= 25f)
             {
-                // Lerp 1.0 → 0.3 over 3..20 blocks
-                rainDistFactor = 1.0f - (nearestRainDistance - 3f) / 17f * 0.7f;
+                // Lerp 1.0 → 0.5 over 8..25 blocks
+                rainDistFactor = 1.0f - (nearestRainDistance - 8f) / 17f * 0.5f;
             }
-            else if (nearestRainDistance <= 40f)
+            else if (nearestRainDistance <= 45f)
             {
-                // Soft tail: lerp 0.3 → 0.0 over 20..40 blocks
-                rainDistFactor = 0.3f - (nearestRainDistance - 20f) / 20f * 0.3f;
+                // Soft tail: lerp 0.5 → 0.0 over 25..45 blocks
+                rainDistFactor = 0.5f - (nearestRainDistance - 25f) / 20f * 0.5f;
             }
             else
             {
-                // Hard gate: >40 blocks from rain = silence
+                // Hard gate: >45 blocks from rain = silence
                 rainDistFactor = 0f;
             }
 
-            return rawIntensity * skyFactor * occlusionMult * rainDistFactor;
+            return rawIntensity * enclosureFactor * rainDistFactor;
         }
 
         /// <summary>
@@ -995,6 +1015,19 @@ namespace soundphysicsadapted
             int playerX = (int)Math.Floor(playerEarPos.X);
             int playerY = (int)Math.Floor(playerEarPos.Y);
             int playerZ = (int)Math.Floor(playerEarPos.Z);
+
+            // Quick check: player's own column. If above rain height, they're directly
+            // rain-exposed (standing on hilltop, flying in creative, etc.) — distance is 0.
+            // Prevents vertical gap to lower terrain from inflating the average.
+            try
+            {
+                int ownRainHeight = blockAccessor.GetRainMapHeightAt(playerX, playerZ);
+                if (playerY >= ownRainHeight)
+                {
+                    return 0f;
+                }
+            }
+            catch { /* chunk not loaded */ }
 
             const int MAX_SAMPLES = 9;
 
@@ -1188,26 +1221,29 @@ namespace soundphysicsadapted
         }
 
         /// <summary>Calculate bolt intensity from distance.
-        /// Matches vanilla LightningFlash.ClientInit per-tier linear falloff.
-        /// Each tier has its own denominator — vanilla uses hard transitions.
+        /// Enhanced curves — louder than vanilla to carry further.
+        /// Real thunder is audible 5-10km; VS bolts spawn up to ~500m.
+        /// Each tier uses a gentler falloff than vanilla to keep bolts impactful.
         /// Our enclosure system (sky/occlusion/rain) applies on top.</summary>
         private float CalculateBoltIntensity(float distance)
         {
-            if (distance < 150f)
-                return Math.Max(0.1f, 1f - distance / 180f);   // verynear tier
-            if (distance < 200f)
-                return Math.Max(0.1f, 1f - distance / 250f);   // near tier
-            if (distance < 320f)
-                return Math.Max(0.1f, 1f - distance / 500f);   // distant tier
-            return 0f;  // beyond 320 = no bolt sound (vanilla cutoff)
+            // Aggressive curve: thunder must overpower rain.
+            // Flat 1.0 within 80m (scary close), then single gentle linear falloff.
+            // Old curves gave 0.57 at 300m, 0.30 at 490m — drowned out by rain.
+            if (distance <= 80f)
+                return 1.0f;  // point-blank: full blast, no falloff
+            if (distance < 500f)
+                return Math.Max(0.25f, 1.0f - (distance - 80f) / 600f);
+            return 0f;  // beyond 500m = no bolt sound
         }
 
-        /// <summary>Select thunder asset by distance — matches vanilla LightningFlash.ClientInit thresholds.</summary>
+        /// <summary>Select thunder asset by distance — matches vanilla thresholds for near tiers,
+        /// extended distant tier to 500m (vanilla was 320m).</summary>
         public static AssetLocation GetAssetForDistance(float distance)
         {
             if (distance < 150) return VERY_NEAR;
             if (distance < 200) return NEAR;
-            return DISTANT;
+            return DISTANT; // 200-500m
         }
 
         /// <summary>

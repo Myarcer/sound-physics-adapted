@@ -567,7 +567,7 @@ namespace soundphysicsadapted
         /// Thunder is already low-frequency content; heavy filtering makes it
         /// a deep, barely-audible rumble. 200 Hz keeps some bass presence.
         /// </summary>
-        public float ThunderLPFMinCutoff { get; set; } = 200f;
+        public float ThunderLPFMinCutoff { get; set; } = 800f;
 
         /// <summary>
         /// Volume multiplier for thunder Layer 1 (indoor rumble).

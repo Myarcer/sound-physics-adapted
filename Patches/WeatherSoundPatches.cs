@@ -283,59 +283,78 @@ namespace soundphysicsadapted.Patches
         /// Re-implements VS's random roll logic but routes sounds through our ThunderAudioHandler.
         /// Returns false to skip the original method when our system is active.
         /// </summary>
+        // Diagnostic throttle — log once every N ticks to avoid flooding
+        private static int _ambientDiagTick = 0;
+        private static int _ambientDiagLogInterval = 200; // Log once per 200 ticks (~4-6s)
+
         private static bool ClientTickPrefix(object __instance, float dt)
         {
+            _ambientDiagTick++;
+
             var config = SoundPhysicsAdaptedModSystem.Config;
             if (config == null || !config.EnableThunderPositioning || _thunderHandler == null || _weatherManager == null)
-                return true; // Let VS handle thunder normally
+            {
+                if (_ambientDiagTick % _ambientDiagLogInterval == 1)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[Thunder] AMBIENT BAIL: config={config != null} enableThunder={config?.EnableThunderPositioning} handler={_thunderHandler != null} mgr={_weatherManager != null}");
+                return true;
+            }
 
             if (_lightningCapiField == null || _lightningWeatherSysField == null)
+            {
+                if (_ambientDiagTick % _ambientDiagLogInterval == 1)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[Thunder] AMBIENT BAIL: capiField={_lightningCapiField != null} weatherSysField={_lightningWeatherSysField != null}");
                 return true;
+            }
 
             try
             {
                 var capi = _lightningCapiField.GetValue(__instance) as ICoreClientAPI;
-                if (capi == null) return true;
+                if (capi == null) { if (_ambientDiagTick % _ambientDiagLogInterval == 1) SoundPhysicsAdaptedModSystem.DebugLog("[Thunder] AMBIENT BAIL: capi=null"); return true; }
 
                 var weatherSys = _lightningWeatherSysField.GetValue(__instance);
-                if (weatherSys == null) return true;
+                if (weatherSys == null) { if (_ambientDiagTick % _ambientDiagLogInterval == 1) SoundPhysicsAdaptedModSystem.DebugLog("[Thunder] AMBIENT BAIL: weatherSys=null"); return true; }
 
                 // Read BlendedWeatherData
                 var blendedProp = weatherSys.GetType().GetProperty("BlendedWeatherData",
                     BindingFlags.Public | BindingFlags.Instance);
-                if (blendedProp == null) return true;
+                if (blendedProp == null) { if (_ambientDiagTick % _ambientDiagLogInterval == 1) SoundPhysicsAdaptedModSystem.DebugLog("[Thunder] AMBIENT BAIL: BlendedWeatherData prop not found"); return true; }
 
                 var weatherData = blendedProp.GetValue(weatherSys);
-                if (weatherData == null) return true;
+                if (weatherData == null) { if (_ambientDiagTick % _ambientDiagLogInterval == 1) SoundPhysicsAdaptedModSystem.DebugLog("[Thunder] AMBIENT BAIL: weatherData=null"); return true; }
 
                 // Read clientClimateCond for temperature check
                 var climateField = weatherSys.GetType().GetField("clientClimateCond",
                     BindingFlags.Public | BindingFlags.Instance);
-                if (climateField == null) return true;
+                if (climateField == null) { if (_ambientDiagTick % _ambientDiagLogInterval == 1) SoundPhysicsAdaptedModSystem.DebugLog("[Thunder] AMBIENT BAIL: clientClimateCond field not found"); return true; }
 
                 var climateCond = climateField.GetValue(weatherSys);
-                if (climateCond == null) return true;
+                if (climateCond == null) { if (_ambientDiagTick % _ambientDiagLogInterval == 1) SoundPhysicsAdaptedModSystem.DebugLog("[Thunder] AMBIENT BAIL: climateCond=null"); return true; }
 
                 var tempField = climateCond.GetType().GetField("Temperature",
                     BindingFlags.Public | BindingFlags.Instance);
-                if (tempField == null) return true;
+                if (tempField == null) { if (_ambientDiagTick % _ambientDiagLogInterval == 1) SoundPhysicsAdaptedModSystem.DebugLog("[Thunder] AMBIENT BAIL: Temperature field not found"); return true; }
                 float temperature = Convert.ToSingle(tempField.GetValue(climateCond));
 
                 // Read lightningMinTemp from weather data
                 var minTempField = weatherData.GetType().GetField("lightningMinTemp",
                     BindingFlags.Public | BindingFlags.Instance);
-                if (minTempField == null) return true;
+                if (minTempField == null) { if (_ambientDiagTick % _ambientDiagLogInterval == 1) SoundPhysicsAdaptedModSystem.DebugLog("[Thunder] AMBIENT BAIL: lightningMinTemp field not found"); return true; }
                 float lightningMinTemp = Convert.ToSingle(minTempField.GetValue(weatherData));
 
                 // Too cold for lightning — skip both us and VS
-                if (temperature < lightningMinTemp) return false;
+                if (temperature < lightningMinTemp)
+                {
+                    if (_ambientDiagTick % _ambientDiagLogInterval == 1)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[Thunder] AMBIENT SKIP: temp={temperature:F1} < minTemp={lightningMinTemp:F1}");
+                    return false;
+                }
 
                 // Read lightning rates
                 var distRateField = weatherData.GetType().GetField("distantLightningRate",
                     BindingFlags.Public | BindingFlags.Instance);
                 var nearRateField = weatherData.GetType().GetField("nearLightningRate",
                     BindingFlags.Public | BindingFlags.Instance);
-                if (distRateField == null || nearRateField == null) return true;
+                if (distRateField == null || nearRateField == null) { if (_ambientDiagTick % _ambientDiagLogInterval == 1) SoundPhysicsAdaptedModSystem.DebugLog("[Thunder] AMBIENT BAIL: rate fields not found"); return true; }
 
                 float distantRate = Convert.ToSingle(distRateField.GetValue(weatherData));
                 float nearRate = Convert.ToSingle(nearRateField.GetValue(weatherData));
@@ -344,6 +363,10 @@ namespace soundphysicsadapted.Patches
                 var rainOverlayField = climateCond.GetType().GetField("RainCloudOverlay",
                     BindingFlags.Public | BindingFlags.Instance);
                 float rainOverlay = rainOverlayField != null ? Convert.ToSingle(rainOverlayField.GetValue(climateCond)) : 1f;
+
+                // Diagnostic: log rates periodically so we can see if rolls have any chance
+                if (_ambientDiagTick % _ambientDiagLogInterval == 1)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[Thunder] AMBIENT TICK: temp={temperature:F1} minTemp={lightningMinTemp:F1} distRate={distantRate:F4} nearRate={nearRate:F4} rainOverlay={rainOverlay:F2}");
 
                 // Get player ear position + enclosure metrics
                 var player = capi.World.Player?.Entity;
@@ -536,7 +559,7 @@ namespace soundphysicsadapted.Patches
                 Vec3d earPos = player.Pos.XYZ.Add(player.LocalEyePos);
                 float distance = (float)earPos.DistanceTo(boltPos);
 
-                if (distance >= 320) return; // Match vanilla bolt sound cutoff
+                if (distance >= 500) return; // Extended from vanilla 320m — thunder carries further
 
                 float skyCoverage = _weatherManager.SkyCoverage;
                 float occlusionFactor = _weatherManager.OcclusionFactor;
