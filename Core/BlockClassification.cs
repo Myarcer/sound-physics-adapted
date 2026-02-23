@@ -27,9 +27,9 @@ namespace soundphysicsadapted
         // 0 = not cached, 1 = should treat as full cube, 2 = should NOT treat as full cube
         private static readonly byte[] treatAsFullCubeCache = new byte[BLOCK_CACHE_SIZE];
 
-        // Cache for HasAnySolidFace (slabs, stairs count as blocking)
-        // 0 = not cached, 1 = has solid face, 2 = no solid faces
-        private static readonly byte[] hasAnySolidFaceCache = new byte[BLOCK_CACHE_SIZE];
+        // Cache for HasMultipleSolidFaces (stairs count as blocking, slabs fall back to AABB)
+        // 0 = not cached, 1 = has solid faces, 2 = no solid faces
+        private static readonly byte[] hasMultipleSolidFacesCache = new byte[BLOCK_CACHE_SIZE];
 
         // Cache for IsWeatherInteractable (doors, trapdoors — state-changing blocks)
         // 0 = not cached, 1 = is interactable, 2 = is NOT interactable
@@ -42,7 +42,7 @@ namespace soundphysicsadapted
         {
             Array.Clear(blockOcclusionCached, 0, BLOCK_CACHE_SIZE);
             Array.Clear(treatAsFullCubeCache, 0, BLOCK_CACHE_SIZE);
-            Array.Clear(hasAnySolidFaceCache, 0, BLOCK_CACHE_SIZE);
+            Array.Clear(hasMultipleSolidFacesCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isWeatherInteractableCache, 0, BLOCK_CACHE_SIZE);
             cachedOcclusionPerSolidBlock = -1f;
         }
@@ -63,39 +63,42 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Check if a block has ANY solid face.
-        /// Catches slabs (solid top/bottom), stairs (solid back face), etc.
+        /// Check if a block has MULTIPLE solid faces (>= 2).
+        /// Catches stairs (solid back/bottom), etc.
+        /// Slabs (1 solid face) will fail this and fall back to accurate AABB raycasting.
         /// Excludes fences (no fully solid faces), flowers, grass.
-        /// Used by weather DDA where rain is blocked by any substantial surface,
+        /// Used by DDA where ray is blocked by any substantial surface,
         /// not just perfect cubes. Cached per block ID for performance.
         /// </summary>
-        public static bool HasAnySolidFace(Block block)
+        public static bool HasMultipleSolidFaces(Block block)
         {
             if (block == null || block.SideSolid == null) return false;
 
             int blockId = block.Id;
             if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
             {
-                byte cached = hasAnySolidFaceCache[blockId];
+                byte cached = hasMultipleSolidFacesCache[blockId];
                 if (cached != 0)
                     return cached == 1;
 
-                bool result = CheckAnySolidFace(block);
-                hasAnySolidFaceCache[blockId] = result ? (byte)1 : (byte)2;
+                bool result = CheckMultipleSolidFaces(block);
+                hasMultipleSolidFacesCache[blockId] = result ? (byte)1 : (byte)2;
                 return result;
             }
 
-            return CheckAnySolidFace(block);
+            return CheckMultipleSolidFaces(block);
         }
 
-        private static bool CheckAnySolidFace(Block block)
+        private static bool CheckMultipleSolidFaces(Block block)
         {
-            return block.SideSolid[BlockFacing.indexUP] ||
-                   block.SideSolid[BlockFacing.indexDOWN] ||
-                   block.SideSolid[BlockFacing.indexNORTH] ||
-                   block.SideSolid[BlockFacing.indexSOUTH] ||
-                   block.SideSolid[BlockFacing.indexEAST] ||
-                   block.SideSolid[BlockFacing.indexWEST];
+            int count = 0;
+            if (block.SideSolid[BlockFacing.indexUP]) count++;
+            if (block.SideSolid[BlockFacing.indexDOWN]) count++;
+            if (block.SideSolid[BlockFacing.indexNORTH]) count++;
+            if (block.SideSolid[BlockFacing.indexSOUTH]) count++;
+            if (block.SideSolid[BlockFacing.indexEAST]) count++;
+            if (block.SideSolid[BlockFacing.indexWEST]) count++;
+            return count >= 2;
         }
 
         /// <summary>
@@ -140,7 +143,7 @@ namespace soundphysicsadapted
         /// </summary>
         public static bool IsSolidForOcclusion(Block block)
         {
-            return IsFullCube(block) || HasAnySolidFace(block) || ShouldTreatAsFullCube(block);
+            return IsFullCube(block) || HasMultipleSolidFaces(block) || ShouldTreatAsFullCube(block);
         }
 
         /// <summary>
