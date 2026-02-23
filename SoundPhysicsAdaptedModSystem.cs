@@ -258,7 +258,6 @@ namespace soundphysicsadapted
         public override void StartClientSide(ICoreClientAPI api)
         {
             base.StartClientSide(api);
-            soundphysicsadapted.Core.ExecutionTracer.Initialize();
             clientApi = api;
             ClientChannel = api.Network.GetChannel("soundphysicsadapted")
                 .RegisterMessageType(typeof(ResonatorSyncPacket));  // Must register to send!
@@ -340,6 +339,13 @@ namespace soundphysicsadapted
             // Note: Universal mono downmix is handled by MonoDownmixManager +
             // LoadSoundPatch.StartPlayingAudioMonoPrefix (auto-detects positional stereo sounds)
             // and LoadSoundPatch.LoadSoundMonoPrefix (explicit requests from weather/resonator)
+            
+            // Phase X: Execution Trace
+            if (config.EnableExecutionTracer)
+            {
+                soundphysicsadapted.Core.ExecutionTracer.Initialize();
+                api.Logger.Notification("[SoundPhysicsAdapted] Execution tracer started. Writing to trace.csv");
+            }
 
             // Initialize AudioPhysicsSystem (optimization: time-slicing, sky probe, static cache)
             acousticsManager = new AudioPhysicsSystem();
@@ -576,6 +582,25 @@ namespace soundphysicsadapted
                             $"  Per-sound filters: {(AudioRenderer.IsInitialized ? "ENABLED" : "DISABLED")}\n" +
                             $"  {filterStats}"
                         );
+                    })
+                .EndSubCommand()
+                .BeginSubCommand("trace")
+                    .WithDescription("Toggle the execution performance tracer")
+                    .HandleWith((args) =>
+                    {
+                        config.EnableExecutionTracer = !config.EnableExecutionTracer;
+                        api.StoreModConfig(config, "soundphysicsadapted.json");
+                        
+                        if (config.EnableExecutionTracer)
+                        {
+                            soundphysicsadapted.Core.ExecutionTracer.Initialize();
+                        }
+                        else
+                        {
+                            soundphysicsadapted.Core.ExecutionTracer.Close();
+                        }
+                        
+                        return TextCommandResult.Success($"[SoundPhysicsAdapted] Execution Tracer: {(config.EnableExecutionTracer ? "ENABLED (recording)" : "DISABLED (stopped)")}");
                     })
                 .EndSubCommand()
                 // Phase 3: Reverb commands

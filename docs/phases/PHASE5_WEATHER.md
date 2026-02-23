@@ -699,11 +699,12 @@ Layer 2 MUST use mono sources for proper 3D spatialization. Options:
 - **Our prefix fully replaces this** — re-implements the random roll logic, routes through `ThunderAudioHandler`
 
 **System 2: Lightning Bolt Strike** (`LightningFlash.cs`):
-| Distance | Asset | Volume |
-|----------|-------|--------|
+| Distance | Asset | Volume Curve |
+|----------|-------|--------------|
 | < 150 blocks | `lightning-verynear.ogg` | `1 - dist/180` |
-| < 200 blocks | `lightning-near.ogg` | `1 - dist/250` |
-| < 320 blocks | `lightning-distant.ogg` | `1 - dist/500` |
+| 150-200 blocks | `lightning-near.ogg` | `1 - dist/250` |
+| 200-320 blocks | `lightning-distant.ogg` | `1 - dist/500` |
+| < 200 blocks | `lightning-nodistance.ogg` | `pow(max(0, 1-dist/200), 1.5)` (Delayed crack layer) |
 
 - Strike position known: `origin + points[last]`
 - ALL sounds played at `(0, 0, 0)` — volume-scaled only, no 3D positioning
@@ -718,12 +719,15 @@ ThunderAudioHandler
 │   ├── INDOOR + OPENINGS: PlayLayer1Rumble (LPF) + PlayLayer2AtBestOpening (one-shot)
 │   └── FULLY ENCLOSED: PlayLayer1Rumble only (heavy LPF)
 ├── PlayBoltThunder(boltPos, distance, openings, earPos, sky)
-│   ├── OUTDOOR: PlayOutdoorBoltThunder -> 3D positioned toward bolt
+│   ├── Matches vanilla thresholds for main asset: verynear (<150m), near (<200m), distant (<320m)
+│   ├── OUTDOOR: PlayOutdoorBoltThunder -> 3D positioned toward bolt (rolloff=0, linear vol curve)
 │   └── INDOOR + OPENINGS: PlayLayer2AtBestOpening (bolt-direction-biased scoring)
 ├── Layer 1: Shared EFX filter (GenFilter once), gainHF from CalculateThunderGainHF()
 │   └── Quadratic curve: gainHF = (1 - occl)^2, clamped to [minCutoff, 1.0]
 ├── Layer 2: Uses PositionalSourcePool.PlayOneShot() -> routed through AudioPhysicsSystem
 │   └── DDA occlusion + repositioning around corners + reverb applied automatically
+├── Crack Layer (Delayed): nodistance.ogg spawned via OnGameTick 50ms after bolt (<200m)
+│   └── Realistic HF atmospheric falloff curve: pow(1-dist/200, 1.5)
 └── ManagedThunderSound tracking: list with 15s max lifetime, tick-based cleanup
 
 Opening Scoring (Layer 2 placement):

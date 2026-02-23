@@ -270,7 +270,7 @@ namespace soundphysicsadapted
                     Leaviness, fadedWindSpeed, fadedHailIntensity);
 
                 // Phase 5C: tick thunder one-shot cleanup + indoor→outdoor L2 transition
-                thunderHandler?.OnGameTick(SkyCoverage);
+                thunderHandler?.OnGameTick(SkyCoverage, OcclusionFactor);
 
                 // Debug logging
                 if (config.DebugMode && config.DebugWeather)
