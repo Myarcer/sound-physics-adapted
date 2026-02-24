@@ -630,10 +630,11 @@ namespace soundphysicsadapted
                         clarityFilterFloor = Math.Max(clarityFilterFloor, 0.01f); // Avoid log(0)
                         float clarityOccFloor = -MathF.Log(clarityFilterFloor) / blockAbsorption;
 
-                        // Take the MORE FAVORABLE (lower) floor
+                        // Take the MORE FAVORABLE (lower) ceiling — caps max occlusion
+                        // SPR intent: prevent repositioned sounds from being TOO muffled
                         float occlusionFloor = Math.Min(sharedAirspaceFloor, clarityOccFloor);
                         
-                        if (blendedOcc < occlusionFloor)
+                        if (blendedOcc > occlusionFloor)
                         {
                             blendedOcc = occlusionFloor;
                         }
