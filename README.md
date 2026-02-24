@@ -27,7 +27,7 @@ Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the 
 
 | | |
 |---|---|
-| **Vintage Story** | 1.21.0+ | NOT 1.22.x YET
+| **Vintage Story** | 1.21.0+ NOT 1.22.x YET | 
 | **Required on server** | No |
 | **Required on client** | No (but only the client running it hears the effects) |
 | **CarryOn** | Compatible (dedicated patches) |
