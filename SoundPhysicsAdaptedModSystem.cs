@@ -8,6 +8,8 @@ using System.Reflection;
 using HarmonyLib;
 using Vintagestory.GameContent;
 using soundphysicsadapted.Patches;
+using Vintagestory.API.Common.Entities;
+using Vintagestory.API.Datastructures;
 
 namespace soundphysicsadapted
 {
@@ -236,6 +238,67 @@ namespace soundphysicsadapted
                     ServerChannel.SendPacket(packet, plr);
                 }
             }
+
+            // Sync the playback position to the carrier's Itemstack so that when the boombox
+            // is placed down, it starts from the correct position.
+            UpdateCarrierItemStackPosition(sender.Entity, packet.PlaybackPosition);
+        }
+
+        /// <summary>
+        /// Update the saved playback position on the carrier's Itemstack while they are carrying it.
+        /// </summary>
+        private void UpdateCarrierItemStackPosition(Entity carrier, float playbackPosition)
+        {
+            if (carrier == null || !carryOnModLoaded) return;
+            
+            try
+            {
+                var carriedAttr = carrier.WatchedAttributes.GetTreeAttribute("carryon:Carried");
+                if (carriedAttr == null) return;
+                
+                bool updated = false;
+
+                // Check Hands slot first
+                if (UpdateSlotPlaybackPosition(carrier, carriedAttr, "Hands", playbackPosition))
+                {
+                    updated = true;
+                }
+                // Check Back slot
+                else if (UpdateSlotPlaybackPosition(carrier, carriedAttr, "Back", playbackPosition))
+                {
+                    updated = true;
+                }
+
+                if (updated)
+                {
+                    // Force the attribute to sync
+                    carrier.WatchedAttributes.MarkPathDirty("carryon:Carried");
+                }
+            }
+            catch (Exception ex)
+            {
+                serverApi?.Logger.Warning($"[SoundPhysicsAdapted] Error updating carrier itemstack position: {ex.Message}");
+            }
+        }
+
+        private bool UpdateSlotPlaybackPosition(Entity carrier, ITreeAttribute carriedAttr, string slotName, float playbackPosition)
+        {
+            var slotAttr = carriedAttr.GetTreeAttribute(slotName);
+            if (slotAttr == null) return false;
+
+            var stack = slotAttr.GetItemstack("Stack");
+            if (stack == null) return false;
+
+            // Resolve the block to check if it's a resonator
+            stack.ResolveBlockOrItem(carrier.World);
+            if (stack.Block == null || !(stack.Block.Code?.Path?.Contains("resonator") == true)) return false;
+
+            // Found a resonator. Update its savedPlaybackPos in the block entity data.
+            stack.Attributes.SetFloat("savedPlaybackPos", playbackPosition);
+            
+            // Set the modified stack back to the tree
+            slotAttr.SetItemstack("Stack", stack);
+            return true;
         }
 
         private void OnServerHandshake(ServerHandshakePacket packet)
