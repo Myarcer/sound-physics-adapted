@@ -19,7 +19,20 @@ Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the 
 
 **Thunder** — Thunder cracks are placed directionally above the horizon with realistic distance falloff.
 
-**Block Integration** — Resonators, boomboxes, and music blocks are fully supported with proper audio lifecycle management and multiplayer sync.
+**Block Integration** — Resonators are fully supported with proper audio lifecycle management and optional CarryON Patch to make them behave like Boomboxes. (Mostly untested)
+
+---
+
+## Compatibility
+
+| | |
+|---|---|
+| **Vintage Story** | 1.21.0+ | NOT 1.22.x YET
+| **Required on server** | No |
+| **Required on client** | No (but only the client running it hears the effects) |
+| **CarryOn** | Compatible (dedicated patches) |
+| **RP Voice Chat** | Internal API Built, ready for integration (Waiting on RP Voice Chat Dev Team) |
+| **Other Mods** | Should be non issues, report here if needed. Tested with CaveSymphony / ForestSymphony |
 
 ---
 
@@ -73,18 +86,6 @@ The mod ZIP lands in `Releases/` and auto-deploys to your mods folder.
 
 ---
 
-## Compatibility
-
-| | |
-|---|---|
-| **Vintage Story** | 1.21.0+ |
-| **Required on server** | No |
-| **Required on client** | No (but only the client running it hears the effects) |
-| **CarryOn** | Compatible (dedicated patches) |
-| **RP Voice Chat** | Internal API Built, ready for integration (Waiting on RP Devs) |
-| **Other Mods** | Should be non issues, report here if needed. Tested with CaveSymphony / ForestSymphony |
-
----
 
 ## Mod API
 
