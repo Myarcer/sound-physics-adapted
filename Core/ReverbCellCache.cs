@@ -35,7 +35,7 @@ namespace soundphysicsadapted
     }
 
     /// <summary>
-    /// Cached reverb data for a 4x4x4 block cell.
+    /// Cached reverb data for a spatial cell.
     /// Contains the expensive raycast results that can be shared by
     /// sounds in the same spatial region.
     /// </summary>
@@ -73,21 +73,37 @@ namespace soundphysicsadapted
     }
 
     /// <summary>
-    /// Spatial reverb cache that groups sounds by 4x4x4 block cells.
-    /// 
-    /// Core insight: reverb is a property of the SPACE, not the sound source.
-    /// Two boars 2 blocks apart in the same roofed pen have essentially identical 
-    /// reverb environments. Per-sound occlusion and path direction differ, but the 
-    /// fibonacci ray bounce data is shared.
-    /// 
+    /// Spatial reverb deduplication cache using composite keys.
+    ///
+    /// Purpose: batch dedup — when 50 entities are in the same pen, they share
+    /// one reverb computation instead of 50. The cache should be IMPERCEPTIBLE:
+    /// no audible staleness, no lag on player movement or rotation.
+    ///
+    /// Design: composite key = (soundCell, playerCell).
+    /// - Player walks to new cell → automatic miss → fresh computation
+    /// - 50 boars in same room → all share one computation per player-cell
+    /// - No TTL needed for close/medium range (key change = instant invalidation)
+    /// - Only far sounds (>48 blocks) get a modest TTL since perspective barely changes
+    ///
     /// Wall-crossing protection: On cache hit, one DDA ray verifies the new sound
     /// is in the same acoustic zone as the cache creator. If a wall separates them,
     /// treat as cache miss (1 DDA vs ~280 DDA saved on valid hit).
     /// </summary>
     public class ReverbCellCache
     {
-        private const int CELL_SIZE = 4;
+        // Sound cell: groups sounds in same 4x4x4 region
+        private const int SOUND_CELL_SIZE = 4;
+        // Player cell: groups player positions — smaller = more responsive to movement
+        // 2 blocks = player takes ~1 step before cache invalidates
+        private const int PLAYER_CELL_SIZE = 2;
+        // Far player cell: for distant sounds, player perspective changes less
+        private const int FAR_PLAYER_CELL_SIZE = 8;
+        private const float FAR_DISTANCE = 48f;
+
         private const int MAX_CELLS = 512;
+
+        // Only far sounds (>48 blocks) get TTL — close/medium invalidate via key change
+        private const long FAR_TTL_MS = 5000;  // 5s for far sounds only
 
         private Dictionary<long, ReverbCellEntry> cells;
 
@@ -101,56 +117,73 @@ namespace soundphysicsadapted
             cells = new Dictionary<long, ReverbCellEntry>(64);
         }
 
-        // === Cell key computation ===
+        // === Composite key computation ===
 
         /// <summary>
-        /// Pack cell coordinates into a single long for dictionary key.
-        /// Same packing pattern as existing PackBlockPos.
+        /// Pack composite (soundCell + playerCell) into a single long.
+        /// Layout: [soundCellX:11][soundCellY:10][soundCellZ:11][playerCellX:11][playerCellY:10][playerCellZ:11]
+        /// Total: 64 bits. Each axis uses enough bits for VS world range.
         /// </summary>
-        private static long PackCellKey(int cellX, int cellY, int cellZ)
+        private static long PackCompositeKey(Vec3d soundPos, Vec3d playerPos, float distance)
         {
-            return ((long)(cellX & 0x1FFFFF) << 42) | ((long)(cellY & 0xFFFFF) << 21) | (long)(cellZ & 0x1FFFFF);
-        }
+            int sCellX = (int)Math.Floor(soundPos.X / SOUND_CELL_SIZE);
+            int sCellY = (int)Math.Floor(soundPos.Y / SOUND_CELL_SIZE);
+            int sCellZ = (int)Math.Floor(soundPos.Z / SOUND_CELL_SIZE);
 
-        private static long PackCellKey(Vec3d pos)
-        {
-            // Integer division gives cell coords (floor division for negative coords)
-            int cellX = (int)Math.Floor(pos.X / CELL_SIZE);
-            int cellY = (int)Math.Floor(pos.Y / CELL_SIZE);
-            int cellZ = (int)Math.Floor(pos.Z / CELL_SIZE);
-            return PackCellKey(cellX, cellY, cellZ);
-        }
+            // Far sounds use larger player cells (less sensitive to small movements)
+            int pCellSize = distance > FAR_DISTANCE ? FAR_PLAYER_CELL_SIZE : PLAYER_CELL_SIZE;
+            int pCellX = (int)Math.Floor(playerPos.X / pCellSize);
+            int pCellY = (int)Math.Floor(playerPos.Y / pCellSize);
+            int pCellZ = (int)Math.Floor(playerPos.Z / pCellSize);
 
-        private static long PackCellKey(double x, double y, double z)
-        {
-            int cellX = (int)Math.Floor(x / CELL_SIZE);
-            int cellY = (int)Math.Floor(y / CELL_SIZE);
-            int cellZ = (int)Math.Floor(z / CELL_SIZE);
-            return PackCellKey(cellX, cellY, cellZ);
+            // Pack: sound cells in upper 32 bits, player cells in lower 32 bits
+            // Each cell coord gets 11/10/11 bits (same as original PackCellKey)
+            long soundPart = ((long)(sCellX & 0x7FF) << 21) | ((long)(sCellY & 0x3FF) << 11) | (long)(sCellZ & 0x7FF);
+            long playerPart = ((long)(pCellX & 0x7FF) << 21) | ((long)(pCellY & 0x3FF) << 11) | (long)(pCellZ & 0x7FF);
+
+            return (soundPart << 32) | (playerPart & 0xFFFFFFFFL);
         }
 
         /// <summary>
-        /// Distance-based TTL for cache entries.
-        /// Close cells expire fast (player moves, perspective changes).
-        /// Far cells persist longer (reverb barely changes at distance).
+        /// Pack sound-cell-only key for block invalidation (invalidate all player perspectives).
+        /// Returns cell coords for iteration-based invalidation.
         /// </summary>
-        private static long GetCellTTL(float distanceToPlayer)
+        private static (int cellX, int cellY, int cellZ) GetSoundCellCoords(double x, double y, double z)
         {
-            if (distanceToPlayer < 16f) return 1000;   // 1s
-            if (distanceToPlayer < 48f) return 5000;   // 5s
-            return 20000;                               // 20s
+            return (
+                (int)Math.Floor(x / SOUND_CELL_SIZE),
+                (int)Math.Floor(y / SOUND_CELL_SIZE),
+                (int)Math.Floor(z / SOUND_CELL_SIZE)
+            );
+        }
+
+        /// <summary>
+        /// Extract sound cell coords from a composite key (upper 32 bits).
+        /// </summary>
+        private static (int cellX, int cellY, int cellZ) ExtractSoundCell(long compositeKey)
+        {
+            long soundPart = (compositeKey >> 32) & 0xFFFFFFFFL;
+            // Sign-extend 11-bit values
+            int cellX = (int)((soundPart >> 21) & 0x7FF);
+            if (cellX >= 0x400) cellX -= 0x800; // sign extend
+            int cellY = (int)((soundPart >> 11) & 0x3FF);
+            if (cellY >= 0x200) cellY -= 0x400;
+            int cellZ = (int)(soundPart & 0x7FF);
+            if (cellZ >= 0x400) cellZ -= 0x800;
+            return (cellX, cellY, cellZ);
         }
 
         /// <summary>
         /// Try to get cached reverb for a sound position.
-        /// Returns null if: no entry, expired TTL, or wall between sound and cache creator.
+        /// Returns null if: no entry, expired (far sounds only), or wall between sound and cache creator.
         /// Sets canStore=true when caller should cache its result (no existing entry),
         /// canStore=false when an entry exists but is acoustically separated (wall between).
         /// </summary>
         public ReverbCellEntry TryGetCell(Vec3d soundPos, Vec3d playerPos,
             long currentTimeMs, IBlockAccessor blockAccessor, out bool canStore)
         {
-            long key = PackCellKey(soundPos);
+            float distance = (float)soundPos.DistanceTo(playerPos);
+            long key = PackCompositeKey(soundPos, playerPos, distance);
 
             if (!cells.TryGetValue(key, out var entry))
             {
@@ -159,36 +192,16 @@ namespace soundphysicsadapted
                 return null;
             }
 
-            // TTL check
-            float cellCenterX = (float)(Math.Floor(soundPos.X / CELL_SIZE) * CELL_SIZE + CELL_SIZE * 0.5);
-            float cellCenterY = (float)(Math.Floor(soundPos.Y / CELL_SIZE) * CELL_SIZE + CELL_SIZE * 0.5);
-            float cellCenterZ = (float)(Math.Floor(soundPos.Z / CELL_SIZE) * CELL_SIZE + CELL_SIZE * 0.5);
-            float distToPlayer = (float)Math.Sqrt(
-                (cellCenterX - playerPos.X) * (cellCenterX - playerPos.X) +
-                (cellCenterY - playerPos.Y) * (cellCenterY - playerPos.Y) +
-                (cellCenterZ - playerPos.Z) * (cellCenterZ - playerPos.Z));
-
-            long ttl = GetCellTTL(distToPlayer);
-            if (currentTimeMs - entry.CreatedTimeMs > ttl)
+            // TTL check — only for far sounds. Close/medium invalidate via key change.
+            if (distance > FAR_DISTANCE)
             {
-                // Expired - remove and allow new storage
-                cells.Remove(key);
-                canStore = true;
-                totalMisses++;
-                return null;
-            }
-
-            // Player movement check - if player moved significantly, reverb perspective changed
-            double playerMoved = Math.Sqrt(
-                (playerPos.X - entry.PlayerPosX) * (playerPos.X - entry.PlayerPosX) +
-                (playerPos.Y - entry.PlayerPosY) * (playerPos.Y - entry.PlayerPosY) +
-                (playerPos.Z - entry.PlayerPosZ) * (playerPos.Z - entry.PlayerPosZ));
-            if (playerMoved > 4.0)
-            {
-                cells.Remove(key);
-                canStore = true;
-                totalMisses++;
-                return null;
+                if (currentTimeMs - entry.CreatedTimeMs > FAR_TTL_MS)
+                {
+                    cells.Remove(key);
+                    canStore = true;
+                    totalMisses++;
+                    return null;
+                }
             }
 
             // ACOUSTIC ZONE CHECK: verify no wall between this sound and cache creator.
@@ -199,7 +212,6 @@ namespace soundphysicsadapted
             {
                 // Wall between them - different acoustic zone.
                 // Return null but do NOT evict the existing entry.
-                // The "wrong side" sound computes independently (correct behavior).
                 canStore = false;
                 wallMisses++;
                 totalMisses++;
@@ -216,16 +228,15 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Store computed reverb data for a cell.
-        /// Only stores if no existing entry for this cell key.
-        /// "Wrong side" sounds (failed acoustic zone check) compute independently
-        /// but do NOT overwrite valid entries from the dominant acoustic zone.
+        /// Only stores if no existing entry for this composite key.
         /// </summary>
         public void StoreCellIfEmpty(Vec3d soundPos, Vec3d playerPos, long currentTimeMs,
             ReverbResult reverb, BouncePoint[] bounces, int bounceCount,
             OpeningData[] openings, int openingCount, float sharedAirspaceRatio,
             float directOcclusion, bool hasDirectAirspace)
         {
-            long key = PackCellKey(soundPos);
+            float distance = (float)soundPos.DistanceTo(playerPos);
+            long key = PackCompositeKey(soundPos, playerPos, distance);
 
             // Only store if no existing entry (don't overwrite valid entries)
             if (cells.ContainsKey(key)) return;
@@ -261,8 +272,12 @@ namespace soundphysicsadapted
 
             cells[key] = entry;
 
+            int sCellX = (int)Math.Floor(soundPos.X / SOUND_CELL_SIZE);
+            int sCellY = (int)Math.Floor(soundPos.Y / SOUND_CELL_SIZE);
+            int sCellZ = (int)Math.Floor(soundPos.Z / SOUND_CELL_SIZE);
+            string distLabel = distance > FAR_DISTANCE ? "far" : "near";
             SoundPhysicsAdaptedModSystem.DebugLog(
-                $"[CELL-CACHE] STORE cell=({(int)Math.Floor(soundPos.X / CELL_SIZE)},{(int)Math.Floor(soundPos.Y / CELL_SIZE)},{(int)Math.Floor(soundPos.Z / CELL_SIZE)}) bounces={bounceCount} openings={openingCount} ttl={GetCellTTL((float)playerPos.DistanceTo(soundPos))}ms");
+                $"[CELL-CACHE] STORE cell=({sCellX},{sCellY},{sCellZ}) bounces={bounceCount} openings={openingCount} dist={distance:F0} ({distLabel})");
 
             // LRU check
             if (cells.Count > MAX_CELLS)
@@ -272,48 +287,57 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Invalidate cell containing this block position + adjacent cells.
+        /// Invalidate cells containing this block position + adjacent cells.
         /// Called on block change events.
+        /// With composite keys, we must iterate and match on sound-cell portion.
         /// </summary>
         public void InvalidateCellAt(int blockX, int blockY, int blockZ)
         {
-            // Invalidate the cell containing this block
-            long key = PackCellKey((double)blockX, (double)blockY, (double)blockZ);
-            if (cells.Remove(key))
-            {
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"[CELL-CACHE] INVALIDATE cell=({blockX / CELL_SIZE},{blockY / CELL_SIZE},{blockZ / CELL_SIZE}) reason=block_change");
-            }
+            var (targetCellX, targetCellY, targetCellZ) = GetSoundCellCoords(blockX, blockY, blockZ);
 
-            // Also invalidate adjacent cells (block change at cell boundary affects neighbor's reverb)
-            int cellX = (int)Math.Floor((double)blockX / CELL_SIZE);
-            int cellY = (int)Math.Floor((double)blockY / CELL_SIZE);
-            int cellZ = (int)Math.Floor((double)blockZ / CELL_SIZE);
+            // Collect adjacent cell coords to invalidate
+            var cellsToInvalidate = new HashSet<(int, int, int)>();
+            cellsToInvalidate.Add((targetCellX, targetCellY, targetCellZ));
 
             // Check if block is near cell boundary (within 1 block of edge)
-            int localX = blockX - cellX * CELL_SIZE;
-            int localY = blockY - cellY * CELL_SIZE;
-            int localZ = blockZ - cellZ * CELL_SIZE;
+            int localX = blockX - targetCellX * SOUND_CELL_SIZE;
+            int localY = blockY - targetCellY * SOUND_CELL_SIZE;
+            int localZ = blockZ - targetCellZ * SOUND_CELL_SIZE;
 
-            if (localX == 0) cells.Remove(PackCellKey(cellX - 1, cellY, cellZ));
-            if (localX == CELL_SIZE - 1) cells.Remove(PackCellKey(cellX + 1, cellY, cellZ));
-            if (localY == 0) cells.Remove(PackCellKey(cellX, cellY - 1, cellZ));
-            if (localY == CELL_SIZE - 1) cells.Remove(PackCellKey(cellX, cellY + 1, cellZ));
-            if (localZ == 0) cells.Remove(PackCellKey(cellX, cellY, cellZ - 1));
-            if (localZ == CELL_SIZE - 1) cells.Remove(PackCellKey(cellX, cellY, cellZ + 1));
+            if (localX == 0) cellsToInvalidate.Add((targetCellX - 1, targetCellY, targetCellZ));
+            if (localX == SOUND_CELL_SIZE - 1) cellsToInvalidate.Add((targetCellX + 1, targetCellY, targetCellZ));
+            if (localY == 0) cellsToInvalidate.Add((targetCellX, targetCellY - 1, targetCellZ));
+            if (localY == SOUND_CELL_SIZE - 1) cellsToInvalidate.Add((targetCellX, targetCellY + 1, targetCellZ));
+            if (localZ == 0) cellsToInvalidate.Add((targetCellX, targetCellY, targetCellZ - 1));
+            if (localZ == SOUND_CELL_SIZE - 1) cellsToInvalidate.Add((targetCellX, targetCellY, targetCellZ + 1));
+
+            // Iterate all entries and remove those whose sound cell matches any target
+            List<long> toRemove = null;
+            foreach (var kvp in cells)
+            {
+                var (cx, cy, cz) = ExtractSoundCell(kvp.Key);
+                if (cellsToInvalidate.Contains((cx, cy, cz)))
+                {
+                    if (toRemove == null) toRemove = new List<long>();
+                    toRemove.Add(kvp.Key);
+                }
+            }
+            if (toRemove != null)
+            {
+                foreach (var key in toRemove)
+                    cells.Remove(key);
+                SoundPhysicsAdaptedModSystem.DebugLog(
+                    $"[CELL-CACHE] INVALIDATE {toRemove.Count} entries near ({targetCellX},{targetCellY},{targetCellZ}) reason=block_change");
+            }
         }
 
         /// <summary>
-        /// Invalidate all cells within range of player (movement invalidation).
+        /// Invalidate all cells within range of player.
+        /// With composite keys, this is rarely needed — player movement
+        /// naturally creates new keys. Kept for explicit invalidation (e.g. teleport).
         /// </summary>
         public void InvalidateNearPlayer(Vec3d playerPos, float radius)
         {
-            int cellRadius = (int)Math.Ceiling(radius / CELL_SIZE);
-            int centerCellX = (int)Math.Floor(playerPos.X / CELL_SIZE);
-            int centerCellY = (int)Math.Floor(playerPos.Y / CELL_SIZE);
-            int centerCellZ = (int)Math.Floor(playerPos.Z / CELL_SIZE);
-
-            // Remove cells within radius
             List<long> toRemove = null;
             foreach (var kvp in cells)
             {
@@ -346,14 +370,13 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// LRU cleanup - remove oldest cells when over MAX_CELLS.
-        /// Called periodically (every ~5 seconds) or when exceeding max.
+        /// LRU cleanup - remove oldest/expired cells when over MAX_CELLS.
         /// </summary>
         public void Cleanup(long currentTimeMs)
         {
             if (cells.Count <= MAX_CELLS / 2) return;
 
-            // Remove expired entries first
+            // Remove expired far entries first
             List<long> expired = null;
             foreach (var kvp in cells)
             {
@@ -362,8 +385,9 @@ namespace soundphysicsadapted
                     (entry.CreatorPosX - entry.PlayerPosX) * (entry.CreatorPosX - entry.PlayerPosX) +
                     (entry.CreatorPosY - entry.PlayerPosY) * (entry.CreatorPosY - entry.PlayerPosY) +
                     (entry.CreatorPosZ - entry.PlayerPosZ) * (entry.CreatorPosZ - entry.PlayerPosZ));
-                long ttl = GetCellTTL(dist);
-                if (currentTimeMs - entry.CreatedTimeMs > ttl)
+
+                // Far entries expire by TTL; close/medium entries only expire by LRU
+                if (dist > FAR_DISTANCE && currentTimeMs - entry.CreatedTimeMs > FAR_TTL_MS)
                 {
                     if (expired == null) expired = new List<long>();
                     expired.Add(kvp.Key);
@@ -375,12 +399,11 @@ namespace soundphysicsadapted
                     cells.Remove(key);
             }
 
-            // If still over limit, collect all entries sorted by LRU and evict down to half capacity
+            // If still over limit, LRU evict down to half capacity
             if (cells.Count > MAX_CELLS)
             {
                 int target = MAX_CELLS / 2;
                 int toRemove = cells.Count - target;
-                // Single-pass: collect all keys with their LRU time, sort, remove oldest
                 var lruList = new List<(long key, long lastUsed)>(cells.Count);
                 foreach (var kvp in cells)
                     lruList.Add((kvp.Key, kvp.Value.LastUsedTimeMs));
@@ -398,21 +421,7 @@ namespace soundphysicsadapted
             long total = totalHits + totalMisses;
             float hitRate = total > 0 ? (float)totalHits / total * 100f : 0f;
 
-            int closeCount = 0, medCount = 0, farCount = 0;
-            foreach (var kvp in cells)
-            {
-                var e = kvp.Value;
-                float dist = (float)Math.Sqrt(
-                    (e.CreatorPosX - e.PlayerPosX) * (e.CreatorPosX - e.PlayerPosX) +
-                    (e.CreatorPosY - e.PlayerPosY) * (e.CreatorPosY - e.PlayerPosY) +
-                    (e.CreatorPosZ - e.PlayerPosZ) * (e.CreatorPosZ - e.PlayerPosZ));
-                if (dist < 16f) closeCount++;
-                else if (dist < 48f) medCount++;
-                else farCount++;
-            }
-
-            return $"CellCache: {cells.Count} cells, hits={totalHits} misses={totalMisses} wallMiss={wallMisses} hitRate={hitRate:F1}%\n" +
-                   $"  Close(1s): {closeCount} cells  Medium(5s): {medCount} cells  Far(20s): {farCount} cells";
+            return $"CellCache: {cells.Count} cells, hits={totalHits} misses={totalMisses} wallMiss={wallMisses} hitRate={hitRate:F1}%";
         }
 
         public int CellCount => cells.Count;

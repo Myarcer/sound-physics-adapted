@@ -938,8 +938,32 @@ namespace soundphysicsadapted
             var loadedSound = __instance as ILoadedSound;
             if (loadedSound != null)
             {
-                // Get our configured pitch offset (only non-zero if underwater)
-                float ourPitch = SoundPhysicsAdaptedModSystem.GetUnderwaterPitchOffset();
+                // Check if this is a music sound - music needs special handling
+                bool isMusic = false;
+                try
+                {
+                    var soundType = loadedSound.Params?.SoundType;
+                    isMusic = soundType == EnumSoundType.Music ||
+                              soundType == EnumSoundType.MusicGlitchunaffected;
+                }
+                catch { }
+
+                float ourPitch;
+                if (isMusic && !config.UnderwaterPitchAffectsMusic)
+                {
+                    // Music with pitch disabled: always apply 0 to preserve base pitch.
+                    // Without this check, a race condition occurs on water exit:
+                    // VS calls SetPitchOffset(-0.15) on music before our tick updates
+                    // isPlayerUnderwater to false — we'd apply -0.15 to music here,
+                    // then RecalculateAllUnderwater skips the reset (UnderwaterPitchAffectsMusic=false),
+                    // leaving music permanently pitched down.
+                    ourPitch = 0f;
+                }
+                else
+                {
+                    // Get our configured pitch offset (only non-zero if underwater)
+                    ourPitch = SoundPhysicsAdaptedModSystem.GetUnderwaterPitchOffset();
+                }
 
                 // Apply directly via OpenAL (bypass the blocked method)
                 AudioRenderer.ApplyPitchOffset(loadedSound, ourPitch);

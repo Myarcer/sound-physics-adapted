@@ -55,6 +55,11 @@ namespace soundphysicsadapted
             public float SmoothedG0, SmoothedG1, SmoothedG2, SmoothedG3;
             public bool HasSmoothedReverb;      // Whether reverb smoothing has been seeded
 
+            // Acoustic boundary detection: when shared airspace is low, we're near an
+            // acoustic edge (corner, doorway). These sounds need faster updates + convergence.
+            public float LastSharedAirspaceRatio;  // 0 = fully occluded, 1 = full airspace
+            public bool NearAcousticBoundary;      // true = treat as close-range priority
+
             // Throttle fade state
             // ThrottleFade: 1.0 = fully active, 0.0 = fully throttled/silent.
             // Steps toward 1 when unthrottled, toward 0 when throttled, using elapsed time.
@@ -252,7 +257,12 @@ namespace soundphysicsadapted
                 _soundDistances[sound] = distance;
 
                 // --- Interval gate: skip if not due yet ---
-                long interval = distance <= CLOSE_DISTANCE ? CLOSE_INTERVAL_MS
+                // Sounds near acoustic boundaries (low shared airspace = near a corner/doorway)
+                // get promoted to CLOSE_INTERVAL regardless of distance. The boundary between
+                // "muffled behind wall" and "clear through opening" is a few blocks wide —
+                // any player movement there flips the sound dramatically. Must be responsive.
+                bool atBoundary = cache.NearAcousticBoundary;
+                long interval = (atBoundary || distance <= CLOSE_DISTANCE) ? CLOSE_INTERVAL_MS
                               : distance <= NEAR_DISTANCE  ? NEAR_INTERVAL_MS
                               : FAR_INTERVAL_MS;
 
@@ -469,14 +479,12 @@ namespace soundphysicsadapted
                 SoundPathResult? pathResult;
 
                 // === CELL CACHE CHECK ===
-                // Skip cache for close sounds — reverb changes rapidly with small
-                // player movements at short range, causing audible jumps when cache
-                // expires and recomputes. Close sounds are cheap (typically 1-2) and
-                // benefit most from per-tick fresh computation.
-                double distToSound = soundPos.DistanceTo(playerPos);
-                bool closeEnoughToSkipCache = distToSound < 10.0;
-
-                if (reverbCellCache != null && config.EnableReverbCellCache && !closeEnoughToSkipCache)
+                // Composite key = (soundCell, playerCell) — cache auto-invalidates
+                // when player moves to a new cell. No skip threshold needed.
+                // Close sounds use 2-block player cells (responsive), far sounds use
+                // 8-block player cells (stable). Cache is purely for deduplication:
+                // 50 entities in same pen share one reverb computation.
+                if (reverbCellCache != null && config.EnableReverbCellCache)
                 {
                     var cellEntry = reverbCellCache.TryGetCell(soundPos, playerPos, currentTimeMs, blockAccessor, out bool canStore);
                     if (cellEntry != null)
@@ -542,10 +550,21 @@ namespace soundphysicsadapted
 
                 if (validatedSourceId.HasValue && validatedSourceId.Value > 0 && ReverbEffects.IsInitialized && !isWindSound)
                 {
-                    // EMA smooth reverb gains to prevent abrupt jumps when crossing acoustic boundaries.
-                    // Alpha 0.35 = ~3 ticks to converge to a step change (smooth enough to avoid pops,
-                    // fast enough to still feel responsive during movement).
-                    const float reverbAlpha = 0.35f;
+                    // ADAPTIVE EMA smooth reverb gains — same logic as occlusion smoothing.
+                    // Large reverb changes (crossing acoustic boundary) converge fast.
+                    // Small changes (probe jitter) smooth heavily.
+                    float maxGainDelta = 0f;
+                    if (cache.HasSmoothedReverb)
+                    {
+                        maxGainDelta = Math.Max(maxGainDelta, Math.Abs(reverbResult.SendGain0 - cache.SmoothedG0));
+                        maxGainDelta = Math.Max(maxGainDelta, Math.Abs(reverbResult.SendGain1 - cache.SmoothedG1));
+                        maxGainDelta = Math.Max(maxGainDelta, Math.Abs(reverbResult.SendGain2 - cache.SmoothedG2));
+                        maxGainDelta = Math.Max(maxGainDelta, Math.Abs(reverbResult.SendGain3 - cache.SmoothedG3));
+                    }
+                    float reverbAlpha = maxGainDelta > 0.3f ? 0.75f   // big reverb change: fast
+                                      : maxGainDelta > 0.1f ? 0.50f   // medium: responsive
+                                      : 0.35f;                        // jitter: smooth
+
                     if (!cache.HasSmoothedReverb)
                     {
                         cache.SmoothedG0 = reverbResult.SendGain0;
@@ -585,6 +604,8 @@ namespace soundphysicsadapted
                     // This prevents abrupt jumps when transitioning back to occlusion.
                     cache.SmoothedBlendedOcc = occlusion;
                     cache.HasSmoothedOcc = true;
+                    // Clear LOS with low occlusion near 1.0 threshold = near acoustic boundary
+                    cache.NearAcousticBoundary = occlusion > 0.5f;
 
                     if (updatedThisTick == 0)
                     {
@@ -601,7 +622,8 @@ namespace soundphysicsadapted
                     if (applied)
                     {
                         float blendedOcc = (float)pathResult.Value.BlendedOcclusion;
-                        
+                        float airspaceRatio = pathResult.Value.SharedAirspaceRatio;
+
                         // PATH CLARITY: Use open path ratio, not sharedAirspaceRatio.
                         // sharedAirspaceRatio is from sound-source fibonacci rays (wrong for this).
                         // Open path ratio comes from actual probe rays that found clear paths.
@@ -617,7 +639,7 @@ namespace soundphysicsadapted
                         //    Higher clarity → lower floor → allows more recovery.
 
                         // Shared airspace floor (SPR formula)
-                        float sharedAirspaceFilterFloor = MathF.Sqrt(pathResult.Value.SharedAirspaceRatio) * 0.2f;
+                        float sharedAirspaceFilterFloor = MathF.Sqrt(airspaceRatio) * 0.2f;
                         sharedAirspaceFilterFloor = Math.Max(sharedAirspaceFilterFloor, 0.01f); // Avoid log(0)
                         float blockAbsorption = SoundPhysicsAdaptedModSystem.Config?.BlockAbsorption ?? 1.0f;
                         float sharedAirspaceFloor = -MathF.Log(sharedAirspaceFilterFloor) / blockAbsorption;
@@ -630,19 +652,38 @@ namespace soundphysicsadapted
                         clarityFilterFloor = Math.Max(clarityFilterFloor, 0.01f); // Avoid log(0)
                         float clarityOccFloor = -MathF.Log(clarityFilterFloor) / blockAbsorption;
 
-                        // Take the MORE FAVORABLE (lower) floor
+                        // Take the MORE FAVORABLE (lower) ceiling — caps max occlusion
+                        // SPR intent: prevent repositioned sounds from being TOO muffled
                         float occlusionFloor = Math.Min(sharedAirspaceFloor, clarityOccFloor);
-                        
-                        if (blendedOcc < occlusionFloor)
+
+                        if (blendedOcc > occlusionFloor)
                         {
                             blendedOcc = occlusionFloor;
                         }
 
-                        // Temporal smoothing to dampen probe ray jitter
-                        const float OCC_SMOOTH_FACTOR = 0.35f;
+                        // ACOUSTIC BOUNDARY DETECTION:
+                        // Track shared airspace to detect when player is near the edge between
+                        // "fully occluded" and "shared airspace". Low airspace (0.05-0.5) means
+                        // we're right at a corner/doorway — any step changes everything.
+                        // High airspace (>0.5) = well into shared space, stable.
+                        // Zero airspace = fully behind wall, also stable (until player moves).
+                        // The boundary zone is where it matters most.
+                        cache.LastSharedAirspaceRatio = airspaceRatio;
+                        cache.NearAcousticBoundary = (airspaceRatio > 0.02f && airspaceRatio < 0.5f)
+                            || (airspaceRatio < 0.02f && cache.SmoothedBlendedOcc < 3.0f);
+
+                        // ADAPTIVE EMA SMOOTHING:
+                        // Large changes = crossing acoustic boundary → converge fast (nearly instant)
+                        // Small changes = probe ray jitter → smooth heavily (prevent flutter)
+                        float delta = cache.HasSmoothedOcc ? Math.Abs(blendedOcc - cache.SmoothedBlendedOcc) : 0f;
+                        float occSmoothFactor = delta > 3.0f ? 0.85f   // huge jump (wall→clear): near-instant
+                                              : delta > 1.5f ? 0.65f   // big change (rounding corner): fast
+                                              : delta > 0.5f ? 0.45f   // medium change: responsive
+                                              : 0.35f;                 // small jitter: smooth as before
+
                         if (cache.HasSmoothedOcc)
                         {
-                            cache.SmoothedBlendedOcc += (blendedOcc - cache.SmoothedBlendedOcc) * OCC_SMOOTH_FACTOR;
+                            cache.SmoothedBlendedOcc += (blendedOcc - cache.SmoothedBlendedOcc) * occSmoothFactor;
                         }
                         else
                         {
@@ -657,7 +698,7 @@ namespace soundphysicsadapted
                         finalFilter = pathFilter;
 
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[4B-LPF] dOcc={occlusion:F2} bOcc={blendedOcc:F2} smooth={smoothedOcc:F2} filt={pathFilter:F3} clarity={pathClarity:P0} airFloor={sharedAirspaceFloor:F2}");
+                            $"[4B-LPF] dOcc={occlusion:F2} bOcc={blendedOcc:F2} smooth={smoothedOcc:F2} filt={pathFilter:F3} clarity={pathClarity:P0} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
                     }
 
                     if (updatedThisTick == 0 && pathResult.Value.RepositionOffset > 0.1)
