@@ -238,7 +238,16 @@ namespace soundphysicsadapted
                         // Baskets and traps - small open containers on the ground
                         { "game:basket*", 0.0f },
                         // Shelves - open furniture (not bookshelves which are denser)
-                        { "game:shelf-*", 0.0f }
+                        { "game:shelf-*", 0.0f },
+                        // Firepits
+                        { "game:firepit-*", 0.0f },
+                        // Tool racks
+                        { "game:toolrack-*", 0.0f },
+                        // Ground storage (flat piles)
+                        { "game:groundstorage*", 0.0f },
+                        // Placed grass
+                        { "game:placeddrygrass-*", 0.0f },
+                        { "game:drygrass-*", 0.0f }
                     },
                     TreatAsFullCube = new List<string>
                     {
