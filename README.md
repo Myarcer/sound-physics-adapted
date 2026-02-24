@@ -7,7 +7,7 @@ Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the 
 
 ---
 
-## What It Does
+## Features?
 
 **Occlusion** — Sounds behind walls get muffled. Different materials block different amounts: stone walls muffle heavily, wooden doors let more through. Open and close a door and hear the difference immediately.
 
@@ -29,7 +29,7 @@ Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the 
 2. Drop it into your `VintagestoryData/Mods/` folder
 3. Launch the game
 
-Config generates automatically at `VintagestoryData/ModConfig/soundphysicsadapted.json`. Everything is tweakable from the in-game mod settings menu.
+Config generates automatically at `VintagestoryData/ModConfig/soundphysicsadapted.json`. Alot of tweaks for nerds. Will drop different performance config options in here later to drag n drop
 
 ---
 
@@ -42,9 +42,7 @@ git clone https://github.com/Myarcer/sound-physics-adapted.git
 cd sound-physics-adapted
 ```
 
-**Important Legal Note**: Due to copyright restrictions, the proprietary Vintage Story game engine (`VintagestoryLib.dll`) and official survival content (`VSSurvivalMod.dll`) cannot be distributed with this repository.
-
-You must copy these DLLs from your own game installation into the `lib/` folder:
+Copy these DLLs from your Vintage Story install into a `lib/` folder:
 - `VintagestoryAPI.dll`
 - `VintagestoryLib.dll`
 - `VSSurvivalMod.dll`
@@ -83,6 +81,8 @@ The mod ZIP lands in `Releases/` and auto-deploys to your mods folder.
 | **Required on server** | No |
 | **Required on client** | No (but only the client running it hears the effects) |
 | **CarryOn** | Compatible (dedicated patches) |
+| **RP Voice Chat** | Internal API Built, ready for integration (Waiting on RP Devs) |
+| **Other Mods** | Should be non issues, report here if needed. Tested with CaveSymphony / ForestSymphony |
 
 ---
 
@@ -120,8 +120,9 @@ Per-material occlusion values, JSON configuration, block-specific overrides.
 ### Phase 4: Shared Airspace & Sound Paths ✅
 Shared airspace detection, sound repositioning through doorways/openings.
 
-### Phase 5: Weather & Ambient ✅
+### Phase 5: Weather & Ambient - In Progress
 Positional weather audio, shelter detection, gradual attenuation, directional thunder.
+Currently Still in Development, i am not happy with the Positional Sources Detection and smoothing.
 
 ### Phase 6: Polish — In Progress
 Air absorption, performance optimization, debug visualization.
