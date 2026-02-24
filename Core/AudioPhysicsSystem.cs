@@ -469,14 +469,12 @@ namespace soundphysicsadapted
                 SoundPathResult? pathResult;
 
                 // === CELL CACHE CHECK ===
-                // Skip cache for close sounds — reverb changes rapidly with small
-                // player movements at short range, causing audible jumps when cache
-                // expires and recomputes. Close sounds are cheap (typically 1-2) and
-                // benefit most from per-tick fresh computation.
-                double distToSound = soundPos.DistanceTo(playerPos);
-                bool closeEnoughToSkipCache = distToSound < 10.0;
-
-                if (reverbCellCache != null && config.EnableReverbCellCache && !closeEnoughToSkipCache)
+                // Composite key = (soundCell, playerCell) — cache auto-invalidates
+                // when player moves to a new cell. No skip threshold needed.
+                // Close sounds use 2-block player cells (responsive), far sounds use
+                // 8-block player cells (stable). Cache is purely for deduplication:
+                // 50 entities in same pen share one reverb computation.
+                if (reverbCellCache != null && config.EnableReverbCellCache)
                 {
                     var cellEntry = reverbCellCache.TryGetCell(soundPos, playerPos, currentTimeMs, blockAccessor, out bool canStore);
                     if (cellEntry != null)
