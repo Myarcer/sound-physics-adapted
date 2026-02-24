@@ -236,22 +236,11 @@ namespace soundphysicsadapted
                     }
 
                     bool hasAirspace = pathOcclusion < 0.5f;
-                    float airspaceWeight;
                     if (hasAirspace)
-                    {
                         sharedAirspaceCount++;
-                        airspaceWeight = 1.0f;
-                    }
-                    else if (hasDirectAirspace)
-                    {
-                        airspaceWeight = 0.5f;
-                    }
-                    else
-                    {
-                        airspaceWeight = 0f;
-                    }
 
-                    if (airspaceWeight > 0f)
+                    // SPR-style: ALL bounces contribute energy (no airspace gating).
+                    // Reverb filtering through walls is handled by per-slot cutoff below.
                     {
                         float energyTowardsPlayer = 0.25f * (reflectivity * 0.75f + 0.25f);
                         // Slot selection is purely distance-based (reflectivity doesn't change speed of sound).
@@ -263,10 +252,10 @@ namespace soundphysicsadapted
                         float cross2 = 1f - Math.Clamp(Math.Abs(reflectionDelay - 2f), 0f, 1f);
                         float cross3 = Math.Clamp(reflectionDelay - 2f, 0f, 1f);
 
-                        sendGain0 += cross0 * energyTowardsPlayer * airspaceWeight * 6.4f * rcpTotalRays;
-                        sendGain1 += cross1 * energyTowardsPlayer * airspaceWeight * 12.8f * rcpTotalRays;
-                        sendGain2 += cross2 * energyTowardsPlayer * airspaceWeight * 12.8f * rcpTotalRays;
-                        sendGain3 += cross3 * energyTowardsPlayer * airspaceWeight * 12.8f * rcpTotalRays;
+                        sendGain0 += cross0 * energyTowardsPlayer * 6.4f * rcpTotalRays;
+                        sendGain1 += cross1 * energyTowardsPlayer * 12.8f * rcpTotalRays;
+                        sendGain2 += cross2 * energyTowardsPlayer * 12.8f * rcpTotalRays;
+                        sendGain3 += cross3 * energyTowardsPlayer * 12.8f * rcpTotalRays;
                     }
 
                     if (bounce < bounces - 1)
@@ -374,7 +363,25 @@ namespace soundphysicsadapted
                     $"direct={hasDirectAirspace} {pathInfo}");
             }
 
-            var reverbResult = new ReverbResult(sendGain0, sendGain1, sendGain2, sendGain3);
+            // SPR-style per-slot reverb cutoff: muffled reverb through walls instead of silence.
+            // sharedAirspace = how much of the reverb path is in open air vs behind walls.
+            // Higher weight → more open → cutoff approaches 1.0 (unfiltered).
+            // Lower weight → more occluded → cutoff approaches exp(-occ * absorption) (heavily filtered).
+            float sharedAirspace = sharedAirspaceCount * 64f * rcpTotalRays;
+            float weight0 = Math.Clamp(sharedAirspace / 20f, 0f, 1f);  // early reflections: need MORE airspace
+            float weight1 = Math.Clamp(sharedAirspace / 15f, 0f, 1f);
+            float weight2 = Math.Clamp(sharedAirspace / 10f, 0f, 1f);  // late reflections: saturate FASTER
+            float weight3 = Math.Clamp(sharedAirspace / 10f, 0f, 1f);
+
+            float blockAbsorption = config.BlockAbsorption;
+            float occludedCutoff = MathF.Exp(-directOcclusion * blockAbsorption);
+            float sendCutoff0 = occludedCutoff * (1f - weight0) + weight0;
+            float sendCutoff1 = occludedCutoff * (1f - weight1) + weight1;
+            float sendCutoff2 = occludedCutoff * (1f - weight2) + weight2;
+            float sendCutoff3 = occludedCutoff * (1f - weight3) + weight3;
+
+            var reverbResult = new ReverbResult(sendGain0, sendGain1, sendGain2, sendGain3,
+                                                sendCutoff0, sendCutoff1, sendCutoff2, sendCutoff3);
 
             // Output cached data
             bouncePoints = _cacheableBouncePoints;
