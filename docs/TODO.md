@@ -26,77 +26,14 @@
 - Stage 3 listener-centric propagation: 64 listener rays, 256+ cached bounce points
 - See IMPLEMENTATION_PLAN.md and PHASE4B_PROPAGATION_HANDOFF.md
 
-**Phase 5 (Weather Audio)**: IN PROGRESS - Suppress + Replace + LPF
-- ✅ **5A: Rain & Weather LPF Replacement** — COMPLETE (Jan 2025)
-  - Dual-metric enclosure: SkyCoverage (heightmap) + OcclusionFactor (multi-height DDA)
-  - Two-phase ground-first ray optimization with early exit
-  - WeatherAudioManager, RainAudioHandler, WeatherEnclosureCalculator all functional
-  - Harmony patches suppressing VS weather sounds
-  - VerifiedRainPosition list ready for 5B clustering
-- 🔄 **5B: Positional Weather Sources** — READY TO IMPLEMENT
-  - Prerequisites satisfied: VerifiedOpenings from calculator ready for clustering
-  - Implementation: Cluster openings → up to 4-6 positional sources at detected entries
-  - Shared data for rain/hail/wind positional sources
-  - Stereo-to-mono conversion needed for positional spatialization
-- ✅ **5C: Thunder Positioning** — IMPLEMENTED (Layer 1 rumble + Layer 2 at openings + outdoor 3D)
-- Reuses Phase 5B openings instead of Mode B sky search. See PHASE5_WEATHER.md
-
-### Upcoming Features (Phase 5B Extensions)
-
-#### Positional Wind Sources (Layer 2)
-**Priority**: HIGH — Architecture ready, same openings as rain proxy
-**Description**: Wind should use the same detected opening system as rain for Layer 2 positional sources.
-- Layer 1: Muffled wind bed (current implementation, occl-driven vol + LPF)
-- Layer 2: Positional wind sources at detected openings (same clusters as rain)
-- Wind enters through doors/holes/windows just like rain
-- Docs confirm: "Openings that let rain in almost always let wind in" (PHASE5_WEATHER.md)
-- Architecture already exists: `OpeningClusterer` + `OpeningTracker` + source pool in `RainAudioHandler`
-- Implementation: Add wind source pool alongside rain sources, same opening positions, different audio asset
-
-#### ~~Thunder/Rumble Two-Layer Opening System (Phase 5C Rethink)~~ ✅ DONE
-**Status**: IMPLEMENTED in Phase 5C. See `ThunderAudioHandler.cs`.
-The two-layer approach was adopted: Layer 1 muffled rumble (EFX LPF) + Layer 2 one-shots at openings (bolt-direction-biased scoring). Mode B sky search was dropped entirely.
-
-**Phase 6 (Polish)**: PLANNED
-**Phase 7 (Debug Viz)**: PLANNED
+**Phase 5 (Weather Audio)**: Rewrite this part here its outdated
 
 ---
 
 
 ## Active Issues
 
-## Positional Weather Issues
 
-### Cave Exit Detection
-- When exiting a cave, rain positions at the cave opening above the player don't spawn positional sources early enough
-- Root cause: heightmap sampling classifies columns where `playerY < rainHeight` as "covered" — but at cave exits, the rain impact surface IS above the player while sound CAN reach through the opening
-- These columns never become DDA candidates, so no positional sources spawn until the player physically walks out
-- Need: detect nearby "covered" columns that have clear DDA paths to the player (cave mouth scenario)
-- Affects: `WeatherEnclosureCalculator.cs` Step 1 heightmap sampling
-
-### DDA Range Increase
-- Current 15 DDA candidates with SCAN_RADIUS=12 only spawns sources ~3 blocks away
-- Works fine for walking through/near openings, but fails when opening is >3 blocks of airspace away
-- Example: standing in a room with a window 5 blocks away — no positional source spawns
-- Need: either increase DDA budget, extend scan radius, or add distance-based priority so farther exposed columns get checked
-- Must not break performance (~0.9ms per 100ms tick budget)
-- Affects: `WeatherEnclosureCalculator.cs` SCAN_RADIUS, MAX_DDA_CANDIDATES
-
-### Replace Structural DDA Check (4c) with Block Event Hooks
-- Current 4c structural integrity check uses DDA from member positions to stored player position
-- False-triggers on existing house walls when rounding corners, requiring a weight-zeroing workaround instead of direct removal
-- Replace with VS block placed/broken event hooks (`BlockChanged` or similar) that check if the changed block is AT or ABOVE a tracked opening's member positions
-- Block events give exact coordinates — no DDA needed, no false positives from wall geometry
-- Remove `CheckStructuralIntegrity()`, `LastVerifiedPlayerPos`, `STRUCTURAL_OCC_THRESHOLD`, and the DDA-to-player path entirely
-- Keeps 4b heightmap check as fast broad-phase, block events become precise narrow-phase
-
-### Other Potential Improvements (from revert analysis)
-- ExpiryFadeRate: separate faster fade for source eviction (~1s vs 3s)
-- Proximity fade scaling: gradual by cluster size instead of binary gate
-- Fixed Y position: sound source stays at rain impact Y, not player Y
-- Position stability: 1.5 block threshold to prevent micro-jitter
-- Competitive eviction: score-based slot eviction for louder sources
-- Angular sector clustering: prevent same-direction source waste
 
 ### Issue 19: Probe Ray Shared Airspace Contribution Asymmetry
 **Priority**: MEDIUM-HIGH

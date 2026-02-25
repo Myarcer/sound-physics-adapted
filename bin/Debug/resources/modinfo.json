@@ -6,7 +6,7 @@
         "Nyarc"
     ],
     "description": "Realistic sound physics for Vintage Story. Raycast occlusion muffles sounds through walls, dynamic reverb reflects off cave geometry, and weather audio responds to your shelter level.",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "side": "universal",
     "requiredOnServer": false,
     "requiredOnClient": false,

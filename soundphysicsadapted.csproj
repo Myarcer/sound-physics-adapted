@@ -89,11 +89,11 @@
     <Copy SourceFiles="@(ModFiles)" DestinationFolder=".modpackage" />
 
     <!-- Create ZIP -->
-    <ZipDirectory SourceDirectory=".modpackage" DestinationFile="Releases\soundphysicsadapted_v0.1.4.zip" Overwrite="true" />
+    <ZipDirectory SourceDirectory=".modpackage" DestinationFile="Releases\soundphysicsadapted_v0.1.5.zip" Overwrite="true" />
     <RemoveDir Directories=".modpackage" />
 
     <!-- Deploy to VS mods folder -->
     <Message Text="Deploying to $(AppData)\VintagestoryData\Mods\..." Importance="high" />
-    <Copy SourceFiles="Releases\soundphysicsadapted_v0.1.4.zip" DestinationFolder="$(AppData)\VintagestoryData\Mods\" />
+    <Copy SourceFiles="Releases\soundphysicsadapted_v0.1.5.zip" DestinationFolder="$(AppData)\VintagestoryData\Mods\" />
   </Target>
 </Project>
