@@ -402,13 +402,6 @@ namespace soundphysicsadapted
             // Note: Universal mono downmix is handled by MonoDownmixManager +
             // LoadSoundPatch.StartPlayingAudioMonoPrefix (auto-detects positional stereo sounds)
             // and LoadSoundPatch.LoadSoundMonoPrefix (explicit requests from weather/resonator)
-            
-            // Phase X: Execution Trace
-            if (config.EnableExecutionTracer)
-            {
-                soundphysicsadapted.Core.ExecutionTracer.Initialize();
-                api.Logger.Notification("[SoundPhysicsAdapted] Execution tracer started. Writing to trace.csv");
-            }
 
             // Initialize AudioPhysicsSystem (optimization: time-slicing, sky probe, static cache)
             acousticsManager = new AudioPhysicsSystem();
@@ -647,25 +640,6 @@ namespace soundphysicsadapted
                         );
                     })
                 .EndSubCommand()
-                .BeginSubCommand("trace")
-                    .WithDescription("Toggle the execution performance tracer")
-                    .HandleWith((args) =>
-                    {
-                        config.EnableExecutionTracer = !config.EnableExecutionTracer;
-                        api.StoreModConfig(config, "soundphysicsadapted.json");
-                        
-                        if (config.EnableExecutionTracer)
-                        {
-                            soundphysicsadapted.Core.ExecutionTracer.Initialize();
-                        }
-                        else
-                        {
-                            soundphysicsadapted.Core.ExecutionTracer.Close();
-                        }
-                        
-                        return TextCommandResult.Success($"[SoundPhysicsAdapted] Execution Tracer: {(config.EnableExecutionTracer ? "ENABLED (recording)" : "DISABLED (stopped)")}");
-                    })
-                .EndSubCommand()
                 // Phase 3: Reverb commands
                 .BeginSubCommand("reverb")
                     .WithDescription("Show current room reverb values")
@@ -866,8 +840,6 @@ namespace soundphysicsadapted
 
             // Dispose sound override manager
             Core.SoundOverrideManager.Dispose();
-            
-            soundphysicsadapted.Core.ExecutionTracer.Close();
 
             base.Dispose();
         }

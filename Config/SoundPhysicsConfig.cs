@@ -30,6 +30,65 @@ namespace soundphysicsadapted
         /// </summary>
         public bool DebugVerbose { get; set; } = false;
 
+        /// <summary>
+        /// Enable debug logging for occlusion raycasting.
+        /// Shows per-sound occlusion results, ray hits, material absorption.
+        /// Requires DebugMode=true to have any effect.
+        /// </summary>
+        public bool DebugOcclusion { get; set; } = false;
+
+        /// <summary>
+        /// Enable debug logging for reverb analysis.
+        /// Shows ray hits, material contributions, and final values.
+        /// Requires DebugMode=true to have any effect.
+        /// </summary>
+        public bool DebugReverb { get; set; } = false;
+
+        /// <summary>
+        /// Enable debug logging for sound path resolution.
+        /// Shows path count, average occlusion, repositioning offset.
+        /// Requires DebugMode=true to have any effect.
+        /// Toggle with /soundphysics debugpaths
+        /// </summary>
+        public bool DebugSoundPaths { get; set; } = false;
+
+        /// <summary>
+        /// Enable debug logging for resonator features.
+        /// Shows pause/resume events, Carry On pickup/placement, boombox state.
+        /// Requires DebugMode=true to have any effect.
+        /// </summary>
+        public bool DebugResonator { get; set; } = false;
+
+        /// <summary>
+        /// Enable debug logging for weather audio system.
+        /// Shows enclosure values, LPF gainHF, sound start/stop events.
+        /// Requires DebugMode=true to have any effect.
+        /// Toggle with /soundphysics weather-debug
+        /// </summary>
+        public bool DebugWeather { get; set; } = false;
+
+        /// <summary>
+        /// Enable debug logging for positional weather sources.
+        /// Shows opening tracking, clustering, source placement, persistence state.
+        /// Requires DebugMode=true to have any effect.
+        /// </summary>
+        public bool DebugPositionalWeather { get; set; } = false;
+
+        /// <summary>
+        /// Enable visual block highlights showing DDA weather enclosure detection.
+        /// Colors: Green=verified opening, Yellow=exposed candidate, Red=blocked,
+        /// Blue=covered (roof), Cyan=neighbor find, Orange=partial (triggers neighbor search).
+        /// Toggle with /soundphysics weather-viz
+        /// </summary>
+        public bool DebugWeatherVisualization { get; set; } = false;
+
+        /// <summary>
+        /// Enable debug logging for thunder audio events.
+        /// Shows Layer 1/Layer 2 decisions, opening selection, bolt direction scoring.
+        /// Requires DebugMode=true to have any effect.
+        /// </summary>
+        public bool DebugThunder { get; set; } = false;
+
         // ============================================================
         // OCCLUSION
         // Raycast-based sound muffling through blocks.
@@ -40,13 +99,6 @@ namespace soundphysicsadapted
         /// Section header visible in JSON config file.
         /// </summary>
         public string _OcclusionSystem { get; set; } = "--- Raycast occlusion through blocks. Muffles sounds behind walls based on material. ---";
-
-        /// <summary>
-        /// Enable debug logging for occlusion raycasting.
-        /// Shows per-sound occlusion results, ray hits, material absorption.
-        /// Requires DebugMode=true to have any effect.
-        /// </summary>
-        public bool DebugOcclusion { get; set; } = false;
 
         /// <summary>
         /// Maximum occlusion value (caps total block count)
@@ -110,13 +162,6 @@ namespace soundphysicsadapted
         /// When enabled, the multi-slot reverb system handles all reverb.
         /// </summary>
         public bool EnableCustomReverb { get; set; } = true;
-
-        /// <summary>
-        /// Enable debug logging for reverb analysis.
-        /// Shows ray hits, material contributions, and final values.
-        /// Requires DebugMode=true to have any effect.
-        /// </summary>
-        public bool DebugReverb { get; set; } = false;
 
         /// <summary>
         /// Disable the default reverb system entirely.
@@ -266,14 +311,6 @@ namespace soundphysicsadapted
         public bool EnableSoundRepositioning { get; set; } = true;
 
         /// <summary>
-        /// Enable debug logging for sound path resolution.
-        /// Shows path count, average occlusion, repositioning offset.
-        /// Requires DebugMode=true to have any effect.
-        /// Toggle with /soundphysics debugpaths
-        /// </summary>
-        public bool DebugSoundPaths { get; set; } = false;
-
-        /// <summary>
         /// Enable path-based muffle (LPF from weighted average occlusion).
         /// When true: sounds through openings have additional muffling based on path.
         /// When false: use only direct-path occlusion for LPF.
@@ -318,9 +355,8 @@ namespace soundphysicsadapted
         /// Master toggle for sound file overrides.
         /// When false: all sounds use vanilla files.
         /// When true: enabled overrides replace vanilla sounds.
-        /// Default false - opt-in feature.
         /// </summary>
-        public bool EnableSoundOverrides { get; set; } = false;
+        public bool EnableSoundOverrides { get; set; } = true;
 
         /// <summary>
         /// Override vanilla beehive-wild.ogg with improved version.
@@ -345,13 +381,6 @@ namespace soundphysicsadapted
         /// When false: resonator uses vanilla behavior only.
         /// </summary>
         public bool EnableResonatorFix { get; set; } = true;
-
-        /// <summary>
-        /// Enable debug logging for resonator features.
-        /// Shows pause/resume events, Carry On pickup/placement, boombox state.
-        /// Requires DebugMode=true to have any effect.
-        /// </summary>
-        public bool DebugResonator { get; set; } = false;
 
         /// <summary>
         /// Enable Carry On mod compatibility (boombox feature).
@@ -380,14 +409,6 @@ namespace soundphysicsadapted
         /// When disabled: default weather sounds play normally.
         /// </summary>
         public bool EnableWeatherEnhancement { get; set; } = true;
-
-        /// <summary>
-        /// Enable debug logging for weather audio system.
-        /// Shows enclosure values, LPF gainHF, sound start/stop events.
-        /// Requires DebugMode=true to have any effect.
-        /// Toggle with /soundphysics weather-debug
-        /// </summary>
-        public bool DebugWeather { get; set; } = false;
 
         /// <summary>
         /// Minimum LPF cutoff for rain when fully enclosed (Hz).
@@ -460,21 +481,6 @@ namespace soundphysicsadapted
         /// Requires EnablePositionalWeather=true.
         /// </summary>
         public bool EnablePositionalHail { get; set; } = true;
-
-        /// <summary>
-        /// Enable debug logging for positional weather sources.
-        /// Shows opening tracking, clustering, source placement, persistence state.
-        /// Requires DebugMode=true to have any effect.
-        /// </summary>
-        public bool DebugPositionalWeather { get; set; } = false;
-
-        /// <summary>
-        /// Enable visual block highlights showing DDA weather enclosure detection.
-        /// Colors: Green=verified opening, Yellow=exposed candidate, Red=blocked,
-        /// Blue=covered (roof), Cyan=neighbor find, Orange=partial (triggers neighbor search).
-        /// Toggle with /soundphysics weather-viz
-        /// </summary>
-        public bool DebugWeatherVisualization { get; set; } = false;
 
         /// <summary>
         /// Maximum positional rain sources (per-type budget).
@@ -554,13 +560,6 @@ namespace soundphysicsadapted
         /// Requires EnableWeatherEnhancement=true.
         /// </summary>
         public bool EnableThunderPositioning { get; set; } = true;
-
-        /// <summary>
-        /// Enable debug logging for thunder audio events.
-        /// Shows Layer 1/Layer 2 decisions, opening selection, bolt direction scoring.
-        /// Requires DebugMode=true to have any effect.
-        /// </summary>
-        public bool DebugThunder { get; set; } = false;
 
         /// <summary>
         /// Minimum LPF cutoff for thunder Layer 1 when fully enclosed (Hz).
@@ -654,23 +653,6 @@ namespace soundphysicsadapted
         /// Lower = smoother indoor/outdoor transitions but more CPU overhead.
         /// </summary>
         public int WeatherTickIntervalMs { get; set; } = 100;
-
-        // ============================================================
-        // EXECUTION TRACE
-        // Developer tools for Call Graph generation.
-        // ============================================================
-
-        /// <summary>
-        /// Section header visible in JSON config file.
-        /// </summary>
-        public string _ExecutionTraceSystem { get; set; } = "--- Developer Execution Tracer. Do not enable during normal gameplay. ---";
-
-        /// <summary>
-        /// Enable the performance execution tracer.
-        /// Writes method entry/exit timestamps to trace.csv for Call Graph generation.
-        /// Disable during normal gameplay for best performance.
-        /// </summary>
-        public bool EnableExecutionTracer { get; set; } = false;
 
 
     }
