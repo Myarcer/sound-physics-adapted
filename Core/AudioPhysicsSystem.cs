@@ -561,9 +561,11 @@ namespace soundphysicsadapted
                         maxGainDelta = Math.Max(maxGainDelta, Math.Abs(reverbResult.SendGain2 - cache.SmoothedG2));
                         maxGainDelta = Math.Max(maxGainDelta, Math.Abs(reverbResult.SendGain3 - cache.SmoothedG3));
                     }
-                    float reverbAlpha = maxGainDelta > 0.3f ? 0.75f   // big reverb change: fast
-                                      : maxGainDelta > 0.1f ? 0.50f   // medium: responsive
-                                      : 0.35f;                        // jitter: smooth
+                    // Reverb is less perceptible than LPF, can converge a bit faster.
+                    // Gains are 0-1 scale, so thresholds are smaller than occlusion.
+                    float reverbAlpha = maxGainDelta > 0.3f ? 0.65f   // big reverb change: ~3 ticks
+                                      : maxGainDelta > 0.1f ? 0.45f   // medium: ~5 ticks
+                                      : 0.30f;                        // jitter: smooth
 
                     if (!cache.HasSmoothedReverb)
                     {
@@ -597,14 +599,30 @@ namespace soundphysicsadapted
 
                 if (skipRepositioning)
                 {
-                    // Clear LOS: sound stays at original position, use direct filter.
-                    // Reset any existing repositioning smoothly back to original.
+                    // Clear LOS: sound stays at original position.
                     AudioRenderer.ResetSoundPosition(sound, soundPos);
-                    // ISSUE 4 FIX: Seed smoothed occ from direct path instead of resetting.
-                    // This prevents abrupt jumps when transitioning back to occlusion.
-                    cache.SmoothedBlendedOcc = occlusion;
+
+                    // SMOOTH TRANSITION: When switching from occluded→clear, don't snap
+                    // the filter. Instead, EMA-smooth toward the direct occlusion value.
+                    // This prevents the audible brightness pop when crossing the occ<1.0
+                    // threshold (filter could jump 2-3x in one tick otherwise).
+                    if (cache.HasSmoothedOcc && cache.SmoothedBlendedOcc > occlusion + 0.3f)
+                    {
+                        // Still converging from previous occlusion — smooth toward clear
+                        float clearDelta = cache.SmoothedBlendedOcc - occlusion;
+                        float clearAlpha = clearDelta > 1.5f ? 0.55f : clearDelta > 0.5f ? 0.40f : 0.30f;
+                        cache.SmoothedBlendedOcc += (occlusion - cache.SmoothedBlendedOcc) * clearAlpha;
+                        // Use smoothed filter instead of raw direct filter for continuity
+                        finalFilter = cache.SmoothedBlendedOcc <= 0 ? 1.0f
+                            : OcclusionCalculator.OcclusionToFilter(cache.SmoothedBlendedOcc);
+                    }
+                    else
+                    {
+                        cache.SmoothedBlendedOcc = occlusion;
+                    }
                     cache.HasSmoothedOcc = true;
-                    // Clear LOS with low occlusion near 1.0 threshold = near acoustic boundary
+
+                    // Clear LOS with occlusion near 1.0 threshold = near acoustic boundary
                     cache.NearAcousticBoundary = occlusion > 0.5f;
 
                     if (updatedThisTick == 0)
@@ -673,13 +691,22 @@ namespace soundphysicsadapted
                             || (airspaceRatio < 0.02f && cache.SmoothedBlendedOcc < 3.0f);
 
                         // ADAPTIVE EMA SMOOTHING:
-                        // Large changes = crossing acoustic boundary → converge fast (nearly instant)
+                        // Large changes = crossing acoustic boundary → converge fast
                         // Small changes = probe ray jitter → smooth heavily (prevent flutter)
+                        //
+                        // Alpha values chosen for 50ms tick rate (boundary sounds):
+                        //   α=0.70 → converges in ~3 ticks (150ms) for huge changes
+                        //   α=0.55 → converges in ~4 ticks (200ms) for big changes
+                        //   α=0.40 → converges in ~5 ticks (250ms) for medium changes
+                        //   α=0.25 → slow convergence for jitter suppression
+                        //
+                        // Capped at 0.70 to prevent single-tick filter jumps that cause
+                        // audible pops (LPF has no internal smoothing in OpenAL).
                         float delta = cache.HasSmoothedOcc ? Math.Abs(blendedOcc - cache.SmoothedBlendedOcc) : 0f;
-                        float occSmoothFactor = delta > 3.0f ? 0.85f   // huge jump (wall→clear): near-instant
-                                              : delta > 1.5f ? 0.65f   // big change (rounding corner): fast
-                                              : delta > 0.5f ? 0.45f   // medium change: responsive
-                                              : 0.35f;                 // small jitter: smooth as before
+                        float occSmoothFactor = delta > 3.0f ? 0.70f   // huge jump (wall→clear): ~150ms
+                                              : delta > 1.5f ? 0.55f   // big change (rounding corner): ~200ms
+                                              : delta > 0.5f ? 0.40f   // medium change: ~250ms
+                                              : 0.25f;                 // small jitter: smooth
 
                         if (cache.HasSmoothedOcc)
                         {
