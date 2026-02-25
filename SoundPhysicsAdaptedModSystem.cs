@@ -34,6 +34,12 @@ namespace soundphysicsadapted
         private static SoundPhysicsAdaptedModSystem instance;
         private Harmony harmony;
         private static SoundPhysicsConfig config;
+
+        /// <summary>
+        /// Bump this when adding new migration blocks in MigrateConfig().
+        /// Pre-migration configs (ConfigVersion == 0) are always wiped to fresh defaults.
+        /// </summary>
+        private const int CurrentConfigVersion = 1;
         private static MaterialSoundConfig materialConfig;
         private static ICoreClientAPI clientApi;
         private static AudioPhysicsSystem acousticsManager;
@@ -83,11 +89,26 @@ namespace soundphysicsadapted
                 config = api.LoadModConfig<SoundPhysicsConfig>("soundphysicsadapted.json");
                 if (config == null)
                 {
+                    // First install — generate fresh defaults
                     config = new SoundPhysicsConfig();
+                    config.ConfigVersion = CurrentConfigVersion;
+                    api.Logger.Notification("[SoundPhysicsAdapted] No config found, generating defaults.");
                 }
-                // Always re-save to add any new properties from updates
+                else if (config.ConfigVersion == 0)
+                {
+                    // ConfigVersion missing → pre-migration config, stale values possible.
+                    // Regenerate fully fresh to ensure clean defaults.
+                    api.Logger.Notification("[SoundPhysicsAdapted] Pre-migration config detected (no version field). Regenerating with fresh defaults.");
+                    config = new SoundPhysicsConfig();
+                    config.ConfigVersion = CurrentConfigVersion;
+                }
+                else
+                {
+                    // Managed config — apply any pending version migrations
+                    MigrateConfig(config);
+                }
                 api.StoreModConfig(config, "soundphysicsadapted.json");
-                api.Logger.Notification($"[SoundPhysicsAdapted] Config loaded - Enabled: {config.Enabled}, DebugMode: {config.DebugMode}");
+                api.Logger.Notification($"[SoundPhysicsAdapted] Config loaded (v{config.ConfigVersion}) - Enabled: {config.Enabled}, DebugMode: {config.DebugMode}");
             }
             catch (Exception ex)
             {
@@ -857,6 +878,31 @@ namespace soundphysicsadapted
         private static int EffectiveLogLimit => config?.DebugVerbose == true
             ? DEBUG_VERBOSE_MAX_PER_SECOND
             : DEBUG_LOG_MAX_PER_SECOND;
+
+        /// <summary>
+        /// Applies incremental migrations to a managed config (ConfigVersion >= 1).
+        /// Pre-migration configs (version == 0) are never passed here — they are wiped
+        /// to fresh defaults in the loading block above.
+        ///
+        /// HOW TO ADD A MIGRATION:
+        ///   1. Add an if block: if (cfg.ConfigVersion &lt; N) { ... cfg.ConfigVersion = N; }
+        ///   2. Bump CurrentConfigVersion constant to N.
+        ///   3. Inside the block, set any fields whose defaults changed between versions.
+        ///      Fields NOT touched here keep the user's existing value (correct behavior).
+        /// </summary>
+        private static void MigrateConfig(SoundPhysicsConfig cfg)
+        {
+            // No migrations yet — first managed version.
+            // Example for future use:
+            // if (cfg.ConfigVersion < 2)
+            // {
+            //     // v1→v2: WeatherVolumeLossMax default changed from 0.5 to 0.6
+            //     // Only reset if the user still has the old default (0.5), not if they customized it
+            //     if (cfg.WeatherVolumeLossMax <= 0.5f) cfg.WeatherVolumeLossMax = 0.6f;
+            //     cfg.ConfigVersion = 2;
+            // }
+            cfg.ConfigVersion = CurrentConfigVersion;
+        }
 
         /// <summary>
         /// Core rate-limited logging. All debug methods delegate here.

@@ -7,6 +7,16 @@ namespace soundphysicsadapted
     public class SoundPhysicsConfig
     {
         // ============================================================
+        // CONFIG VERSION
+        // Used for migration. If this field is missing (= 0), the config
+        // pre-dates the migration system and will be regenerated fresh.
+        // Bump CurrentConfigVersion in SoundPhysicsAdaptedModSystem when
+        // adding migrations that should apply to existing users.
+        // ============================================================
+
+        public int ConfigVersion { get; set; } = 0;
+
+        // ============================================================
         // GENERAL
         // ============================================================
 
