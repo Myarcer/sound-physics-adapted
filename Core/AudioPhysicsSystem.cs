@@ -447,7 +447,7 @@ namespace soundphysicsadapted
             int debugSourceId = AudioRenderer.GetSourceId(sound);
 
             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                $"[RAY] {soundName} d={distance:F1} occ={occlusion:F2} pos=({soundPos.X:F0},{soundPos.Y:F0},{soundPos.Z:F0})");
+                $"[RAY] {soundName} d={distance:F1} occ={occlusion:F2} snd=({soundPos.X:F2},{soundPos.Y:F2},{soundPos.Z:F2}) plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2}) startBlk=({(int)Math.Floor(soundPos.X)},{(int)Math.Floor(soundPos.Y)},{(int)Math.Floor(soundPos.Z)})");
 
             // Default to direct occlusion filter; path resolution may override below
             float finalFilter = directFilter;

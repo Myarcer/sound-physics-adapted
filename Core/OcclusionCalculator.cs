@@ -73,8 +73,14 @@ namespace soundphysicsadapted
             // Only check offset rays in the ambiguous 0.3-0.5 range where thin walls matter.
             if (centerOcclusion < 0.3f)
             {
+                int startBX = (int)Math.Floor(soundPos.X);
+                int startBY = (int)Math.Floor(soundPos.Y);
+                int startBZ = (int)Math.Floor(soundPos.Z);
+                int endBX = (int)Math.Floor(playerPos.X);
+                int endBY = (int)Math.Floor(playerPos.Y);
+                int endBZ = (int)Math.Floor(playerPos.Z);
                 SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                    $"Occlusion calc: dist={distance:F1} center={centerOcclusion:F2} (clear, skip offset)");
+                    $"Occlusion calc: dist={distance:F1} center={centerOcclusion:F2} (clear, skip offset) DDA=({startBX},{startBY},{startBZ})->({endBX},{endBY},{endBZ})");
                 return centerOcclusion;
             }
 
