@@ -163,6 +163,10 @@ namespace soundphysicsadapted
 
             // Initialize sound override manager (logs active overrides)
             Core.SoundOverrideManager.Initialize(api, config);
+
+            // Optional ConfigLib integration: in-game config GUI if mod is present
+            if (api.ModLoader.IsModEnabled("configlib"))
+                new ConfigLibBridge(api, config);
         }
 
         // Server-side Harmony instance for resonator patches

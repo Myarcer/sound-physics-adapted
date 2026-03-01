@@ -39,6 +39,11 @@
       <HintPath>lib\protobuf-net.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- Optional dependency: not bundled, only used for ConfigLibBridge isolation -->
+    <Reference Include="configlib">
+      <HintPath>lib\configlib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
