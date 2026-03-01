@@ -440,6 +440,10 @@ namespace soundphysicsadapted
             float occlusion = OcclusionCalculator.Calculate(soundPos, playerPos, blockAccessor);
             float directFilter = occlusion <= 0 ? 1.0f : OcclusionCalculator.OcclusionToFilter(occlusion);
 
+            // Read per-sound range from vanilla SoundParams for reverb distance attenuation.
+            // Default 32 blocks = vanilla default. Used instead of the old global MaxSoundDistance config.
+            float soundRange = sound.Params?.Range ?? 32f;
+
             int debugSourceId = AudioRenderer.GetSourceId(sound);
 
             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
@@ -482,7 +486,7 @@ namespace soundphysicsadapted
                     {
                         // CACHE MISS (no entry): Full compute + store result
                         var (rv, pr) = AcousticRaytracer.CalculateWithPathsCacheable(
-                            soundPos, playerPos, blockAccessor, occlusion,
+                            soundPos, playerPos, blockAccessor, occlusion, soundRange,
                             out var bouncePoints, out int bounceCount,
                             out var openings, out int openingCount,
                             out float sharedAirspaceRatio, out float directOccOut, out bool hasDirectAirspaceOut);
@@ -497,7 +501,7 @@ namespace soundphysicsadapted
                     else
                     {
                         // CACHE MISS (wall between): Full compute, do NOT store (preserves existing entry)
-                        var (rv, pr) = AcousticRaytracer.CalculateWithPaths(soundPos, playerPos, blockAccessor, occlusion);
+                        var (rv, pr) = AcousticRaytracer.CalculateWithPaths(soundPos, playerPos, blockAccessor, occlusion, soundRange);
                         reverbResult = rv;
                         pathResult = pr;
                     }
@@ -505,7 +509,7 @@ namespace soundphysicsadapted
                 else
                 {
                     // Cell cache disabled: original path
-                    var (rv, pr) = AcousticRaytracer.CalculateWithPaths(soundPos, playerPos, blockAccessor, occlusion);
+                    var (rv, pr) = AcousticRaytracer.CalculateWithPaths(soundPos, playerPos, blockAccessor, occlusion, soundRange);
                     reverbResult = rv;
                     pathResult = pr;
                 }

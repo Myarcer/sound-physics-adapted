@@ -130,8 +130,9 @@ namespace soundphysicsadapted
         public float BlockAbsorption { get; set; } = 1.0f;
 
         /// <summary>
-        /// Maximum distance to process sounds
-        /// Sounds further than this use default (no occlusion)
+        /// [DEPRECATED] No longer used for skipping sounds.
+        /// Reverb distance attenuation now uses per-sound SoundParams.Range from vanilla.
+        /// Kept for config file backward compatibility — will be removed in a future version.
         /// </summary>
         public float MaxSoundDistance { get; set; } = 64.0f;
 

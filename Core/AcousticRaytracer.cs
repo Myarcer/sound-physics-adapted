@@ -65,7 +65,7 @@ namespace soundphysicsadapted
         public static ReverbResult Calculate(Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor)
         {
             var (reverb, _) = CalculateWithPathsCacheable(
-                soundPos, playerPos, blockAccessor, -1f,
+                soundPos, playerPos, blockAccessor, -1f, 32f,
                 out _, out _, out _, out _, out _, out _, out _);
             return reverb;
         }
@@ -75,10 +75,10 @@ namespace soundphysicsadapted
         /// Wrapper that delegates to CalculateWithPathsCacheable, discarding cache capture data.
         /// </summary>
         public static (ReverbResult reverb, SoundPathResult? path) CalculateWithPaths(
-            Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor, float multiRayOcclusion = -1f)
+            Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor, float multiRayOcclusion = -1f, float soundRange = 32f)
         {
             return CalculateWithPathsCacheable(
-                soundPos, playerPos, blockAccessor, multiRayOcclusion,
+                soundPos, playerPos, blockAccessor, multiRayOcclusion, soundRange,
                 out _, out _, out _, out _, out _, out _, out _);
         }
 
@@ -95,7 +95,7 @@ namespace soundphysicsadapted
         /// Returns the bounce/opening data via out parameters.
         /// </summary>
         public static (ReverbResult reverb, SoundPathResult? path) CalculateWithPathsCacheable(
-            Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor, float multiRayOcclusion,
+            Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor, float multiRayOcclusion, float soundRange,
             out BouncePoint[] bouncePoints, out int bounceCount,
             out OpeningData[] openings, out int openingCount,
             out float sharedAirspaceRatioOut, out float directOcclusionOut, out bool hasDirectAirspaceOut)
@@ -294,8 +294,12 @@ namespace soundphysicsadapted
             sendGain2 = Math.Clamp(sendGain2 * 1.05f - 0.05f, 0f, 1f);
             sendGain3 = Math.Clamp(sendGain3 * 1.05f - 0.05f, 0f, 1f);
 
-            float maxSoundDistance = config.MaxSoundDistance;
-            float distanceAtten = 1f - Math.Min(soundDistance / maxSoundDistance, 1f);
+            // Reverb distance attenuation: use per-sound range from vanilla SoundParams
+            // (default 32 blocks). Without this, reverb sends would play at full strength
+            // even when direct sound is near-silent from OpenAL distance attenuation.
+            // SPR reads AL_MAX_DISTANCE per-source; we use SoundParams.Range equivalently.
+            float reverbMaxDist = Math.Max(soundRange, 8f);
+            float distanceAtten = 1f - Math.Min(soundDistance / reverbMaxDist, 1f);
 
             sendGain0 *= distanceAtten;
             sendGain1 *= distanceAtten;

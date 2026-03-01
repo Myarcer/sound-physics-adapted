@@ -43,13 +43,6 @@ namespace soundphysicsadapted
 
             double distance = soundPos.DistanceTo(playerPos);
 
-            // Skip calculation if too far
-            if (distance > config.MaxSoundDistance)
-            {
-                SoundPhysicsAdaptedModSystem.OcclusionDebugLog($"Sound too far: {distance:F1} > {config.MaxSoundDistance}");
-                return 0f;
-            }
-
             // Multi-ray occlusion with voting system:
             // - CENTER ray represents direct line of sight (authoritative)
             // - OFFSET rays detect thin walls that center might miss

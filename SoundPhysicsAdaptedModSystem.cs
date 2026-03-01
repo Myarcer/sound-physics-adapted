@@ -576,7 +576,7 @@ namespace soundphysicsadapted
                             $"  BlockAbsorption: {config.BlockAbsorption}\n" +
                             $"  PermeationBase: {config.PermeationBase}\n" +
                             $"  PermeationOccThreshold: {config.PermeationOcclusionThreshold}\n" +
-                            $"  MaxDistance: {config.MaxSoundDistance}\n" +
+                            $"  MaxDistance: (deprecated, using per-sound range)\n" +
                             $"  MinFilter: {config.MinLowPassFilter}\n" +
                             $"  OcclusionVariation: {config.OcclusionVariation} (0=strict, 0.35=soft)"
                         );
@@ -614,8 +614,7 @@ namespace soundphysicsadapted
                                 break;
                             case "maxdistance":
                             case "distance":
-                                config.MaxSoundDistance = value;
-                                break;
+                                return TextCommandResult.Error("maxdistance is deprecated. Reverb attenuation now uses per-sound vanilla range automatically.");
                             case "minfilter":
                                 config.MinLowPassFilter = value;
                                 break;
