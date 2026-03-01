@@ -574,13 +574,16 @@ namespace soundphysicsadapted
                     ReverbEffects.ApplyToSource(validatedSourceId.Value, smoothedReverb);
                 }
 
-                // SPR-STYLE LOS OVERRIDE: Skip repositioning when direct path is clear.
+                // SPR-STYLE LOS OVERRIDE: Skip repositioning when direct path is essentially clear.
                 // SPR: shouldEvaluateDirection() returns false when occlusion == 0 && redirectNonOccludedSounds.
-                // We use < 1.0 threshold because VS has partial-block occlusion from plants/leaves
-                // that are essentially still clear LOS. Above 1.0 = real wall between player and sound.
+                // Threshold must sit in the gap between foliage and actual walls:
+                //   plant=0.02, leaves=0.05, leavesbranchy=0.12 → clear/foliage (skip reposition)
+                //   gravel=0.4, wood=0.6, stone=1.0           → real obstruction (allow reposition)
+                // 0.3 cleanly separates these: covers all foliage (≤ 0.12) with margin,
+                // but lets gravel/wood/stone trigger repositioning toward openings.
                 // This prevents bounce rays from outvoting the direct path and shifting sound sideways
                 // (the stone-throw panning bug: 40 bounce rays outvoted 1 direct path → 16° shift).
-                bool skipRepositioning = occlusion < 1.0f;
+                bool skipRepositioning = occlusion < 0.3f;
 
                 if (skipRepositioning)
                 {
@@ -589,7 +592,7 @@ namespace soundphysicsadapted
 
                     // SMOOTH TRANSITION: When switching from occluded→clear, don't snap
                     // the filter. Instead, EMA-smooth toward the direct occlusion value.
-                    // This prevents the audible brightness pop when crossing the occ<1.0
+                    // This prevents the audible brightness pop when crossing the occ<0.3
                     // threshold (filter could jump 2-3x in one tick otherwise).
                     if (cache.HasSmoothedOcc && cache.SmoothedBlendedOcc > occlusion + 0.3f)
                     {
@@ -607,13 +610,14 @@ namespace soundphysicsadapted
                     }
                     cache.HasSmoothedOcc = true;
 
-                    // Clear LOS with occlusion near 1.0 threshold = near acoustic boundary
-                    cache.NearAcousticBoundary = occlusion > 0.5f;
+                    // Clear LOS with occlusion near 0.3 threshold = near acoustic boundary.
+                    // Values above 0.15 suggest growing foliage/obstruction — keep update interval high.
+                    cache.NearAcousticBoundary = occlusion > 0.15f;
 
                     if (updatedThisTick == 0)
                     {
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[4B-LOS] occ={occlusion:F2}<1.0 filt={directFilter:F3} (no repos)");
+                            $"[4B-LOS] occ={occlusion:F2}<0.3 filt={directFilter:F3} (no repos)");
                     }
                 }
                 else if (pathResult.HasValue)
