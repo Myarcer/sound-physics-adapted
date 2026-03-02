@@ -598,10 +598,10 @@ namespace soundphysicsadapted
         public float ThunderLayer2Volume { get; set; } = 1.0f;
 
         /// <summary>
-        /// Maximum positional thunder sources (one-shot pool size).
-        /// Thunder events are discrete and don't stack heavily.
+        /// Maximum positional thunder sources (one-shot pool for L2 cracks at openings).
+        /// Only counts indoor L2 crack sources — outdoor cracks and rumbles are unlimited.
         /// </summary>
-        public int MaxThunderSources { get; set; } = 10;
+        public int MaxThunderSources { get; set; } = 20;
 
         // ============================================================
         // PERFORMANCE

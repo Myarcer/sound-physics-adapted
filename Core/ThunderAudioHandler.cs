@@ -71,7 +71,7 @@ namespace soundphysicsadapted
 
         // Tracked active Layer 1 sounds for cleanup
         private readonly List<ManagedThunderSound> activeLayer1Sounds = new List<ManagedThunderSound>();
-        private const int MAX_ACTIVE_LAYER1 = 4;
+        private const int MAX_ACTIVE_LAYER1 = 12;
 
         // Delayed crack queue (nodistance.ogg fired ~50ms after bolt thunder plays)
         private readonly List<PendingDelayedCrack> pendingCracks = new List<PendingDelayedCrack>();
@@ -316,8 +316,8 @@ namespace soundphysicsadapted
                 PlayOutdoorBoltThunder(boltWorldPos, distance, playerEarPos);
 
                 // Queue delayed nodistance.ogg crack (outdoor positioned)
-                // Extended from 200m to 300m — cracks audible further out
-                if (distance < 300)
+                // Cracks audible to full 1000m range — gentler falloff at distance
+                if (distance < 1000)
                 {
                     Vec3d dir = NormalizeBoltDirection(boltWorldPos, playerEarPos);
                     if (dir != null)
@@ -358,7 +358,7 @@ namespace soundphysicsadapted
                 }
 
                 // Queue delayed nodistance.ogg crack (indoor, same LPF as L1)
-                if (distance < 300)
+                if (distance < 1000)
                 {
                     pendingCracks.Add(new PendingDelayedCrack
                     {
@@ -934,8 +934,8 @@ namespace soundphysicsadapted
         private void FireDelayedCrack(PendingDelayedCrack crack, long gameTimeMs)
         {
             // Crack volume: matches bolt intensity curve but slightly punchier.
-            // Close cracks are full blast, then aligned falloff to prevent
-            // crack being louder than the main bolt sound at distance.
+            // Close cracks are full blast, then gentler falloff to 1000m.
+            // Cracks are sharp transients that travel far in real life.
             float crackVol;
             if (crack.Distance <= 30f)
             {
@@ -946,10 +946,15 @@ namespace soundphysicsadapted
                 // 30-100: 1.0 → 0.75 (slightly punchier than bolt's 0.8)
                 crackVol = 1.0f - ((crack.Distance - 30f) / 70f) * 0.25f;
             }
-            else if (crack.Distance < 300f)
+            else if (crack.Distance <= 400f)
             {
-                // 100-300: 0.75 → 0.1 (aligned with bolt curve)
-                crackVol = 0.75f - ((crack.Distance - 100f) / 200f) * 0.65f;
+                // 100-400: 0.75 → 0.35 (gradual falloff, still audible)
+                crackVol = 0.75f - ((crack.Distance - 100f) / 300f) * 0.40f;
+            }
+            else if (crack.Distance <= 1000f)
+            {
+                // 400-1000: 0.35 → 0.10 (gentle tail, distant but present)
+                crackVol = 0.35f - ((crack.Distance - 400f) / 600f) * 0.25f;
             }
             else
             {
