@@ -254,39 +254,55 @@ namespace soundphysicsadapted
         /// Usually skipFirst=true: the block at floor(soundPos) is the source, and we don't
         /// want the source to self-occlude (e.g. dirt block muffled by itself).
         ///
-        /// EXCEPTION (boundary case): VS positions sounds exactly on block face boundaries
-        /// (coordinate is an integer, e.g. z=512018.00). When the ray direction is positive
-        /// on that axis, floor() gives the block AHEAD (a wall), not the source block behind.
-        /// The source block is at floor()-1 on that axis and is behind the ray (never visited).
+        /// EXCEPTION (boundary case): VS positions sounds on block face boundaries
+        /// (coordinate near an integer, e.g. z≈512018.00). When the ray goes forward,
+        /// floor() might give the adjacent block (wall), not the source block behind.
         /// In that case, skipFirst=false — the first DDA block is real occlusion.
         ///
-        /// Example: beehive at z=512017, wall at z=512018, sound at z=512018.00, player at z=512019.
-        /// Ray goes +z. floor(z)=512018=wall. skipFirst=false → wall is counted. ✓
-        /// Source (beehive at z=512017) is behind the ray and never visited.
+        /// DETECTION: Step back 0.1 blocks along the reverse ray direction. If this
+        /// lands in a different block than floor(soundPos), the sound is at/near a
+        /// boundary and the first block is NOT the source. This is robust against
+        /// floating point imprecision (VS positions can be off by ~0.005 from exact
+        /// integer values).
         ///
-        /// Example: dirt at z=511955, sound at z=511955.00, player at z=511954.
-        /// Ray goes -z. floor(z)=511955=dirt. skipFirst=true → dirt is skipped. ✓
+        /// Example: beehive at z=512017, wall at z=512018, sound at z≈512018.004.
+        /// floor(z)=512018=wall. Step back: z≈512017.908 → floor=512017=beehive.
+        /// Different block → skipFirst=false → wall is counted. ✓
+        ///
+        /// Example: dirt at z=511955, sound at z≈511955.004, player at z=511954.
+        /// floor(z)=511955=dirt. Step back (toward +z): z≈511955.100 → floor=511955.
+        /// Same block → skipFirst=true → dirt is skipped. ✓
         /// </summary>
         private static bool ShouldSkipFirstBlock(Vec3d from, Vec3d to)
         {
             double dx = to.X - from.X;
             double dy = to.Y - from.Y;
             double dz = to.Z - from.Z;
+            double length = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            if (length < 0.001) return true;
 
-            const double eps = 0.001;
+            // Normalize direction
+            double ndx = dx / length;
+            double ndy = dy / length;
+            double ndz = dz / length;
 
-            // Check each axis: if position is on an integer boundary AND ray goes
-            // in the positive direction, floor() resolved to the next block (wall),
-            // not the source. Don't skip it.
-            double fracX = from.X - Math.Floor(from.X);
-            double fracY = from.Y - Math.Floor(from.Y);
-            double fracZ = from.Z - Math.Floor(from.Z);
+            // Block at ray origin
+            int startX = (int)Math.Floor(from.X);
+            int startY = (int)Math.Floor(from.Y);
+            int startZ = (int)Math.Floor(from.Z);
 
-            if (fracX < eps && dx > 0) return false;
-            if (fracY < eps && dy > 0) return false;
-            if (fracZ < eps && dz > 0) return false;
+            // Step back 0.1 blocks along the reverse ray direction
+            const double backstep = 0.1;
+            int behindX = (int)Math.Floor(from.X - ndx * backstep);
+            int behindY = (int)Math.Floor(from.Y - ndy * backstep);
+            int behindZ = (int)Math.Floor(from.Z - ndz * backstep);
 
-            return true; // Default: skip the source block
+            // If stepping back lands in a different block, we're at a boundary.
+            // The block at floor(from) is the adjacent block (wall), not the source.
+            if (startX != behindX || startY != behindY || startZ != behindZ)
+                return false; // Don't skip — first block is real occlusion
+
+            return true; // Same block — skip the source block
         }
 
         /// <summary>
