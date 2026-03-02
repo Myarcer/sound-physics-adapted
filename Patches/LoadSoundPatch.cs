@@ -1,6 +1,7 @@
 using HarmonyLib;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 using Vintagestory.Client.NoObf;
 using System;
@@ -207,6 +208,12 @@ namespace soundphysicsadapted
                 {
                     api.Logger.Warning($"[SoundPhysicsAdapted] Universal mono downmix patch failed: {monoEx.Message}");
                 }
+
+                // Patch 0b: PlaySoundAt(Entity) overloads — tag local player entity sounds
+                // These prefixes detect when the sound source entity is the local player
+                // and record the exact position, so StartPlayingAudioMonoPrefix can skip
+                // mono downmix even if the player moves before async audio loads.
+                PatchPlaySoundAtEntityOverloads(harmony, api);
 
                 // Patch 1: ClientMain.LoadSound - for initial sound loading
                 loadSoundMethod = clientMainType.GetMethod("LoadSound", 
@@ -440,14 +447,12 @@ namespace soundphysicsadapted
         /// This is the convergence point where BOTH PlaySoundAtInternal and LoadSound paths land.
         /// Swaps stereo AudioData to mono for positional sounds before CreateAudio runs.
         /// 
-        /// IMPORTANT: Sounds at the local player entity position are SKIPPED from mono downmix.
-        /// OpenAL does NOT spatialize stereo sources, so keeping them stereo prevents
-        /// unwanted L/R panning caused by the slight body-center vs eye/camera offset (~1m).
-        /// This affects player voice effects (tuba, saxophone), eating, bow draw, etc.
-        /// Reverb still works on stereo sources via EFX aux sends — only spatialization is skipped.
+        /// Sounds spawned via PlaySoundAt(Entity == local player) are tagged at call time
+        /// via fingerprint queue, so they stay stereo (no 3D panning, no L/R offset).
+        /// Reverb still works on stereo sources via EFX aux sends.
         /// 
-        /// Trader/NPC sounds using the same assets (e.g. saxophone.ogg) are at DIFFERENT entity
-        /// positions and will still be mono-downmixed for proper 3D positional audio.
+        /// Trader/NPC sounds at different entity positions are NOT tagged and
+        /// will still be mono-downmixed for proper 3D positional audio.
         /// 
         /// Harmony maps __0 = audiodata (first param). Using ref to allow swapping.
         /// </summary>
@@ -458,14 +463,13 @@ namespace soundphysicsadapted
                 var config = SoundPhysicsAdaptedModSystem.Config;
                 if (config == null || !config.Enabled) return;
 
-                // Skip mono downmix for sounds at/near the local player entity position.
-                // These sounds should stay stereo so OpenAL does NOT spatialize them,
-                // preventing L/R panning artifacts from the body-center vs eye offset.
-                // Reverb and occlusion processing still runs normally downstream.
-                if (IsAtLocalPlayerEntity(__1))
+                // Check if this sound was tagged at PlaySoundAt(Entity) call time
+                // as originating from the local player entity. Uses exact float
+                // position match — immune to player movement during async load.
+                if (ConsumeLocalPlayerSoundPosition(__1?.Position))
                 {
                     SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[MonoDownmix] SKIP player-position sound: {__2?.ToShortString() ?? "unknown"} — keeping stereo (no 3D panning)");
+                        $"[MonoDownmix] SKIP local-player sound: {__2?.ToShortString() ?? "unknown"} — keeping stereo (no 3D panning)");
                     return;
                 }
 
@@ -477,54 +481,247 @@ namespace soundphysicsadapted
             }
         }
 
-        /// <summary>
-        /// Tight threshold for matching sound origin to the computed entity-sound position.
-        /// VS computes: entity.Pos.X, entity.Pos.InternalY + SelectionBox.Y2/2, entity.Pos.Z
-        /// We reconstruct that same position and compare — should be near-zero for player sounds.
-        /// 0.25 sq blocks = 0.5 block radius — only catches sounds literally AT the entity.
-        /// Block interactions are 1.5+ blocks away in XZ and won't match.
-        /// </summary>
-        private const float PLAYER_ENTITY_DIST_SQ_THRESHOLD = 0.25f;
+        #region Local Player Sound Fingerprinting
 
         /// <summary>
-        /// Detect if a sound is positioned at the local player entity's computed sound origin.
-        /// VS uses: entity.Pos + (0, SelectionBox.Y2/2, 0) for PlaySoundAt(loc, entity).
-        /// We reconstruct that exact position and check if the sound matches it.
+        /// Position fingerprints of recently-spawned local player entity sounds.
+        /// Populated by PlaySoundAt(Entity) prefixes when entity == local player.
+        /// Consumed by StartPlayingAudioMonoPrefix via exact float match.
         /// 
-        /// Returns false for trader/NPC/other-player sounds (different entity positions).
-        /// Returns false for block-interaction sounds (positioned at block, not entity).
+        /// Why not distance-based? Between PlaySoundAt() and async StartPlaying(),
+        /// the player entity moves. The stored SoundParams.Position is from call time,
+        /// but entity.Pos is current — so distance checks fail for fast-moving players.
+        /// 
+        /// This queue stores the exact (float)position that VS bakes into SoundParams,
+        /// computed from the same entity.Pos doubles at the same instant.
+        /// Float comparison is exact because both sides do the same double→float cast.
         /// </summary>
-        private static bool IsAtLocalPlayerEntity(SoundParams sparams)
+        private static readonly List<(float x, float y, float z, long tickMs)> _localPlayerSoundPositions
+            = new List<(float, float, float, long)>();
+        private const long POSITION_EXPIRY_MS = 2000;
+        private const int MAX_POSITION_QUEUE = 32;
+
+        /// <summary>
+        /// Record that a sound was spawned at the local player entity position.
+        /// Called from PlaySoundAt(Entity) / PlaySoundAt(IPlayer) prefix patches.
+        /// </summary>
+        private static void EnqueueLocalPlayerSoundPosition(float x, float y, float z)
         {
-            if (sparams?.Position == null) return false;
+            long now = Environment.TickCount64;
 
-            var entity = cachedApi?.World?.Player?.Entity;
-            if (entity == null) return false;
+            // Expire old entries
+            _localPlayerSoundPositions.RemoveAll(e => now - e.tickMs > POSITION_EXPIRY_MS);
+            while (_localPlayerSoundPositions.Count >= MAX_POSITION_QUEUE)
+                _localPlayerSoundPositions.RemoveAt(0);
 
-            var entityPos = entity.Pos;
-            if (entityPos == null) return false;
-
-            // Reconstruct the exact sound origin VS would compute for PlaySoundAt(loc, entity):
-            //   X = entity.Pos.X
-            //   Y = entity.Pos.InternalY + SelectionBox.Y2/2  (body center)
-            //   Z = entity.Pos.Z
-            float bodyYOffset = 0f;
-            if (entity.SelectionBox != null)
-                bodyYOffset = entity.SelectionBox.Y2 / 2f;
-            else if (entity.Properties?.CollisionBoxSize != null)
-                bodyYOffset = entity.Properties.CollisionBoxSize.Y / 2f;
-
-            float expectedX = (float)entityPos.X;
-            float expectedY = (float)entityPos.InternalY + bodyYOffset;
-            float expectedZ = (float)entityPos.Z;
-
-            float dx = sparams.Position.X - expectedX;
-            float dy = sparams.Position.Y - expectedY;
-            float dz = sparams.Position.Z - expectedZ;
-
-            float distSq = dx * dx + dy * dy + dz * dz;
-            return distSq < PLAYER_ENTITY_DIST_SQ_THRESHOLD;
+            _localPlayerSoundPositions.Add((x, y, z, now));
         }
+
+        /// <summary>
+        /// Check if a SoundParams position matches a recently-enqueued local player sound.
+        /// Uses exact float equality — safe because both sides compute from the same
+        /// entity.Pos doubles with the same double→float cast, on the same thread,
+        /// at the same point in time (Harmony prefix on PlaySoundAt).
+        /// Consumes (removes) the matched entry.
+        /// </summary>
+        private static bool ConsumeLocalPlayerSoundPosition(Vec3f position)
+        {
+            if (position == null || _localPlayerSoundPositions.Count == 0) return false;
+
+            long now = Environment.TickCount64;
+
+            for (int i = _localPlayerSoundPositions.Count - 1; i >= 0; i--)
+            {
+                var e = _localPlayerSoundPositions[i];
+
+                // Expire stale
+                if (now - e.tickMs > POSITION_EXPIRY_MS)
+                {
+                    _localPlayerSoundPositions.RemoveAt(i);
+                    continue;
+                }
+
+                // Exact float match — both computed from same entity.Pos doubles
+                if (position.X == e.x && position.Y == e.y && position.Z == e.z)
+                {
+                    _localPlayerSoundPositions.RemoveAt(i);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Patch PlaySoundAt overloads that take Entity or IPlayer parameters.
+        /// When the entity/player is the local player, we record the exact position
+        /// that VS will bake into SoundParams, so StartPlayingAudioMonoPrefix can
+        /// detect and skip mono downmix even after async audio loading.
+        /// </summary>
+        private static void PatchPlaySoundAtEntityOverloads(Harmony harmony, ICoreClientAPI api)
+        {
+            int patched = 0;
+
+            try
+            {
+                // Entity overload 1: (AssetLocation, Entity, IPlayer, float pitch, float range, float volume)
+                var method1 = clientMainType.GetMethod("PlaySoundAt",
+                    BindingFlags.Public | BindingFlags.Instance,
+                    null,
+                    new Type[] { typeof(AssetLocation), typeof(Entity), typeof(IPlayer), typeof(float), typeof(float), typeof(float) },
+                    null);
+                if (method1 != null)
+                {
+                    var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundAtEntityPrefix",
+                        BindingFlags.Static | BindingFlags.Public);
+                    harmony.Patch(method1, prefix: new HarmonyMethod(prefix));
+                    patched++;
+                }
+
+                // Entity overload 2: (AssetLocation, Entity, IPlayer, bool randomizePitch, float range, float volume)
+                var method2 = clientMainType.GetMethod("PlaySoundAt",
+                    BindingFlags.Public | BindingFlags.Instance,
+                    null,
+                    new Type[] { typeof(AssetLocation), typeof(Entity), typeof(IPlayer), typeof(bool), typeof(float), typeof(float) },
+                    null);
+                if (method2 != null)
+                {
+                    var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundAtEntityPrefix",
+                        BindingFlags.Static | BindingFlags.Public);
+                    harmony.Patch(method2, prefix: new HarmonyMethod(prefix));
+                    patched++;
+                }
+
+                // IPlayer overload: (AssetLocation, IPlayer, IPlayer, bool, float, float)
+                var method3 = clientMainType.GetMethod("PlaySoundAt",
+                    BindingFlags.Public | BindingFlags.Instance,
+                    null,
+                    new Type[] { typeof(AssetLocation), typeof(IPlayer), typeof(IPlayer), typeof(bool), typeof(float), typeof(float) },
+                    null);
+                if (method3 != null)
+                {
+                    var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundAtPlayerPrefix",
+                        BindingFlags.Static | BindingFlags.Public);
+                    harmony.Patch(method3, prefix: new HarmonyMethod(prefix));
+                    patched++;
+                }
+
+                // PlaySoundFor: (AssetLocation, IPlayer, float pitch, float range, float volume)
+                var method4 = clientMainType.GetMethod("PlaySoundFor",
+                    BindingFlags.Public | BindingFlags.Instance,
+                    null,
+                    new Type[] { typeof(AssetLocation), typeof(IPlayer), typeof(float), typeof(float), typeof(float) },
+                    null);
+                if (method4 != null)
+                {
+                    var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundForPlayerPrefix",
+                        BindingFlags.Static | BindingFlags.Public);
+                    harmony.Patch(method4, prefix: new HarmonyMethod(prefix));
+                    patched++;
+                }
+
+                api.Logger.Notification($"[SoundPhysicsAdapted] Patched {patched} PlaySoundAt/For overloads [LOCAL PLAYER DETECT]");
+            }
+            catch (Exception ex)
+            {
+                api.Logger.Warning($"[SoundPhysicsAdapted] PlaySoundAt entity patches failed ({patched} ok): {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// PREFIX for PlaySoundAt(AssetLocation, Entity, IPlayer, ...).
+        /// Covers both the (Entity, IPlayer, float pitch) and (Entity, IPlayer, bool randomize) overloads.
+        /// When entity == local player, enqueues the exact position VS will bake into SoundParams.
+        /// 
+        /// Harmony: __0 = AssetLocation, __1 = Entity (atEntity).
+        /// </summary>
+        public static void PlaySoundAtEntityPrefix(AssetLocation __0, Entity __1)
+        {
+            try
+            {
+                if (__1 == null || cachedApi == null) return;
+                var localEntity = cachedApi.World?.Player?.Entity;
+                if (localEntity == null || __1 != localEntity) return;
+
+                // Compute exact same position VS will pass to PlaySoundAtInternal:
+                //   x = entity.Pos.X, y = entity.Pos.InternalY + SelectionBox.Y2/2, z = entity.Pos.Z
+                float bodyOffset = 0f;
+                if (__1.SelectionBox != null)
+                    bodyOffset = __1.SelectionBox.Y2 / 2f;
+                else if (__1.Properties?.CollisionBoxSize != null)
+                    bodyOffset = __1.Properties.CollisionBoxSize.Y / 2f;
+
+                float x = (float)__1.Pos.X;
+                float y = (float)(__1.Pos.InternalY + (double)bodyOffset);
+                float z = (float)__1.Pos.Z;
+
+                EnqueueLocalPlayerSoundPosition(x, y, z);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// PREFIX for PlaySoundAt(AssetLocation, IPlayer atPlayer, IPlayer ignore, bool, float, float).
+        /// IPlayer overload uses entity position WITHOUT body offset.
+        /// When atPlayer == local player (or null, which VS defaults to local player), enqueues position.
+        /// 
+        /// Harmony: __0 = AssetLocation, __1 = IPlayer (atPlayer).
+        /// </summary>
+        public static void PlaySoundAtPlayerPrefix(AssetLocation __0, IPlayer __1)
+        {
+            try
+            {
+                if (cachedApi == null) return;
+                var localPlayer = cachedApi.World?.Player;
+                if (localPlayer == null) return;
+
+                // null defaults to local player in VS code
+                IPlayer player = __1 ?? localPlayer;
+                if (player != localPlayer) return;
+
+                var entity = player.Entity;
+                if (entity?.Pos == null) return;
+
+                // IPlayer overload: NO body offset (raw entity.Pos.InternalY)
+                float x = (float)entity.Pos.X;
+                float y = (float)entity.Pos.InternalY;
+                float z = (float)entity.Pos.Z;
+
+                EnqueueLocalPlayerSoundPosition(x, y, z);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// PREFIX for PlaySoundFor(AssetLocation, IPlayer, float pitch, float range, float volume).
+        /// This overload calls PlaySoundAtInternal directly (bypasses PlaySoundAt).
+        /// Uses entity position WITHOUT body offset, same as PlaySoundAt(IPlayer).
+        /// 
+        /// Harmony: __0 = AssetLocation, __1 = IPlayer (forPlayer).
+        /// </summary>
+        public static void PlaySoundForPlayerPrefix(AssetLocation __0, IPlayer __1)
+        {
+            try
+            {
+                if (cachedApi == null) return;
+                var localPlayer = cachedApi.World?.Player;
+                if (localPlayer == null) return;
+
+                IPlayer player = __1 ?? localPlayer;
+                if (player != localPlayer) return;
+
+                var entity = player.Entity;
+                if (entity?.Pos == null) return;
+
+                float x = (float)entity.Pos.X;
+                float y = (float)entity.Pos.InternalY;
+                float z = (float)entity.Pos.Z;
+
+                EnqueueLocalPlayerSoundPosition(x, y, z);
+            }
+            catch { }
+        }
+
+        #endregion
 
         /// <summary>
         /// PREFIX for ClientMain.LoadSound() — Legacy mono downmix for explicit requests.

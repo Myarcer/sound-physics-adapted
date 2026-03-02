@@ -561,11 +561,7 @@ namespace soundphysicsadapted.Patches
 
                 if (distance >= 500) return; // Extended from vanilla 320m — thunder carries further
 
-                float skyCoverage = _weatherManager.SkyCoverage;
-                float occlusionFactor = _weatherManager.OcclusionFactor;
-                var openings = GetTrackedOpenings();
-
-                _thunderHandler.PlayBoltThunder(boltPos, distance, openings, earPos, skyCoverage, occlusionFactor);
+                _thunderHandler.QueueBoltThunder(boltPos, distance);
             }
             catch (Exception ex)
             {

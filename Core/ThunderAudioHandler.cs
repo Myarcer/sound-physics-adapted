@@ -19,11 +19,14 @@ namespace soundphysicsadapted
     ///   distant.ogg   — rolling rumble, plays for bolts 200-500m
     ///   nodistance.ogg — pure instant crack, plays as delayed extra layer for bolts &lt; 300m
     ///
-    /// Volume curves (bolt thunder — enhanced, louder than vanilla):
-    ///   verynear:  1 - dist/250  (1.0 at 0m, 0.40 at 149m)
-    ///   near:      1 - dist/400  (0.63 at 150m, 0.50 at 200m)
-    ///   distant:   1 - dist/700  (0.71 at 200m, 0.29 at 500m)
-    ///   crack:     pow(1-dist/300, 0.8) — punchy, audible to 300m
+    /// Volume curves (bolt thunder):
+    ///   0-100 blocks:   1.0 → 0.8  (close thunder, scary-loud)
+    ///   100-500 blocks: 0.8 → 0.1  (smooth fade into distance)
+    ///   crack:          1.0→0.75 (30-100m), 0.75→0.1 (100-300m)
+    ///
+    /// Speed-of-sound delay:
+    ///   Lightning flash appears instantly; thunder arrives after distance/343 seconds.
+    ///   100 blocks = 0.29s delay, 300 blocks = 0.87s, 500 blocks = 1.46s.
     ///
     /// Three modes based on enclosure state:
     ///
@@ -45,8 +48,9 @@ namespace soundphysicsadapted
     ///
     /// Architecture:
     /// - Ambient thunder (WeatherSimulationLightning.ClientTick): fully replaced via prefix.
-    /// - Bolt thunder (LightningFlash.ClientInit): VS suppressed via transpiler, postfix plays ours.
-    /// - Bolt crack (LightningFlash.Render): VS suppressed, we queue delayed crack via OnGameTick.
+    /// - Bolt thunder (LightningFlash.ClientInit): VS suppressed via transpiler, postfix queues ours.
+    /// - Speed-of-sound delay: QueueBoltThunder stores bolt, OnGameTick fires after dist/343s.
+    /// - Bolt crack (delayed nodistance.ogg): queued ~50ms after bolt thunder plays.
     /// - Layer 2 uses PositionalSourcePool (OneShot, nodistance.ogg) with pre-applied LPF.
     /// - Enclosure attenuation (sky/occlusion/rain) applies on top of vanilla volume curves.
     /// </summary>
@@ -68,9 +72,13 @@ namespace soundphysicsadapted
         private readonly List<ManagedThunderSound> activeLayer1Sounds = new List<ManagedThunderSound>();
         private const int MAX_ACTIVE_LAYER1 = 4;
 
-        // Delayed crack queue (nodistance.ogg fired ~50ms after bolt spawn)
+        // Delayed crack queue (nodistance.ogg fired ~50ms after bolt thunder plays)
         private readonly List<PendingDelayedCrack> pendingCracks = new List<PendingDelayedCrack>();
-        private const long DELAYED_CRACK_MS = 50; // ~0.03-0.05s in VS, we use 50ms
+        private const long DELAYED_CRACK_MS = 50; // delay between main bolt sound and crack layer
+
+        // Speed-of-sound bolt queue (lightning flash → delay → thunder)
+        private readonly List<PendingBoltThunder> pendingBolts = new List<PendingBoltThunder>();
+        private const float SPEED_OF_SOUND = 343f; // blocks per second (1 block ≈ 1 meter)
 
         // Random for outdoor direction
         private readonly Random rand = new Random();
@@ -91,7 +99,7 @@ namespace soundphysicsadapted
             public float NearestRainDist; // Rain distance at spawn time
         }
 
-        /// <summary>Queued delayed crack sound (nodistance.ogg), fired ~50ms after bolt spawn.</summary>
+        /// <summary>Queued delayed crack sound (nodistance.ogg), fired ~50ms after bolt thunder plays.</summary>
         private class PendingDelayedCrack
         {
             public long SpawnTimeMs;
@@ -106,6 +114,15 @@ namespace soundphysicsadapted
             // For outdoor: direction + placement info
             public Vec3d OutdoorDir;
             public float OutdoorPlaceDist;
+        }
+
+        /// <summary>Queued bolt thunder event — delayed by speed of sound from lightning flash.</summary>
+        private class PendingBoltThunder
+        {
+            public long FlashTimeMs;   // When the lightning flash appeared
+            public float DelayMs;       // Speed-of-sound delay before thunder plays
+            public Vec3d BoltWorldPos;
+            public float Distance;
         }
 
         public ThunderAudioHandler(ICoreClientAPI api)
@@ -221,17 +238,42 @@ namespace soundphysicsadapted
         // ════════════════════════════════════════════════════════════════
 
         /// <summary>
+        /// Queue bolt thunder with speed-of-sound delay.
+        /// Called from Harmony postfix when lightning flash appears — thunder arrives later
+        /// based on real-world speed of sound (343 m/s = ~0.29s per 100 blocks).
+        /// </summary>
+        public void QueueBoltThunder(
+            Vec3d boltWorldPos,
+            float distance)
+        {
+            if (!initialized || disposed) return;
+
+            var config = SoundPhysicsAdaptedModSystem.Config;
+            if (config == null || !config.EnableThunderPositioning) return;
+
+            if (distance >= 500f) return;
+
+            float delayMs = (distance / SPEED_OF_SOUND) * 1000f;
+            long gameTimeMs = capi.World.ElapsedMilliseconds;
+
+            pendingBolts.Add(new PendingBoltThunder
+            {
+                FlashTimeMs = gameTimeMs,
+                DelayMs = delayMs,
+                BoltWorldPos = boltWorldPos,
+                Distance = distance
+            });
+
+            ThunderDebugLog($"QUEUED BOLT: dist={distance:F0} delay={delayMs:F0}ms ({distance / SPEED_OF_SOUND:F2}s)");
+        }
+
+        /// <summary>
         /// Play custom bolt thunder replacing VS's suppressed sounds.
         /// VS's PlaySoundAt calls in ClientInit/Render are NOPped by transpiler.
         /// We play our own positioned/filtered versions for all three modes.
+        /// Called from OnGameTick after speed-of-sound delay has elapsed.
         /// </summary>
-        /// <param name="boltWorldPos">World position of the lightning strike</param>
-        /// <param name="distance">Distance from player to bolt</param>
-        /// <param name="trackedOpenings">Currently tracked openings</param>
-        /// <param name="playerEarPos">Player ear position</param>
-        /// <param name="skyCoverage">Current sky coverage</param>
-        /// <param name="occlusionFactor">Current occlusion factor (0=air, 1=material)</param>
-        public void PlayBoltThunder(
+        private void PlayBoltThunder(
             Vec3d boltWorldPos,
             float distance,
             IReadOnlyList<TrackedOpening> trackedOpenings,
@@ -737,11 +779,14 @@ namespace soundphysicsadapted
         /// Tick: clean up finished one-shot sources + expired Layer 1 sounds.
         /// Also handles indoor→outdoor transition: kills L2 one-shots when
         /// the player moves outside, letting L1 (listener-relative) take over.
+        /// Fires queued bolt thunder after speed-of-sound delay.
         /// Call each weather tick.
         /// </summary>
         /// <param name="currentSkyCoverage">Current smoothed sky coverage from WeatherAudioManager (0=outdoors, 1=covered)</param>
         /// <param name="currentOcclusionFactor">Current smoothed occlusion factor</param>
-        public void OnGameTick(float currentSkyCoverage, float currentOcclusionFactor)
+        /// <param name="trackedOpenings">Live tracked openings for bolt thunder playback</param>
+        public void OnGameTick(float currentSkyCoverage, float currentOcclusionFactor,
+            IReadOnlyList<TrackedOpening> trackedOpenings = null)
         {
             if (!initialized || disposed) return;
 
@@ -822,7 +867,34 @@ namespace soundphysicsadapted
                 }
             }
 
-            // Fire pending delayed cracks (nodistance.ogg ~50ms after bolt spawn)
+            // Fire pending bolt thunder (speed-of-sound delay from lightning flash)
+            for (int i = pendingBolts.Count - 1; i >= 0; i--)
+            {
+                var bolt = pendingBolts[i];
+                long elapsed = gameTimeMs - bolt.FlashTimeMs;
+
+                if (elapsed >= (long)bolt.DelayMs)
+                {
+                    pendingBolts.RemoveAt(i);
+
+                    // Re-read live player state at fire time (player may have moved during delay)
+                    var player = capi.World.Player?.Entity;
+                    if (player != null)
+                    {
+                        Vec3d earPos = player.Pos.XYZ.Add(player.LocalEyePos);
+                        ThunderDebugLog($"FIRING QUEUED BOLT: dist={bolt.Distance:F0} afterDelay={elapsed}ms sky={currentSkyCoverage:F2} occl={currentOcclusionFactor:F2}");
+                        PlayBoltThunder(bolt.BoltWorldPos, bolt.Distance, trackedOpenings,
+                            earPos, currentSkyCoverage, currentOcclusionFactor);
+                    }
+                }
+                else if (elapsed > 10000)
+                {
+                    // Safety timeout — bolt delay max ~1.5s, so 10s is extreme
+                    pendingBolts.RemoveAt(i);
+                }
+            }
+
+            // Fire pending delayed cracks (nodistance.ogg ~50ms after bolt thunder plays)
             for (int i = pendingCracks.Count - 1; i >= 0; i--)
             {
                 var crack = pendingCracks[i];
@@ -853,18 +925,27 @@ namespace soundphysicsadapted
         /// </summary>
         private void FireDelayedCrack(PendingDelayedCrack crack, long gameTimeMs)
         {
-            // Crack volume: full blast within 30 blocks, then very gentle pow(0.5) falloff to 300m.
-            // Cracks must cut through rain — pow(0.5) gives MUCH flatter curve than pow(0.8).
-            // At 200m: pow(0.5)=0.61 vs pow(0.8)=0.41. At 250m: 0.43 vs 0.24.
+            // Crack volume: matches bolt intensity curve but slightly punchier.
+            // Close cracks are full blast, then aligned falloff to prevent
+            // crack being louder than the main bolt sound at distance.
             float crackVol;
             if (crack.Distance <= 30f)
             {
                 crackVol = 1.0f;
             }
+            else if (crack.Distance <= 100f)
+            {
+                // 30-100: 1.0 → 0.75 (slightly punchier than bolt's 0.8)
+                crackVol = 1.0f - ((crack.Distance - 30f) / 70f) * 0.25f;
+            }
+            else if (crack.Distance < 300f)
+            {
+                // 100-300: 0.75 → 0.1 (aligned with bolt curve)
+                crackVol = 0.75f - ((crack.Distance - 100f) / 200f) * 0.65f;
+            }
             else
             {
-                // 30-300m: very gradual falloff, pow(0.5) keeps crack audible at range
-                crackVol = MathF.Pow(Math.Max(0f, 1f - (crack.Distance - 30f) / 270f), 0.5f);
+                crackVol = 0f;
             }
 
             // Apply our enclosure attenuation on top
@@ -1221,20 +1302,20 @@ namespace soundphysicsadapted
         }
 
         /// <summary>Calculate bolt intensity from distance.
-        /// Enhanced curves — louder than vanilla to carry further.
-        /// Real thunder is audible 5-10km; VS bolts spawn up to ~500m.
-        /// Each tier uses a gentler falloff than vanilla to keep bolts impactful.
+        /// Curve: full blast close, 0.8 at 100 blocks, smooth falloff to 0.1 at 500 blocks.
         /// Our enclosure system (sky/occlusion/rain) applies on top.</summary>
         private float CalculateBoltIntensity(float distance)
         {
-            // Aggressive curve: thunder must overpower rain.
-            // Flat 1.0 within 80m (scary close), then single gentle linear falloff.
-            // Old curves gave 0.57 at 300m, 0.30 at 490m — drowned out by rain.
-            if (distance <= 80f)
-                return 1.0f;  // point-blank: full blast, no falloff
+            // 0-100 blocks: gentle 1.0 → 0.8 (close thunder is scary-loud)
+            // 100-500 blocks: smooth 0.8 → 0.1 (gradual fade into distance)
+            // >500 blocks: silent
+            if (distance <= 0f)
+                return 1.0f;
+            if (distance <= 100f)
+                return 1.0f - (distance / 100f) * 0.2f;
             if (distance < 500f)
-                return Math.Max(0.25f, 1.0f - (distance - 80f) / 600f);
-            return 0f;  // beyond 500m = no bolt sound
+                return 0.8f - ((distance - 100f) / 400f) * 0.7f;
+            return 0f;
         }
 
         /// <summary>Select thunder asset by distance — matches vanilla thresholds for near tiers,
@@ -1351,6 +1432,9 @@ namespace soundphysicsadapted
 
             // Clear pending delayed cracks
             pendingCracks.Clear();
+
+            // Clear pending bolt thunder (speed-of-sound queue)
+            pendingBolts.Clear();
 
             // Clean up Layer 1 filter
             if (layer1FilterId > 0)
