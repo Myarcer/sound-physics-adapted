@@ -272,6 +272,15 @@ namespace soundphysicsadapted
             // Reusable BlockPos for collision box lookups (avoids allocation per block)
             BlockPos collisionCheckPos = new BlockPos(0, 0, 0, 0);
 
+            // WALL-FACE BUG FIX: When a sound source is positioned exactly on a block boundary
+            // (e.g. beehive at block 512057 but VS places sound at x=512058.00),
+            // floor(512058.0) = 512058 = the wall block itself. skipFirst=true would silently
+            // skip the wall and cause occ=0 for player angles that travel along the wall face.
+            // Fix: if the start block is itself solid, do NOT skip it — it IS the occlusion.
+            Block startBlock = blockAccessor.GetBlock(
+                new BlockPos((int)Math.Floor(from.X), (int)Math.Floor(from.Y), (int)Math.Floor(from.Z), 0));
+            bool skipFirstBlock = !BlockClassification.IsSolidForOcclusion(startBlock);
+
             bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
@@ -340,7 +349,7 @@ namespace soundphysicsadapted
                 }
 
                 return false; // Continue
-            }, skipFirst: true);
+            }, skipFirst: skipFirstBlock);
 
             return stopped ? config.MaxOcclusion : occlusionAccumulation;
         }

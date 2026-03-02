@@ -95,9 +95,22 @@ namespace soundphysicsadapted
         // may only be caught by a ray starting at exactly the right height.
         //
         // NOTE: Only used when rainY >= playerY. When rain impacts BELOW player
-        // (multi-story / floor hole), eye-level + foot-level rays are cast instead
-        // to avoid false occlusion from intervening floors.
+        // (multi-story / floor hole), player-centric heights are used instead
+        // (see PLAYER_CENTRIC_OFFSETS) to avoid false occlusion from intervening floors.
         private static readonly float[] COLUMN_SAMPLE_HEIGHTS = { 1.01f, 2f, 3f, 4f, 8f, 12f };
+
+        // Player-centric height offsets for rainBelowPlayer case.
+        // When rain is far below (skyscraper/multi-story), casting from rainY+offsets
+        // shoots upward through floors → guaranteed occlusion. Instead cast from
+        // player-relative positions to find windows/openings at the player's actual level.
+        //   [0] = feet (ear - 1.5)
+        //   [1] = eye/ear level (ear + 0)
+        //   [2] = +1 above head
+        //   [3] = +2 above head
+        //   [4] = +3 above head
+        // The +1/+2/+3 catch openings above player head (clerestory windows,
+        // gaps above short interior walls in tall rooms).
+        private static readonly float[] PLAYER_CENTRIC_OFFSETS = { -1.5f, 0f, 1f, 2f, 3f };
 
         // Step 3 neighbor search: fewer height samples (skip +2, +3).
         // Neighbors are lateral searches where precise wall-opening angles matter less.
@@ -615,29 +628,38 @@ namespace soundphysicsadapted
 
             if (rainBelowPlayer)
             {
-                // Rain below player: only check foot level (eye level already failed above)
-                float footY = (float)ctx.PlayerEarPos.Y - 1.5f;
-                Vec3d footPos = new Vec3d(candidate.WorldX + 0.5, footY, candidate.WorldZ + 0.5);
-
-                Vec3d footEntryPoint;
-                float footInteractable;
-                float footOcclusion = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                    footPos, ctx.PlayerEarPos, ctx.BlockAccessor, out footEntryPoint, out footInteractable);
-
-                if (ctx.DebugWeather)
+                // Rain below player: cast player-centric rays (feet, head, +1/+2/+3 above).
+                // Eye level was already checked as firstSampleY above, so skip offset [1] (0f).
+                for (int pc = 0; pc < PLAYER_CENTRIC_OFFSETS.Length; pc++)
                 {
-                    WeatherAudioManager.WeatherDebugLog(
-                        $"  CAND[{candidateIndex}] ({candidate.WorldX},{candidate.WorldZ}) rainY={candidate.RainY} " +
-                        $"BELOW-PLAYER foot-level (y={footY:F1}) occl={footOcclusion:F2}");
-                }
+                    if (pc == 1) continue; // eye level already checked as first ray
 
-                if (footOcclusion < bestOcclusion)
-                {
-                    bestOcclusion = footOcclusion;
-                    bestInteractable = footInteractable;
-                    bestRainPos = footPos;
-                    bestEntryPoint = footEntryPoint;
-                    bestHeight = footY;
+                    float sampleY = (float)ctx.PlayerEarPos.Y + PLAYER_CENTRIC_OFFSETS[pc];
+                    Vec3d samplePos = new Vec3d(candidate.WorldX + 0.5, sampleY, candidate.WorldZ + 0.5);
+
+                    Vec3d sampleEntryPoint;
+                    float sampleInteractable;
+                    float sampleOcclusion = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
+                        samplePos, ctx.PlayerEarPos, ctx.BlockAccessor, out sampleEntryPoint, out sampleInteractable);
+
+                    if (ctx.DebugWeather)
+                    {
+                        WeatherAudioManager.WeatherDebugLog(
+                            $"  CAND[{candidateIndex}] ({candidate.WorldX},{candidate.WorldZ}) rainY={candidate.RainY} " +
+                            $"BELOW-PLAYER pc[{pc}] offset={PLAYER_CENTRIC_OFFSETS[pc]:+0.0;-0.0} (y={sampleY:F1}) occl={sampleOcclusion:F2}");
+                    }
+
+                    if (sampleOcclusion < bestOcclusion)
+                    {
+                        bestOcclusion = sampleOcclusion;
+                        bestInteractable = sampleInteractable;
+                        bestRainPos = samplePos;
+                        bestEntryPoint = sampleEntryPoint;
+                        bestHeight = sampleY;
+                    }
+
+                    if (bestOcclusion < threshold)
+                        break;
                 }
             }
             else
@@ -747,10 +769,10 @@ namespace soundphysicsadapted
                     int sampleCount;
                     if (neighborBelowPlayer)
                     {
-                        // Near-horizontal rays at player eye/foot level
-                        sampleYs[0] = (float)ctx.PlayerEarPos.Y;
-                        sampleYs[1] = (float)ctx.PlayerEarPos.Y - 1.5f;
-                        sampleCount = 2;
+                        // Player-centric rays: feet, head, +1/+2/+3 above
+                        for (int pc = 0; pc < PLAYER_CENTRIC_OFFSETS.Length; pc++)
+                            sampleYs[pc] = (float)ctx.PlayerEarPos.Y + PLAYER_CENTRIC_OFFSETS[pc];
+                        sampleCount = PLAYER_CENTRIC_OFFSETS.Length;
                     }
                     else
                     {

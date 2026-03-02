@@ -11,3 +11,4 @@ Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Debug\soundphysicsadapted.cs
 Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Debug\soundphysicsadapted.sourcelink.json
 Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Debug\soundphysicsadapted.dll
 Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Debug\soundphysicsadapted.pdb
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Debug\resources\assets\soundphysicsadapted\config\configlib-patches.json
