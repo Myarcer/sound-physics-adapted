@@ -3,7 +3,10 @@
     <TargetFramework>net8.0</TargetFramework>
     <AssemblyName>soundphysicsadapted</AssemblyName>
     <RootNamespace>soundphysicsadapted</RootNamespace>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <Version>1.6.1.1</Version>
+    <AssemblyVersion>1.6.1.1</AssemblyVersion>
+    <FileVersion>1.6.1.1</FileVersion>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
