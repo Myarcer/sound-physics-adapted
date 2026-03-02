@@ -84,6 +84,12 @@ namespace soundphysicsadapted
         // Random for outdoor direction
         private readonly Random rand = new Random();
 
+        // Outdoor thunder tracking (for debug display)
+        private int activeOutdoorBolts = 0;
+        private int activeOutdoorCracks = 0;
+        private readonly List<long> outdoorBoltExpiry = new List<long>();
+        private readonly List<long> outdoorCrackExpiry = new List<long>();
+
         // Sound assets
         private static readonly AssetLocation DISTANT = new AssetLocation("sounds/weather/lightning-distant.ogg");
         private static readonly AssetLocation NEAR = new AssetLocation("sounds/weather/lightning-near.ogg");
@@ -532,6 +538,9 @@ namespace soundphysicsadapted
                         EfxHelper.ALSetSourceRolloff(sourceId, 0f);
                     }
 
+                    // Track for debug display (thunder sounds ~8s)
+                    outdoorBoltExpiry.Add(capi.World.ElapsedMilliseconds + 8000);
+
                     ThunderDebugLog($"  OUTDOOR bolt: dist={distance:F0} placeDist={placeDist:F0} range={range:F0} asset={asset.Path} vol={volume:F2} rng={rngFactor:F2} rolloff=0 srcId={sourceId} dir=({dir.X:F2},{dir.Y:F2},{dir.Z:F2})");
                 }
             }
@@ -725,7 +734,12 @@ namespace soundphysicsadapted
             if (bestIndex < 0) return;
 
             var bestOpening = trackedOpenings[bestIndex];
-            float layer2Vol = intensity * config.ThunderLayer2Volume * Math.Max(bestScore, 0.2f);
+            // L2 volume: opening score modulated by PARTIAL enclosure attenuation.
+            // L2 comes through an opening so it's the "direct" path, but enclosure
+            // still matters — the opening is small relative to the wall mass.
+            // Apply sqrt of inverse enclosure: at encl=0.95 → factor=0.22, at encl=0.5 → factor=0.71
+            float enclosureAtten = (float)Math.Sqrt(1f - combinedEnclosure * 0.95f);
+            float layer2Vol = intensity * config.ThunderLayer2Volume * Math.Max(bestScore, 0.2f) * enclosureAtten;
             layer2Vol = GameMath.Clamp(layer2Vol, 0f, 1f);
 
             // Pre-apply LPF filter to one-shot BEFORE Start() to prevent transient bypass.
@@ -850,6 +864,14 @@ namespace soundphysicsadapted
                 catch { }
                 activeLayer1Sounds.RemoveAt(0);
             }
+
+            // Update outdoor tracking counters (expire old entries)
+            for (int i = outdoorBoltExpiry.Count - 1; i >= 0; i--)
+                if (gameTimeMs > outdoorBoltExpiry[i]) outdoorBoltExpiry.RemoveAt(i);
+            for (int i = outdoorCrackExpiry.Count - 1; i >= 0; i--)
+                if (gameTimeMs > outdoorCrackExpiry[i]) outdoorCrackExpiry.RemoveAt(i);
+            activeOutdoorBolts = outdoorBoltExpiry.Count;
+            activeOutdoorCracks = outdoorCrackExpiry.Count;
 
             // Update dynamic enclosure for all active Layer 1 rumbles
             if (activeLayer1Sounds.Count > 0)
@@ -1009,6 +1031,9 @@ namespace soundphysicsadapted
                 {
                     ThunderDebugLog($"  DELAYED CRACK FAILED: {ex.Message}");
                 }
+
+                // Track for debug display (crack sounds ~2s)
+                outdoorCrackExpiry.Add(gameTimeMs + 2000);
 
                 ThunderDebugLog($"  DELAYED CRACK (outdoor): asset={NODISTANCE.Path} vol={finalVol:F2} dist={crack.Distance:F0} placeDist={crackPlaceDist:F0} rolloff=0");
             }
@@ -1414,7 +1439,7 @@ namespace soundphysicsadapted
         public string GetDebugStatus()
         {
             if (!initialized) return "Thunder: NOT INITIALIZED";
-            return $"Thunder: L2active={oneShotPool?.ActiveCount ?? 0} L1active={activeLayer1Sounds.Count}";
+            return $"Thunder: L2={oneShotPool?.ActiveCount ?? 0} L1={activeLayer1Sounds.Count} outBolt={activeOutdoorBolts} outCrack={activeOutdoorCracks} pending={pendingBolts.Count}b/{pendingCracks.Count}c";
         }
 
         private void ThunderDebugLog(string message)
