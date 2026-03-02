@@ -177,7 +177,8 @@ namespace soundphysicsadapted
 
             // Simple single-ray calculation for path occlusion
             // No offset rays needed - we just want the direct path occlusion
-            return RunOcclusion(from, to, blockAccessor, config);
+            // Always skip first block for path rays (bounce points are on surfaces)
+            return RunOcclusion(from, to, blockAccessor, config, skipFirst: true);
         }
 
         /// <summary>
@@ -248,11 +249,58 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Determine whether the DDA should skip the first block (the sound's source block).
+        ///
+        /// Usually skipFirst=true: the block at floor(soundPos) is the source, and we don't
+        /// want the source to self-occlude (e.g. dirt block muffled by itself).
+        ///
+        /// EXCEPTION (boundary case): VS positions sounds exactly on block face boundaries
+        /// (coordinate is an integer, e.g. z=512018.00). When the ray direction is positive
+        /// on that axis, floor() gives the block AHEAD (a wall), not the source block behind.
+        /// The source block is at floor()-1 on that axis and is behind the ray (never visited).
+        /// In that case, skipFirst=false — the first DDA block is real occlusion.
+        ///
+        /// Example: beehive at z=512017, wall at z=512018, sound at z=512018.00, player at z=512019.
+        /// Ray goes +z. floor(z)=512018=wall. skipFirst=false → wall is counted. ✓
+        /// Source (beehive at z=512017) is behind the ray and never visited.
+        ///
+        /// Example: dirt at z=511955, sound at z=511955.00, player at z=511954.
+        /// Ray goes -z. floor(z)=511955=dirt. skipFirst=true → dirt is skipped. ✓
+        /// </summary>
+        private static bool ShouldSkipFirstBlock(Vec3d from, Vec3d to)
+        {
+            double dx = to.X - from.X;
+            double dy = to.Y - from.Y;
+            double dz = to.Z - from.Z;
+
+            const double eps = 0.001;
+
+            // Check each axis: if position is on an integer boundary AND ray goes
+            // in the positive direction, floor() resolved to the next block (wall),
+            // not the source. Don't skip it.
+            double fracX = from.X - Math.Floor(from.X);
+            double fracY = from.Y - Math.Floor(from.Y);
+            double fracZ = from.Z - Math.Floor(from.Z);
+
+            if (fracX < eps && dx > 0) return false;
+            if (fracY < eps && dy > 0) return false;
+            if (fracZ < eps && dz > 0) return false;
+
+            return true; // Default: skip the source block
+        }
+
+        /// <summary>
         /// Run a single occlusion ray from sound to player using shared DDA grid traversal.
         /// Accumulates occlusion values for each block the ray passes through.
         /// Includes collision box ray-AABB intersection for partial blocks (doors, trapdoors).
         /// </summary>
-        private static float RunOcclusion(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, SoundPhysicsConfig config)
+        /// <param name="from">Sound position (ray origin)</param>
+        /// <param name="to">Player position (ray target)</param>
+        /// <param name="blockAccessor">Block accessor for world queries</param>
+        /// <param name="config">Sound physics config</param>
+        /// <param name="skipFirst">Whether to skip the first DDA block (source block).
+        /// Pass null to auto-detect using boundary-aware logic.</param>
+        private static float RunOcclusion(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, SoundPhysicsConfig config, bool? skipFirst = null)
         {
             double dx = to.X - from.X;
             double dy = to.Y - from.Y;
@@ -272,28 +320,10 @@ namespace soundphysicsadapted
             // Reusable BlockPos for collision box lookups (avoids allocation per block)
             BlockPos collisionCheckPos = new BlockPos(0, 0, 0, 0);
 
-            // SPAWN-BLOCK FIX: Nudge the ray origin slightly away from the player to ensure
-            // the DDA starts inside the source block, not a neighboring wall.
-            //
-            // VS often positions block interaction sounds exactly on a block boundary
-            // (e.g. dirt break at z=511955.00). floor() lands on the source block itself,
-            // and without this fix, solid source blocks would self-occlude (occ=0.80).
-            //
-            // By nudging 0.01 blocks away from the player (opposite ray direction),
-            // the start cell always becomes the actual source block, which skipFirst
-            // then correctly excludes from occlusion.
-            //
-            // This also handles the old wall-face case correctly:
-            // - Beehive at block 512057, sound at x=512058.00 (wall boundary)
-            // - Nudge moves start to x=512057.99 (beehive block) -> skip beehive
-            // - Wall at block 512058 becomes the SECOND block -> counted as occlusion
-            const double spawnNudge = 0.01;
-            Vec3d nudgedFrom = new Vec3d(
-                from.X - ndx * spawnNudge,
-                from.Y - ndy * spawnNudge,
-                from.Z - ndz * spawnNudge);
+            // Determine skipFirst: auto-detect boundary case or use caller's value
+            bool skipFirstBlock = skipFirst ?? ShouldSkipFirstBlock(from, to);
 
-            bool stopped = DDABlockTraversal.Traverse(nudgedFrom, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
+            bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
                 if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
@@ -361,7 +391,7 @@ namespace soundphysicsadapted
                 }
 
                 return false; // Continue
-            }); // skipFirst defaults to true — source block always skipped
+            }, skipFirst: skipFirstBlock);
 
             return stopped ? config.MaxOcclusion : occlusionAccumulation;
         }
