@@ -34,7 +34,7 @@ namespace soundphysicsadapted
     /// Also outputs verified open-air rain positions for Phase 5B positional
     /// source clustering.
     ///
-    /// Performance: ~50 heightmap O(1) lookups + ~90 DDA rays ≈ 0.9ms every 100ms.
+    /// Performance: ~312 heightmap O(1) lookups + ~640 probe march O(1) + ~90 DDA rays ≈ 0.95ms every 100ms.
     /// </summary>
     public class WeatherEnclosureCalculator : IDisposable
     {
@@ -45,13 +45,16 @@ namespace soundphysicsadapted
         internal const int MAX_DDA_CANDIDATES = 50;    // DDA verify top N closest exposed
         private const int MAX_Y_DIFF = 12;            // Rain impact within 12 blocks of player Y
 
-        // Step 2C: Horizontal probe rays for cave exit detection.
+        // Step 2C: March-along probe rays for cave exit detection.
         // When enclosed (high sky coverage), cast rays outward from player at
-        // various angles (15-75 degrees above horizontal) in 8 compass directions.
-        // Rays that exit into sky-exposed air become positional rain sources.
-        // This detects diagonal cave exits, overhangs, and wall openings.
-        private const int PROBE_RAY_DIRECTIONS = 12;    // Compass directions to probe
+        // various angles (0-75 degrees above horizontal) in 16 compass directions.
+        // Each ray marches in STEP_SIZE increments, checking the heightmap at each
+        // step. First point where stepY >= rainMapHeight means the ray emerged into
+        // sky-exposed air. DDA fires from there back to player.
+        // This finds cave exits at ANY distance along the ray, not just the far endpoint.
+        private const int PROBE_RAY_DIRECTIONS = 16;    // Compass directions (22.5° gaps)
         private const float PROBE_RAY_MAX_DIST = 24f;   // Max ray distance in blocks
+        private const float PROBE_STEP_SIZE = 3f;       // March step size in blocks
         private const float PROBE_SKY_COVERAGE_MIN = 0.5f; // Only probe when this enclosed
 
         // Below 0.3 = practically clear air path (only grass/plants touch the ray).
@@ -842,22 +845,29 @@ namespace soundphysicsadapted
         }
 
         // ══════════════════════════════════════════════════════════════
-        //  Step 2C: Horizontal probe rays for cave exit detection
+        //  Step 2C: March-along probe rays for cave exit detection
         //  When player is enclosed (high sky coverage), cast rays outward
-        //  at various angles above horizontal. Each ray checks if its
-        //  endpoint is in sky-exposed air with a clear DDA path back.
-        //  This detects diagonal cave mouths, overhangs, and side openings
-        //  that column-based scanning cannot find (those only look up).
+        //  at various angles above horizontal. Each ray MARCHES in steps,
+        //  checking the heightmap at each point. First point where the ray
+        //  emerges above the rain surface triggers a DDA verification back
+        //  to the player. This finds cave exits at any distance along the
+        //  ray, not just the far endpoint.
         //
-        //  Angles: 15, 45, 75 degrees above horizontal x 12 compass directions
-        //  = 36 probe rays total.
+        //  Elevations: 0, 10, 25, 45, 75 degrees above horizontal
+        //  x 16 compass directions = 80 probe rays total.
+        //  Each ray marches in 3-block steps = 8 steps per ray.
+        //  Total: 640 heightmap checks (all O(1)) + typically 5-12 DDA rays.
         // ══════════════════════════════════════════════════════════════
 
-        // Precomputed probe elevations (radians)
+        // Precomputed probe elevations (radians) — ordered low-to-high.
+        // Low angles checked first: horizontal tunnels and gentle slopes
+        // are the most common cave exit geometries.
         private static readonly float[] ProbeElevations = {
-            15f * (float)Math.PI / 180f,
-            45f * (float)Math.PI / 180f,
-            75f * (float)Math.PI / 180f
+            0f,                                   // Horizontal: tunnels, doorways, overhangs
+            10f * (float)Math.PI / 180f,          // Gentle slope: most common cave exits in VS terrain
+            25f * (float)Math.PI / 180f,          // Moderate angle: halfway between horizontal and diagonal
+            45f * (float)Math.PI / 180f,          // Diagonal: cliff overhangs, steep cave exits
+            75f * (float)Math.PI / 180f           // Near-vertical: chimney-like openings
         };
 
         private void ProbeForCaveExits(ScanContext ctx)
@@ -865,11 +875,13 @@ namespace soundphysicsadapted
             if (SkyCoverage < PROBE_SKY_COVERAGE_MIN) return;
 
             float angleStep = 2f * (float)Math.PI / PROBE_RAY_DIRECTIONS;
+            int maxSteps = (int)(PROBE_RAY_MAX_DIST / PROBE_STEP_SIZE);
 
             if (ctx.DebugWeather)
             {
                 WeatherAudioManager.WeatherDebugLog(
                     $"  Step2C: probing {PROBE_RAY_DIRECTIONS} dirs x {ProbeElevations.Length} elevations, " +
+                    $"step={PROBE_STEP_SIZE}b maxSteps={maxSteps} " +
                     $"skyCov={SkyCoverage:F2} >= {PROBE_SKY_COVERAGE_MIN}");
             }
 
@@ -888,63 +900,81 @@ namespace soundphysicsadapted
                     float sinEl = (float)Math.Sin(elevation);
 
                     // Direction vector: horizontal component scaled by cos(elevation), Y by sin(elevation)
-                    double endX = ctx.PlayerEarPos.X + cosAz * cosEl * PROBE_RAY_MAX_DIST;
-                    double endY = ctx.PlayerEarPos.Y + sinEl * PROBE_RAY_MAX_DIST;
-                    double endZ = ctx.PlayerEarPos.Z + sinAz * cosEl * PROBE_RAY_MAX_DIST;
+                    float dirX = cosAz * cosEl;
+                    float dirY = sinEl;
+                    float dirZ = sinAz * cosEl;
 
-                    int bx = (int)Math.Floor(endX);
-                    int by = (int)Math.Floor(endY);
-                    int bz = (int)Math.Floor(endZ);
-                    int endRainH = ctx.BlockAccessor.GetRainMapHeightAt(bx, bz);
-
-                    // Ray endpoint must be ABOVE rain height (exposed to sky)
-                    if (by < endRainH)
-                        continue;
-
-                    // Ray endpoint block must be air (not inside solid)
-                    Block endBlock = ctx.BlockAccessor.GetBlock(new BlockPos(bx, by, bz));
-                    if (endBlock != null && endBlock.Id != 0 && endBlock.CollisionBoxes != null
-                        && endBlock.CollisionBoxes.Length > 0)
-                        continue;
-
-                    // Verify: clear path from sky-exposed point back to the player
-                    Vec3d rainSourcePos = new Vec3d(bx + 0.5, endRainH + 1.01, bz + 0.5);
-
-                    Vec3d entryPoint;
-                    float probeInteractable;
-                    float pathOcc = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                        rainSourcePos, ctx.PlayerEarPos, ctx.BlockAccessor, out entryPoint, out probeInteractable);
-
-                    if (ctx.DebugWeather)
+                    // March along ray in PROBE_STEP_SIZE increments
+                    for (int s = 1; s <= maxSteps; s++)
                     {
-                        WeatherAudioManager.WeatherDebugLog(
-                            $"    PROBE d={d} el={elevation * 180f / Math.PI:F0}deg " +
-                            $"end=({bx},{by},{bz}) rainH={endRainH} occ={pathOcc:F2}");
-                    }
+                        float dist = s * PROBE_STEP_SIZE;
+                        double stepX = ctx.PlayerEarPos.X + dirX * dist;
+                        double stepY = ctx.PlayerEarPos.Y + dirY * dist;
+                        double stepZ = ctx.PlayerEarPos.Z + dirZ * dist;
 
-                    if (pathOcc < DDA_OCCLUDED_THRESHOLD)
-                    {
-                        ctx.FreshVerified.Add(new VerifiedRainPosition
+                        int bx = (int)Math.Floor(stepX);
+                        int by = (int)Math.Floor(stepY);
+                        int bz = (int)Math.Floor(stepZ);
+
+                        int rainH = ctx.BlockAccessor.GetRainMapHeightAt(bx, bz); // O(1)
+
+                        // Still inside terrain — keep marching
+                        if (by < rainH)
+                            continue;
+
+                        // Ray has emerged above rain surface! Check if actually air.
+                        Block endBlock = ctx.BlockAccessor.GetBlock(new BlockPos(bx, by, bz));
+                        if (endBlock != null && endBlock.Id != 0 && endBlock.CollisionBoxes != null
+                            && endBlock.CollisionBoxes.Length > 0)
                         {
-                            WorldPos = rainSourcePos,
-                            EntryPos = entryPoint,
-                            Occlusion = pathOcc + probeInteractable,
-                            Distance = (float)rainSourcePos.DistanceTo(ctx.PlayerEarPos),
-                            ColumnX = bx,
-                            ColumnZ = bz
-                        });
+                            // Solid block at sky-exposed position (tree trunk, etc.) — keep marching
+                            continue;
+                        }
 
-                        ctx.ProbeFinds++;
-                        foundForDirection = true;
+                        // Fire DDA from rain surface back to player
+                        Vec3d rainSourcePos = new Vec3d(bx + 0.5, rainH + 1.01, bz + 0.5);
 
-                        ctx.Viz?.AddDda(bx, endRainH + 1, bz, EnclosureDebugVisualizer.VizColor.Probe);
+                        Vec3d entryPoint;
+                        float probeInteractable;
+                        float pathOcc = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
+                            rainSourcePos, ctx.PlayerEarPos, ctx.BlockAccessor, out entryPoint, out probeInteractable);
 
                         if (ctx.DebugWeather)
                         {
                             WeatherAudioManager.WeatherDebugLog(
-                                $"  PROBE HIT: dir={d} el={elevation * 180f / Math.PI:F0}deg " +
-                                $"pos=({bx},{bz}) rainH={endRainH} occ={pathOcc:F2}");
+                                $"    PROBE d={d} el={elevation * 180f / Math.PI:F0}deg step={s} " +
+                                $"pos=({bx},{by},{bz}) rainH={rainH} occ={pathOcc:F2}");
                         }
+
+                        if (pathOcc < DDA_OCCLUDED_THRESHOLD)
+                        {
+                            ctx.FreshVerified.Add(new VerifiedRainPosition
+                            {
+                                WorldPos = rainSourcePos,
+                                EntryPos = entryPoint,
+                                Occlusion = pathOcc + probeInteractable,
+                                Distance = (float)rainSourcePos.DistanceTo(ctx.PlayerEarPos),
+                                ColumnX = bx,
+                                ColumnZ = bz
+                            });
+
+                            ctx.ProbeFinds++;
+                            foundForDirection = true;
+
+                            ctx.Viz?.AddDda(bx, rainH + 1, bz, EnclosureDebugVisualizer.VizColor.Probe);
+
+                            if (ctx.DebugWeather)
+                            {
+                                WeatherAudioManager.WeatherDebugLog(
+                                    $"  PROBE HIT: dir={d} el={elevation * 180f / Math.PI:F0}deg step={s} " +
+                                    $"pos=({bx},{bz}) rainH={rainH} occ={pathOcc:F2}");
+                            }
+                        }
+
+                        // First sky-exposed point in this direction — stop marching.
+                        // If DDA failed here, points further away would have even worse
+                        // occlusion (more material between source and player).
+                        break;
                     }
                 }
             }
