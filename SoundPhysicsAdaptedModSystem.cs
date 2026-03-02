@@ -183,6 +183,16 @@ namespace soundphysicsadapted
         {
             serverApi = api;
 
+            // Detect Carry On mod on server side (needed for boombox itemstack position updates)
+            if (!carryOnModLoaded)
+            {
+                carryOnModLoaded = api.ModLoader.Mods.Any(m => m.Info.ModID.Equals("carryon", StringComparison.OrdinalIgnoreCase));
+                if (carryOnModLoaded)
+                {
+                    api.Logger.Notification("[SoundPhysicsAdapted] Server: Carry On mod detected - boombox itemstack sync enabled");
+                }
+            }
+
             ServerChannel = api.Network.GetChannel("soundphysicsadapted")
                 .RegisterMessageType(typeof(ResonatorSyncPacket))
                 .SetMessageHandler<ResonatorSyncPacket>(OnResonatorSyncPacket);
@@ -199,15 +209,21 @@ namespace soundphysicsadapted
             // Apply server-side Harmony patches for resonator interaction
             // This ensures OnInteract prefix fires on the server too (critical for multiplayer)
             // Only apply if enabled in config
+            serverHarmony = new Harmony(HARMONY_ID + ".server");
+
             if (config.EnableResonatorFix)
             {
-                serverHarmony = new Harmony(HARMONY_ID + ".server");
                 ResonatorPatches.ApplyShared(serverHarmony, api);
             }
             else
             {
                 api.Logger.Notification("[SoundPhysicsAdapted] Server resonator patches DISABLED by config");
             }
+
+            // Always apply persistence patches on server (ToTreeAttributes/FromTreeAttributes)
+            // These are normally applied via PatchAll in StartClientSide, but PatchAll cannot
+            // run on the server because AudioLoaderPatch targets client-only OggDecoder type.
+            ResonatorPatches.ApplyServer(serverHarmony, api);
 
             // Send handshake to clients when they join
             api.Event.PlayerJoin += (byPlayer) =>

@@ -304,12 +304,36 @@ namespace soundphysicsadapted.Patches
 
         /// <summary>
         /// Apply patches that run on SERVER only.
-        /// Currently none - server uses ApplyShared for OnInteract.
+        /// Persistence patches (ToTreeAttributes, FromTreeAttributes) must be applied here
+        /// because PatchAll only runs in StartClientSide and cannot run on the server
+        /// (AudioLoaderPatch targets client-only OggDecoder which would cause TypeLoadException).
         /// </summary>
         public static void ApplyServer(Harmony harmony, ICoreAPI api)
         {
-            // Server-specific patches would go here
-            // Currently all server-side logic is in ApplyShared (OnInteract)
+            try
+            {
+                // ToTreeAttributes - saves pause state, playback position, frozen rotation to chunk data
+                var toTree = AccessTools.Method(typeof(BlockEntityResonator), "ToTreeAttributes");
+                if (toTree != null)
+                {
+                    var postfix = typeof(ResonatorPatches).GetMethod("ToTreeAttributesPostfix");
+                    harmony.Patch(toTree, postfix: new HarmonyMethod(postfix));
+                    api.Logger.Notification("[SoundPhysicsAdapted] Server: ToTreeAttributes persistence patch applied.");
+                }
+
+                // FromTreeAttributes - restores pause state, playback position from chunk data
+                var fromTree = AccessTools.Method(typeof(BlockEntityResonator), "FromTreeAttributes");
+                if (fromTree != null)
+                {
+                    var postfix = typeof(ResonatorPatches).GetMethod("FromTreeAttributesPostfix");
+                    harmony.Patch(fromTree, postfix: new HarmonyMethod(postfix));
+                    api.Logger.Notification("[SoundPhysicsAdapted] Server: FromTreeAttributes persistence patch applied.");
+                }
+            }
+            catch (Exception ex)
+            {
+                api.Logger.Error($"[SoundPhysicsAdapted] Failed to apply server persistence patches: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -526,6 +550,14 @@ namespace soundphysicsadapted.Patches
             {
                 if (__instance.Inventory[0] != null && !__instance.Inventory[0].Empty)
                 {
+                    // CLIENT: Only handle pause/resume if server also has the mod.
+                    // Without this guard, client would pause locally while server runs vanilla
+                    // OnInteract (ejecting the disc), causing a desync.
+                    if (world.Side == EnumAppSide.Client && !ServerHasMod)
+                    {
+                        return true; // Let vanilla handle it
+                    }
+
                     // CLIENT: Prepare for pause/resume
                     if (world.Side == EnumAppSide.Client)
                     {
@@ -883,13 +915,14 @@ namespace soundphysicsadapted.Patches
 
             if (__instance.Inventory != null && !__instance.Inventory[0].Empty)
             {
+                string modKey = SoundPhysicsAdaptedModSystem.CarryOnModLoaded ? "Ctrl" : "Shift";
                 if (__instance.IsPlaying)
                 {
-                    dsc.AppendLine("Shift + Right click to Pause.");
+                    dsc.AppendLine($"{modKey} + Right click to Pause.");
                 }
                 else
                 {
-                    dsc.AppendLine("Shift + Right click to Resume.");
+                    dsc.AppendLine($"{modKey} + Right click to Resume.");
                     dsc.AppendLine("(Paused)");
                 }
             }
