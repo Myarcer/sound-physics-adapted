@@ -1330,9 +1330,9 @@ namespace soundphysicsadapted
         /// extended distant tier to 500m (vanilla was 320m).</summary>
         public static AssetLocation GetAssetForDistance(float distance)
         {
-            if (distance < 150) return VERY_NEAR;
-            if (distance < 200) return NEAR;
-            return DISTANT; // 200-1000m
+            if (distance < 300) return VERY_NEAR;
+            if (distance < 500) return NEAR;
+            return DISTANT; // 500-1000m
         }
 
         /// <summary>
