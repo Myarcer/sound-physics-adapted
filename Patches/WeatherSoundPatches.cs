@@ -559,7 +559,7 @@ namespace soundphysicsadapted.Patches
                 Vec3d earPos = player.Pos.XYZ.Add(player.LocalEyePos);
                 float distance = (float)earPos.DistanceTo(boltPos);
 
-                if (distance >= 500) return; // Extended from vanilla 320m — thunder carries further
+                if (distance >= 1000) return; // Extended from vanilla 320m — thunder carries further
 
                 _thunderHandler.QueueBoltThunder(boltPos, distance);
             }

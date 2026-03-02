@@ -16,12 +16,13 @@ namespace soundphysicsadapted
     /// Sound assets and distance tiers (bolt thunder):
     ///   verynear.ogg  — sharp crack, plays for bolts &lt; 150m
     ///   near.ogg      — balanced crack + rumble, plays for bolts 150-200m
-    ///   distant.ogg   — rolling rumble, plays for bolts 200-500m
+    ///   distant.ogg   — rolling rumble, plays for bolts 200-1000m
     ///   nodistance.ogg — pure instant crack, plays as delayed extra layer for bolts &lt; 300m
     ///
     /// Volume curves (bolt thunder):
     ///   0-100 blocks:   1.0 → 0.8  (close thunder, scary-loud)
-    ///   100-500 blocks: 0.8 → 0.1  (smooth fade into distance)
+    ///   100-1000 blocks: 0.8 → 0.5  (still audible at max distance)
+    ///   RNG variety:     each bolt × random(0.2, 1.0) for natural variation
     ///   crack:          1.0→0.75 (30-100m), 0.75→0.1 (100-300m)
     ///
     /// Speed-of-sound delay:
@@ -251,7 +252,7 @@ namespace soundphysicsadapted
             var config = SoundPhysicsAdaptedModSystem.Config;
             if (config == null || !config.EnableThunderPositioning) return;
 
-            if (distance >= 500f) return;
+            if (distance >= 1000f) return;
 
             float delayMs = (distance / SPEED_OF_SOUND) * 1000f;
             long gameTimeMs = capi.World.ElapsedMilliseconds;
@@ -289,20 +290,25 @@ namespace soundphysicsadapted
             float minSky = config.PositionalMinSkyCoverage;
             long gameTimeMs = capi.World.ElapsedMilliseconds;
 
-            // Extended cutoff: bolts audible to 500m (vanilla was 320m)
+            // Extended cutoff: bolts audible to 1000m (vanilla was 320m)
             // Real thunder travels much further; VS spawns bolts you can see beyond 320m
-            if (distance >= 500f) return;
+            if (distance >= 1000f) return;
 
-            // Select asset + base volume by distance (vanilla per-tier curves)
+            // Select asset + base volume by distance
             AssetLocation asset = GetAssetForDistance(distance);
             float baseVolume = CalculateBoltIntensity(distance);
             if (baseVolume <= 0f) return;
 
+            // RNG variety for RUMBLE sounds only (verynear/near/distant.ogg)
+            // nodistance.ogg crack plays at consistent distance-based volume
+            float rngFactor = 0.2f + (float)rand.NextDouble() * 0.8f;
+            float rumbleVolume = baseVolume * rngFactor;
+
             // Apply our enclosure system to bolt volume
             float nearestRainDist = GetNearestRainDistance(trackedOpenings, playerEarPos);
             float enclosureMod = CalculateThunderVolume(1.0f, skyCoverage, occlusionFactor, nearestRainDist);
-            float volume = baseVolume * enclosureMod;
-            if (volume < 0.01f) return;
+            float volume = rumbleVolume * enclosureMod;
+            if (volume < 0.01f && baseVolume * enclosureMod < 0.01f) return;
 
             if (skyCoverage < minSky)
             {
@@ -340,12 +346,12 @@ namespace soundphysicsadapted
                 // INDOOR (with or without openings): Full custom Layer 1 + optional Layer 2
                 float combined = CalculateCombinedEnclosure(skyCoverage, occlusionFactor, config);
 
-                // Layer 1: Muffled rumble with LPF
-                PlayLayer1Rumble(asset, baseVolume, 1f, skyCoverage, occlusionFactor, nearestRainDist, gameTimeMs);
+                // Layer 1: Muffled rumble with LPF (RNG-varied volume)
+                PlayLayer1Rumble(asset, rumbleVolume, 1f, skyCoverage, occlusionFactor, nearestRainDist, gameTimeMs);
 
                 // Layer 2: Crack at best opening (if any exist)
-                // L2 represents sound punching THROUGH the opening — it should use baseVolume,
-                // not the enclosure-crushed volume. The opening IS the unoccluded path.
+                // L2 plays nodistance.ogg — uses clean baseVolume, no RNG
+                // The opening IS the unoccluded path.
                 if (trackedOpenings != null && trackedOpenings.Count > 0)
                 {
                     PlayLayer2AtBestOpening(boltWorldPos, trackedOpenings, playerEarPos, baseVolume, combined, config);
@@ -372,7 +378,7 @@ namespace soundphysicsadapted
             string mode = skyCoverage < minSky ? "OUTDOOR" :
                            (trackedOpenings?.Count > 0 ? "INDOOR+L1+L2" : "ENCLOSED+L1");
             ThunderDebugLog(
-                $"BOLT: dist={distance:F0} baseVol={baseVolume:F2} vol={volume:F2} " +
+                $"BOLT: dist={distance:F0} baseVol={baseVolume:F2} rng={rngFactor:F2} rumbleVol={rumbleVolume:F2} vol={volume:F2} " +
                 $"sky={skyCoverage:F2} occl={occlusionFactor:F2} rainDist={nearestRainDist:F1} " +
                 $"openings={trackedOpenings?.Count ?? 0} mode={mode}");
         }
@@ -486,8 +492,10 @@ namespace soundphysicsadapted
             // Select asset by distance — matches vanilla LightningFlash.ClientInit thresholds
             AssetLocation asset = GetAssetForDistance(distance);
 
-            // Volume curve per tier — matches vanilla's linear falloff per asset
+            // Volume curve per tier + RNG variety (0.2-1.0)
             float volume = CalculateBoltIntensity(distance);
+            float rngFactor = 0.2f + (float)rand.NextDouble() * 0.8f;
+            volume *= rngFactor;
 
             if (volume <= 0f) return;
 
@@ -524,7 +532,7 @@ namespace soundphysicsadapted
                         EfxHelper.ALSetSourceRolloff(sourceId, 0f);
                     }
 
-                    ThunderDebugLog($"  OUTDOOR bolt: dist={distance:F0} placeDist={placeDist:F0} range={range:F0} asset={asset.Path} vol={volume:F2} rolloff=0 srcId={sourceId} dir=({dir.X:F2},{dir.Y:F2},{dir.Z:F2})");
+                    ThunderDebugLog($"  OUTDOOR bolt: dist={distance:F0} placeDist={placeDist:F0} range={range:F0} asset={asset.Path} vol={volume:F2} rng={rngFactor:F2} rolloff=0 srcId={sourceId} dir=({dir.X:F2},{dir.Y:F2},{dir.Z:F2})");
                 }
             }
             catch (Exception ex)
@@ -1307,14 +1315,14 @@ namespace soundphysicsadapted
         private float CalculateBoltIntensity(float distance)
         {
             // 0-100 blocks: gentle 1.0 → 0.8 (close thunder is scary-loud)
-            // 100-500 blocks: smooth 0.8 → 0.1 (gradual fade into distance)
-            // >500 blocks: silent
+            // 100-1000 blocks: smooth 0.8 → 0.5 (still audible at max distance)
+            // >1000 blocks: silent
             if (distance <= 0f)
                 return 1.0f;
             if (distance <= 100f)
                 return 1.0f - (distance / 100f) * 0.2f;
-            if (distance < 500f)
-                return 0.8f - ((distance - 100f) / 400f) * 0.7f;
+            if (distance < 1000f)
+                return 0.8f - ((distance - 100f) / 900f) * 0.3f;
             return 0f;
         }
 
@@ -1324,7 +1332,7 @@ namespace soundphysicsadapted
         {
             if (distance < 150) return VERY_NEAR;
             if (distance < 200) return NEAR;
-            return DISTANT; // 200-500m
+            return DISTANT; // 200-1000m
         }
 
         /// <summary>

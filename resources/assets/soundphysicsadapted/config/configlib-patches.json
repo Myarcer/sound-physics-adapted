@@ -45,6 +45,7 @@
         { "type": "separator", "title": "Sound Overrides" },
         { "code": "EnableSoundOverrides",          "type": "boolean", "default": true,   "ingui": "Enable Sound Overrides",     "comment": "Master toggle for sound file overrides. When false, all sounds use vanilla files." },
         { "code": "OverrideBeehiveSound",          "type": "boolean", "default": true,   "ingui": "Override Beehive Sound",     "comment": "Override vanilla beehive-wild.ogg with improved version. Requires EnableSoundOverrides." },
+        { "code": "OverrideLightningSound",       "type": "boolean", "default": true,   "ingui": "Override Lightning Sound",   "comment": "Override vanilla lightning-nodistance.ogg with louder version. Requires EnableSoundOverrides." },
 
         { "type": "separator", "title": "Resonator Enhancements" },
         { "code": "EnableResonatorFix",            "type": "boolean", "default": true,   "ingui": "Enable Resonator Fix",       "comment": "Resonator enhancements: pause/resume (Shift+RMB), multi-client sync." },

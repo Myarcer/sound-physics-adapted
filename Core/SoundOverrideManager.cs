@@ -44,6 +44,11 @@ namespace soundphysicsadapted.Core
                 activeOverrides.Add("survival:sounds/creature/beehive-wild");
             }
 
+            if (config.OverrideLightningSound)
+            {
+                activeOverrides.Add("game:sounds/weather/lightning-nodistance");
+            }
+
             if (activeOverrides.Count > 0)
             {
                 api.Logger.Notification($"[SoundPhysicsAdapted] Sound overrides: ENABLED ({activeOverrides.Count} sounds)");

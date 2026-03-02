@@ -375,6 +375,12 @@ namespace soundphysicsadapted
         /// </summary>
         public bool OverrideBeehiveSound { get; set; } = true;
 
+        /// <summary>
+        /// Override vanilla lightning-nodistance.ogg with louder version.
+        /// Requires EnableSoundOverrides=true.
+        /// </summary>
+        public bool OverrideLightningSound { get; set; } = true;
+
         // ============================================================
         // RESONATOR ENHANCEMENTS
         // Improved resonator (music block) functionality.
