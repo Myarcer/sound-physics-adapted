@@ -478,21 +478,21 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Threshold for detecting sounds at the local player entity position.
-        /// VS places entity sounds at body center (entityPos + selectionBox.Y2/2),
-        /// while the listener is at eye position (entityPos + LocalEyePos).
-        /// The typical offset is ~0.8–1.5 blocks. A threshold of 2.0 blocks squared
-        /// covers all stances (standing, crouching, swimming) without catching
-        /// sounds at nearby blocks (block break sounds are 2+ blocks away).
+        /// Tight threshold for matching sound origin to the computed entity-sound position.
+        /// VS computes: entity.Pos.X, entity.Pos.InternalY + SelectionBox.Y2/2, entity.Pos.Z
+        /// We reconstruct that same position and compare — should be near-zero for player sounds.
+        /// 0.25 sq blocks = 0.5 block radius — only catches sounds literally AT the entity.
+        /// Block interactions are 1.5+ blocks away in XZ and won't match.
         /// </summary>
-        private const float PLAYER_POS_DIST_SQ_THRESHOLD = 4.0f; // 2.0 blocks squared
+        private const float PLAYER_ENTITY_DIST_SQ_THRESHOLD = 0.25f;
 
         /// <summary>
-        /// Detect if a sound is positioned at/near the local player entity.
-        /// Used to skip mono downmix for the local player's own sounds (voice, eating, etc.)
-        /// so they play centered without L/R panning.
+        /// Detect if a sound is positioned at the local player entity's computed sound origin.
+        /// VS uses: entity.Pos + (0, SelectionBox.Y2/2, 0) for PlaySoundAt(loc, entity).
+        /// We reconstruct that exact position and check if the sound matches it.
         /// 
-        /// Returns false for trader/NPC/other-player sounds since they'll be at different positions.
+        /// Returns false for trader/NPC/other-player sounds (different entity positions).
+        /// Returns false for block-interaction sounds (positioned at block, not entity).
         /// </summary>
         private static bool IsAtLocalPlayerEntity(SoundParams sparams)
         {
@@ -504,15 +504,26 @@ namespace soundphysicsadapted
             var entityPos = entity.Pos;
             if (entityPos == null) return false;
 
-            // Compare sound position to entity position (feet + half body height is typical)
-            float dx = sparams.Position.X - (float)entityPos.X;
-            float dy = sparams.Position.Y - (float)entityPos.InternalY;
-            float dz = sparams.Position.Z - (float)entityPos.Z;
+            // Reconstruct the exact sound origin VS would compute for PlaySoundAt(loc, entity):
+            //   X = entity.Pos.X
+            //   Y = entity.Pos.InternalY + SelectionBox.Y2/2  (body center)
+            //   Z = entity.Pos.Z
+            float bodyYOffset = 0f;
+            if (entity.SelectionBox != null)
+                bodyYOffset = entity.SelectionBox.Y2 / 2f;
+            else if (entity.Properties?.CollisionBoxSize != null)
+                bodyYOffset = entity.Properties.CollisionBoxSize.Y / 2f;
 
-            // Y offset can be up to ~1.5 blocks (body center vs feet), X/Z typically <0.5
-            // Use a generous threshold to catch all player-origin sounds
+            float expectedX = (float)entityPos.X;
+            float expectedY = (float)entityPos.InternalY + bodyYOffset;
+            float expectedZ = (float)entityPos.Z;
+
+            float dx = sparams.Position.X - expectedX;
+            float dy = sparams.Position.Y - expectedY;
+            float dz = sparams.Position.Z - expectedZ;
+
             float distSq = dx * dx + dy * dy + dz * dz;
-            return distSq < PLAYER_POS_DIST_SQ_THRESHOLD;
+            return distSq < PLAYER_ENTITY_DIST_SQ_THRESHOLD;
         }
 
         /// <summary>
