@@ -272,16 +272,28 @@ namespace soundphysicsadapted
             // Reusable BlockPos for collision box lookups (avoids allocation per block)
             BlockPos collisionCheckPos = new BlockPos(0, 0, 0, 0);
 
-            // WALL-FACE BUG FIX: When a sound source is positioned exactly on a block boundary
-            // (e.g. beehive at block 512057 but VS places sound at x=512058.00),
-            // floor(512058.0) = 512058 = the wall block itself. skipFirst=true would silently
-            // skip the wall and cause occ=0 for player angles that travel along the wall face.
-            // Fix: if the start block is itself solid, do NOT skip it — it IS the occlusion.
-            Block startBlock = blockAccessor.GetBlock(
-                new BlockPos((int)Math.Floor(from.X), (int)Math.Floor(from.Y), (int)Math.Floor(from.Z), 0));
-            bool skipFirstBlock = !BlockClassification.IsSolidForOcclusion(startBlock);
+            // SPAWN-BLOCK FIX: Nudge the ray origin slightly away from the player to ensure
+            // the DDA starts inside the source block, not a neighboring wall.
+            //
+            // VS often positions block interaction sounds exactly on a block boundary
+            // (e.g. dirt break at z=511955.00). floor() lands on the source block itself,
+            // and without this fix, solid source blocks would self-occlude (occ=0.80).
+            //
+            // By nudging 0.01 blocks away from the player (opposite ray direction),
+            // the start cell always becomes the actual source block, which skipFirst
+            // then correctly excludes from occlusion.
+            //
+            // This also handles the old wall-face case correctly:
+            // - Beehive at block 512057, sound at x=512058.00 (wall boundary)
+            // - Nudge moves start to x=512057.99 (beehive block) -> skip beehive
+            // - Wall at block 512058 becomes the SECOND block -> counted as occlusion
+            const double spawnNudge = 0.01;
+            Vec3d nudgedFrom = new Vec3d(
+                from.X - ndx * spawnNudge,
+                from.Y - ndy * spawnNudge,
+                from.Z - ndz * spawnNudge);
 
-            bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
+            bool stopped = DDABlockTraversal.Traverse(nudgedFrom, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
                 if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
@@ -349,7 +361,7 @@ namespace soundphysicsadapted
                 }
 
                 return false; // Continue
-            }, skipFirst: skipFirstBlock);
+            }); // skipFirst defaults to true — source block always skipped
 
             return stopped ? config.MaxOcclusion : occlusionAccumulation;
         }
