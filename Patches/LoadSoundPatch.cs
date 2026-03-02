@@ -440,6 +440,15 @@ namespace soundphysicsadapted
         /// This is the convergence point where BOTH PlaySoundAtInternal and LoadSound paths land.
         /// Swaps stereo AudioData to mono for positional sounds before CreateAudio runs.
         /// 
+        /// IMPORTANT: Sounds at the local player entity position are SKIPPED from mono downmix.
+        /// OpenAL does NOT spatialize stereo sources, so keeping them stereo prevents
+        /// unwanted L/R panning caused by the slight body-center vs eye/camera offset (~1m).
+        /// This affects player voice effects (tuba, saxophone), eating, bow draw, etc.
+        /// Reverb still works on stereo sources via EFX aux sends — only spatialization is skipped.
+        /// 
+        /// Trader/NPC sounds using the same assets (e.g. saxophone.ogg) are at DIFFERENT entity
+        /// positions and will still be mono-downmixed for proper 3D positional audio.
+        /// 
         /// Harmony maps __0 = audiodata (first param). Using ref to allow swapping.
         /// </summary>
         public static void StartPlayingAudioMonoPrefix(ref AudioData __0, SoundParams __1, AssetLocation __2)
@@ -449,12 +458,61 @@ namespace soundphysicsadapted
                 var config = SoundPhysicsAdaptedModSystem.Config;
                 if (config == null || !config.Enabled) return;
 
+                // Skip mono downmix for sounds at/near the local player entity position.
+                // These sounds should stay stereo so OpenAL does NOT spatialize them,
+                // preventing L/R panning artifacts from the body-center vs eye offset.
+                // Reverb and occlusion processing still runs normally downstream.
+                if (IsAtLocalPlayerEntity(__1))
+                {
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"[MonoDownmix] SKIP player-position sound: {__2?.ToShortString() ?? "unknown"} — keeping stereo (no 3D panning)");
+                    return;
+                }
+
                 __0 = MonoDownmixManager.EnsureMono(__0, __1);
             }
             catch (Exception ex)
             {
                 SoundPhysicsAdaptedModSystem.DebugLog($"[MonoDownmix] StartPlayingAudio prefix error: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Threshold for detecting sounds at the local player entity position.
+        /// VS places entity sounds at body center (entityPos + selectionBox.Y2/2),
+        /// while the listener is at eye position (entityPos + LocalEyePos).
+        /// The typical offset is ~0.8–1.5 blocks. A threshold of 2.0 blocks squared
+        /// covers all stances (standing, crouching, swimming) without catching
+        /// sounds at nearby blocks (block break sounds are 2+ blocks away).
+        /// </summary>
+        private const float PLAYER_POS_DIST_SQ_THRESHOLD = 4.0f; // 2.0 blocks squared
+
+        /// <summary>
+        /// Detect if a sound is positioned at/near the local player entity.
+        /// Used to skip mono downmix for the local player's own sounds (voice, eating, etc.)
+        /// so they play centered without L/R panning.
+        /// 
+        /// Returns false for trader/NPC/other-player sounds since they'll be at different positions.
+        /// </summary>
+        private static bool IsAtLocalPlayerEntity(SoundParams sparams)
+        {
+            if (sparams?.Position == null) return false;
+
+            var entity = cachedApi?.World?.Player?.Entity;
+            if (entity == null) return false;
+
+            var entityPos = entity.Pos;
+            if (entityPos == null) return false;
+
+            // Compare sound position to entity position (feet + half body height is typical)
+            float dx = sparams.Position.X - (float)entityPos.X;
+            float dy = sparams.Position.Y - (float)entityPos.InternalY;
+            float dz = sparams.Position.Z - (float)entityPos.Z;
+
+            // Y offset can be up to ~1.5 blocks (body center vs feet), X/Z typically <0.5
+            // Use a generous threshold to catch all player-origin sounds
+            float distSq = dx * dx + dy * dy + dz * dz;
+            return distSq < PLAYER_POS_DIST_SQ_THRESHOLD;
         }
 
         /// <summary>
