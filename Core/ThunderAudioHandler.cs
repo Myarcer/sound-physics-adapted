@@ -1040,8 +1040,13 @@ namespace soundphysicsadapted
             else
             {
                 // Indoor/Enclosed: play as L1 with LPF
-                PlayLayer1Rumble(NODISTANCE, crackVol, 1f, crack.SkyCoverage, crack.OcclusionFactor, crack.NearestRainDistance, gameTimeMs);
-                ThunderDebugLog($"  DELAYED CRACK (indoor): asset={NODISTANCE.Path} baseVol={crackVol:F2} encl={crack.CombinedEnclosure:F2}");
+                // Extra volume reduction for cracks — LPF alone can't sufficiently muffle
+                // a sharp transient like nodistance.ogg. The crack's energy is mostly
+                // below 4kHz where LPF has minimal effect. Apply enclosure-scaled reduction.
+                float crackIndoorScale = 1f - crack.CombinedEnclosure * 0.7f; // At encl=1.0: 0.3x, encl=0.5: 0.65x
+                float adjustedCrackVol = crackVol * crackIndoorScale;
+                PlayLayer1Rumble(NODISTANCE, adjustedCrackVol, 1f, crack.SkyCoverage, crack.OcclusionFactor, crack.NearestRainDistance, gameTimeMs);
+                ThunderDebugLog($"  DELAYED CRACK (indoor): asset={NODISTANCE.Path} baseVol={crackVol:F2} indoorScale={crackIndoorScale:F2} adjVol={adjustedCrackVol:F2} encl={crack.CombinedEnclosure:F2}");
             }
         }
 
