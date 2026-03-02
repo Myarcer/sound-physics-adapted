@@ -65,6 +65,7 @@ namespace soundphysicsadapted
         // Layer 1: Managed one-shot sounds with EFX lowpass
         // We create+start+dispose per event (thunder is infrequent)
         private int layer1FilterId = 0;
+        private int crackFilterId = 0; // Separate, more aggressive LPF for indoor cracks
 
         private bool initialized = false;
         private bool disposed = false;
@@ -163,6 +164,15 @@ namespace soundphysicsadapted
                 if (layer1FilterId > 0)
                 {
                     EfxHelper.ConfigureLowpass(layer1FilterId, 1.0f);
+                }
+
+                // Separate filter for indoor cracks — much more aggressive cutoff
+                // nodistance.ogg is a sharp transient with energy mostly below 4kHz,
+                // so the standard rumble LPF barely affects it. This filter cuts harder.
+                crackFilterId = EfxHelper.GenFilter();
+                if (crackFilterId > 0)
+                {
+                    EfxHelper.ConfigureLowpass(crackFilterId, 1.0f);
                 }
             }
 
@@ -1039,14 +1049,70 @@ namespace soundphysicsadapted
             }
             else
             {
-                // Indoor/Enclosed: play as L1 with LPF
-                // Extra volume reduction for cracks — LPF alone can't sufficiently muffle
-                // a sharp transient like nodistance.ogg. The crack's energy is mostly
-                // below 4kHz where LPF has minimal effect. Apply enclosure-scaled reduction.
-                float crackIndoorScale = 1f - crack.CombinedEnclosure * 0.7f; // At encl=1.0: 0.3x, encl=0.5: 0.65x
-                float adjustedCrackVol = crackVol * crackIndoorScale;
-                PlayLayer1Rumble(NODISTANCE, adjustedCrackVol, 1f, crack.SkyCoverage, crack.OcclusionFactor, crack.NearestRainDistance, gameTimeMs);
-                ThunderDebugLog($"  DELAYED CRACK (indoor): asset={NODISTANCE.Path} baseVol={crackVol:F2} indoorScale={crackIndoorScale:F2} adjVol={adjustedCrackVol:F2} encl={crack.CombinedEnclosure:F2}");
+                // Indoor/Enclosed: play crack with dedicated aggressive LPF.
+                // nodistance.ogg is a sharp transient — standard rumble LPF barely
+                // muffles it because most energy is below 4kHz. Use crackFilterId
+                // with a much lower cutoff (encl=1.0 → ~500Hz vs rumble's ~4200Hz).
+                float crackEnclMod = CalculateThunderVolume(1.0f, crack.SkyCoverage, crack.OcclusionFactor, crack.NearestRainDistance);
+                float crackL1Vol = GameMath.Clamp(crackVol * crackEnclMod, 0f, 1f);
+                if (crackL1Vol < 0.01f) return;
+
+                // Aggressive LPF: use quadratic curve (harsher than cubic for rumbles)
+                // At occl=0.95: gainHF = 1 - 0.9025*(1-0.023) = 0.12 (~2600Hz)
+                // At occl=1.00: gainHF = 0.023 (~500Hz) — heavy muffling
+                float crackOccl = crack.OcclusionFactor;
+                float crackT = crackOccl * crackOccl; // quadratic, harsher than cubic
+                float crackMinGainHF = 500f / 22000f; // ~0.023 = 500Hz floor
+                float crackGainHF = 1f - crackT * (1f - crackMinGainHF);
+                crackGainHF = GameMath.Clamp(crackGainHF, crackMinGainHF, 1f);
+
+                try
+                {
+                    var soundParams = new SoundParams()
+                    {
+                        Location = NODISTANCE,
+                        ShouldLoop = false,
+                        RelativePosition = true,
+                        Position = new Vec3f(0, 0, 0),
+                        DisposeOnFinish = true,
+                        Volume = crackL1Vol,
+                        Pitch = 1f,
+                        Range = 32f,
+                        SoundType = EnumSoundType.Weather
+                    };
+
+                    ILoadedSound sound = capi.World.LoadSound(soundParams);
+                    if (sound != null)
+                    {
+                        // Apply crack-specific LPF before Start()
+                        if (crackFilterId > 0 && EfxHelper.IsAvailable)
+                        {
+                            int sourceId = AudioRenderer.GetSourceId(sound);
+                            if (sourceId > 0)
+                            {
+                                EfxHelper.SetLowpassGainHF(crackFilterId, crackGainHF);
+                                AudioRenderer.AttachFilter(sourceId, crackFilterId);
+                            }
+                        }
+                        sound.Start();
+
+                        // Track for cleanup
+                        activeLayer1Sounds.Add(new ManagedThunderSound
+                        {
+                            Sound = sound,
+                            StartTimeMs = gameTimeMs,
+                            FilterId = crackFilterId,
+                            BaseVolume = crackVol,
+                            NearestRainDist = crack.NearestRainDistance
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ThunderDebugLog($"  DELAYED CRACK (indoor) FAILED: {ex.Message}");
+                }
+
+                ThunderDebugLog($"  DELAYED CRACK (indoor): asset={NODISTANCE.Path} baseVol={crackVol:F2} vol={crackL1Vol:F2} gainHF={crackGainHF:F3} occl={crackOccl:F2} encl={crack.CombinedEnclosure:F2}");
             }
         }
 
@@ -1484,6 +1550,13 @@ namespace soundphysicsadapted
             {
                 EfxHelper.DeleteFilter(layer1FilterId);
                 layer1FilterId = 0;
+            }
+
+            // Clean up crack filter
+            if (crackFilterId > 0)
+            {
+                EfxHelper.DeleteFilter(crackFilterId);
+                crackFilterId = 0;
             }
 
             oneShotPool?.Dispose();
