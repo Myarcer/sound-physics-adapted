@@ -98,6 +98,35 @@ namespace soundphysicsadapted
         public static int ActiveFilterCount => activeFilters.Count;
 
         /// <summary>
+        /// Lightweight check: is the sound still alive (not disposed, weak ref valid)?
+        /// Uses cached isDisposedProperty reflection — no per-call GetProperty overhead.
+        /// Returns false if the sound is disposed or unreachable.
+        /// </summary>
+        private static bool IsSoundAlive(ILoadedSound sound, FilterEntry entry)
+        {
+            try
+            {
+                if (!isDisposedPropertyChecked)
+                {
+                    isDisposedProperty = sound.GetType().GetProperty("IsDisposed");
+                    isDisposedPropertyChecked = true;
+                }
+
+                if (isDisposedProperty != null)
+                {
+                    return !(bool)isDisposedProperty.GetValue(sound);
+                }
+
+                // Fallback: weak reference check
+                return entry.SoundRef.TryGetTarget(out _);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Check if a sound is registered in the active filters pipeline.
         /// </summary>
         public static bool IsRegistered(ILoadedSound sound)
@@ -847,6 +876,9 @@ namespace soundphysicsadapted
             if (!activeFilters.TryGetValue(sound, out var entry)) return;
             if (entry.SourceId <= 0 || entry.CurrentRepositionedPos == null) return;
 
+            // Skip if sound was disposed — prevents OpenAL InvalidName on stale sourceId
+            if (!IsSoundAlive(sound, entry)) return;
+
             try
             {
                 Vec3d pos = entry.CurrentRepositionedPos;
@@ -1076,7 +1108,13 @@ namespace soundphysicsadapted
 
             foreach (var kvp in activeFilters)
             {
+                var sound = kvp.Key;
                 var entry = kvp.Value;
+
+                // Skip disposed/dead sounds — prevents OpenAL InvalidName errors
+                // when DisposeOnFinish sounds are recycled between ticks
+                if (!IsSoundAlive(sound, entry))
+                    continue;
 
                 // === FILTER SMOOTHING (existing) ===
                 // Calculate target with underwater multiplier
@@ -1416,46 +1454,12 @@ namespace soundphysicsadapted
 
             foreach (var kvp in activeFilters)
             {
-                var sound = kvp.Key;
-                var entry = kvp.Value;
-
-                // Check if sound is disposed
-                bool isDisposed = false;
-                try
+                if (!IsSoundAlive(kvp.Key, kvp.Value))
                 {
-                    // OPTIMIZATION: Cache the PropertyInfo lookup (one-time cost)
-                    if (!isDisposedPropertyChecked)
-                    {
-                        isDisposedProperty = sound.GetType().GetProperty("IsDisposed");
-                        isDisposedPropertyChecked = true;
-                    }
-
-                    if (isDisposedProperty != null)
-                    {
-                        isDisposed = (bool)isDisposedProperty.GetValue(sound);
-                    }
-                    else
-                    {
-                        // Try to check via weak reference
-                        if (!entry.SoundRef.TryGetTarget(out _))
-                        {
-                            isDisposed = true;
-                        }
-                    }
-                }
-                catch
-                {
-                    // If we can't access the sound, assume it's disposed
-                    isDisposed = true;
-                }
-
-                if (isDisposed)
-                {
-                    toRemove.Add(sound);
+                    toRemove.Add(kvp.Key);
                 }
             }
 
-            // Remove disposed sounds
             foreach (var sound in toRemove)
             {
                 if (activeFilters.TryRemove(sound, out var entry))
