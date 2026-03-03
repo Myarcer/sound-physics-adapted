@@ -275,7 +275,10 @@ namespace soundphysicsadapted
                 long timeSinceRaycast = currentTimeMs - cache.LastRaycastTimeMs;
                 // New sounds (LastRaycastTimeMs==0) are ALWAYS overdue to ensure immediate processing.
                 // Oneshot sounds like footsteps/impacts must not be deferred or they'll play wrong.
-                bool isOverdue = cache.LastRaycastTimeMs == 0 || timeSinceRaycast >= FORCE_REFRESH_MS;
+                // Boundary sounds use shorter force-refresh (500ms vs 2000ms) so hysteresis
+                // can accumulate ticks fast enough when player stands still at a corner.
+                long effectiveForceRefresh = atBoundary ? 500L : FORCE_REFRESH_MS;
+                bool isOverdue = cache.LastRaycastTimeMs == 0 || timeSinceRaycast >= effectiveForceRefresh;
 
                 if (cache.LastPlayerPos != null && cache.LastSoundPos != null && !isOverdue)
                 {
@@ -643,25 +646,30 @@ namespace soundphysicsadapted
                     //   OPEN + 0 open paths this tick: hold state, skip update (prevents flutter)
                     //   CLOSED mode: don't reposition, use direct occlusion for filter
                     //
-                    // Tuning (at 50ms tick rate):
-                    //   Alpha=0.15: ~400ms EMA convergence. Slow enough that intermittent
-                    //     flickering (open every 3-4 ticks) settles far below ENTER threshold.
-                    //   Enter=0.20: requires consistent open paths (~7 ticks of 0.3+ ratio).
-                    //   Exit=0.05:  requires consistent absence (~11 ticks of 0 ratio).
-                    //   Hysteresis band (0.05-0.20) prevents rapid mode switching.
+                    // Tuning (at 50ms tick rate, 500ms force-refresh for boundary sounds):
+                    //   Alpha=0.20: ~200ms EMA convergence. Fast enough for corner transitions.
+                    //   Enter=0.12: ~3-4 ticks at 0.20+ ratio to enter OPEN.
+                    //   Exit=0.03:  ~7 ticks of pure 0 ratio to exit OPEN.
+                    //   First raycast seeds immediately (rawOpen>0 → OPEN, no warmup).
+                    //   Hysteresis band (0.03-0.12) prevents rapid mode switching.
+                    //   Waterfall flutter (30% of ticks with 0.28 ratio) settles at ~0.084 → below 0.12.
+                    //   Legitimate corner (70% of ticks with 0.22 ratio) settles at ~0.15 → above 0.12.
 
                     int rawOpen = pathResult.Value.PathCount;
                     int rawTotal = pathResult.Value.TotalPathCount;
                     float rawOpenRatio = rawTotal > 0 ? (float)rawOpen / rawTotal : 0f;
 
-                    const float HYSTERESIS_ALPHA = 0.15f;  // Slow EMA (~400ms convergence)
-                    const float HYSTERESIS_ENTER = 0.20f;  // Must be consistently open to enter
-                    const float HYSTERESIS_EXIT = 0.05f;   // Must be consistently closed to exit
+                    const float HYSTERESIS_ALPHA = 0.20f;  // EMA convergence (~200ms)
+                    const float HYSTERESIS_ENTER = 0.12f;  // Enter OPEN: ~3-4 ticks at 0.20+ ratio
+                    const float HYSTERESIS_EXIT = 0.03f;   // Exit OPEN: ~7 ticks of pure 0 ratio
 
                     if (!cache.HysteresisStateSeeded)
                     {
+                        // SEED: Trust first raycast result immediately.
+                        // Hysteresis gates TRANSITIONS, not initial state.
+                        // If first raycast finds open paths, enter OPEN right away.
                         cache.SmoothedOpenRatio = rawOpenRatio;
-                        cache.HysteresisHasOpenPaths = rawOpenRatio >= HYSTERESIS_ENTER;
+                        cache.HysteresisHasOpenPaths = rawOpen > 0;
                         cache.HysteresisStateSeeded = true;
                     }
                     else
