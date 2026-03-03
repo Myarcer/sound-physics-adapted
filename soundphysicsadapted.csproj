@@ -3,15 +3,34 @@
     <TargetFramework>net8.0</TargetFramework>
     <AssemblyName>soundphysicsadapted</AssemblyName>
     <RootNamespace>soundphysicsadapted</RootNamespace>
-    <Version>1.6.1.1</Version>
-    <AssemblyVersion>1.6.1.1</AssemblyVersion>
-    <FileVersion>1.6.1.1</FileVersion>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <OutputPath>bin\$(Configuration)\</OutputPath>
   </PropertyGroup>
+
+  <!-- Read version from modinfo.json (single source of truth) -->
+  <Target Name="ReadModVersion" BeforeTargets="BeforeBuild;Package">
+    <ReadLinesFromFile File="resources\modinfo.json">
+      <Output TaskParameter="Lines" ItemName="ModInfoLines" />
+    </ReadLinesFromFile>
+    <!-- Join all lines into one string -->
+    <CreateProperty Value="@(ModInfoLines, ' ')">
+      <Output TaskParameter="Value" PropertyName="ModInfoContent" />
+    </CreateProperty>
+    <!-- Extract version using regex: matches "version": "x.y.z.w" -->
+    <CreateProperty Value="$([System.Text.RegularExpressions.Regex]::Match($(ModInfoContent), '&quot;version&quot;\s*:\s*&quot;([^&quot;]+)&quot;').Groups[1].Value)">
+      <Output TaskParameter="Value" PropertyName="ModVersion" />
+    </CreateProperty>
+    <PropertyGroup>
+      <Version>$(ModVersion)</Version>
+      <AssemblyVersion>$(ModVersion)</AssemblyVersion>
+      <FileVersion>$(ModVersion)</FileVersion>
+    </PropertyGroup>
+    <Message Text="[ModVersion] Read version $(ModVersion) from modinfo.json" Importance="high" />
+  </Target>
+
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
     <DefineConstants>DEBUG;TRACE</DefineConstants>
@@ -69,7 +88,7 @@
     <None Remove="src\**" />
   </ItemGroup>
 
-  <Target Name="Package" AfterTargets="Build">
+  <Target Name="Package" AfterTargets="Build" DependsOnTargets="ReadModVersion">
     <ItemGroup>
       <ModFiles Include="$(OutputPath)$(AssemblyName).dll" />
     </ItemGroup>
@@ -96,12 +115,12 @@
     <!-- Copy DLL to root -->
     <Copy SourceFiles="@(ModFiles)" DestinationFolder=".modpackage" />
 
-    <!-- Create ZIP -->
-    <ZipDirectory SourceDirectory=".modpackage" DestinationFile="Releases\soundphysicsadapted_v0.1.6.zip" Overwrite="true" />
+    <!-- Create ZIP with version from modinfo.json -->
+    <ZipDirectory SourceDirectory=".modpackage" DestinationFile="Releases\soundphysicsadapted_v$(ModVersion).zip" Overwrite="true" />
     <RemoveDir Directories=".modpackage" />
 
     <!-- Deploy to VS mods folder -->
     <Message Text="Deploying to $(AppData)\VintagestoryData\Mods\..." Importance="high" />
-    <Copy SourceFiles="Releases\soundphysicsadapted_v0.1.6.zip" DestinationFolder="$(AppData)\VintagestoryData\Mods\" />
+    <Copy SourceFiles="Releases\soundphysicsadapted_v$(ModVersion).zip" DestinationFolder="$(AppData)\VintagestoryData\Mods\" />
   </Target>
 </Project>

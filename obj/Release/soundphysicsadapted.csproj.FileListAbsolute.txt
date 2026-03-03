@@ -13,3 +13,5 @@ Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.
 Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.pdb
 Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Release\resources\assets\soundphysicsadapted\config\configlib-patches.json
 Y:\ClaudeWINDOWS\projects\sound-physics-adapted\bin\Release\resources\assets\game\sounds\weather\lightning-nodistance.ogg
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.AssemblyInfoInputs.cache
+Y:\ClaudeWINDOWS\projects\sound-physics-adapted\obj\Release\soundphysicsadapted.AssemblyInfo.cs
