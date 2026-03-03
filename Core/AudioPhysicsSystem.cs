@@ -60,15 +60,6 @@ namespace soundphysicsadapted
             public float LastSharedAirspaceRatio;  // 0 = fully occluded, 1 = full airspace
             public bool NearAcousticBoundary;      // true = treat as close-range priority
 
-            // Path count hysteresis: prevents open/closed path flickering.
-            // When path resolution intermittently finds/loses open paths (waterfall behind
-            // complex terrain), BOTH position and filter swing simultaneously causing
-            // audible flutter. This EMA + hysteresis gate stabilizes the path count
-            // before it reaches position/filter application.
-            public float SmoothedOpenRatio;          // EMA-smoothed ratio of open paths (0-1)
-            public bool HysteresisHasOpenPaths;      // Hysteresis state: true = stable "open paths" mode
-            public bool HysteresisStateSeeded;       // Whether hysteresis has been initialized
-
             // Throttle fade state
             // ThrottleFade: 1.0 = fully active, 0.0 = fully throttled/silent.
             // Steps toward 1 when unthrottled, toward 0 when throttled, using elapsed time.
@@ -275,10 +266,7 @@ namespace soundphysicsadapted
                 long timeSinceRaycast = currentTimeMs - cache.LastRaycastTimeMs;
                 // New sounds (LastRaycastTimeMs==0) are ALWAYS overdue to ensure immediate processing.
                 // Oneshot sounds like footsteps/impacts must not be deferred or they'll play wrong.
-                // Boundary sounds use shorter force-refresh (500ms vs 2000ms) so hysteresis
-                // can accumulate ticks fast enough when player stands still at a corner.
-                long effectiveForceRefresh = atBoundary ? 500L : FORCE_REFRESH_MS;
-                bool isOverdue = cache.LastRaycastTimeMs == 0 || timeSinceRaycast >= effectiveForceRefresh;
+                bool isOverdue = cache.LastRaycastTimeMs == 0 || timeSinceRaycast >= FORCE_REFRESH_MS;
 
                 if (cache.LastPlayerPos != null && cache.LastSoundPos != null && !isOverdue)
                 {
@@ -634,179 +622,105 @@ namespace soundphysicsadapted
                 }
                 else if (pathResult.HasValue)
                 {
-                    // === HYSTERESIS GATE: Stabilize open/closed path flickering ===
-                    // Root cause of waterfall flutter: path resolution intermittently finds/loses
-                    // open paths each tick (open=4 → open=0 → open=2 → open=0). Without gating,
-                    // BOTH position (shift toward opening) AND filter (bOcc drop from 2.0 to 0.8)
-                    // swing simultaneously — compounding the perceptual jump.
-                    //
-                    // Solution: EMA-smoothed open ratio + hysteresis thresholds prevent rapid
-                    // state switching. Three modes:
-                    //   OPEN + open paths this tick: use pathResult normally (reposition + blend)
-                    //   OPEN + 0 open paths this tick: hold state, skip update (prevents flutter)
-                    //   CLOSED mode: don't reposition, use direct occlusion for filter
-                    //
-                    // Tuning (at 50ms tick rate, 500ms force-refresh for boundary sounds):
-                    //   Alpha=0.20: ~200ms EMA convergence. Fast enough for corner transitions.
-                    //   Enter=0.12: ~3-4 ticks at 0.20+ ratio to enter OPEN.
-                    //   Exit=0.03:  ~7 ticks of pure 0 ratio to exit OPEN.
-                    //   First raycast seeds immediately (rawOpen>0 → OPEN, no warmup).
-                    //   Hysteresis band (0.03-0.12) prevents rapid mode switching.
-                    //   Waterfall flutter (30% of ticks with 0.28 ratio) settles at ~0.084 → below 0.12.
-                    //   Legitimate corner (70% of ticks with 0.22 ratio) settles at ~0.15 → above 0.12.
+                    // Occluded: full path resolution with opening probes.
+                    // Position shifts toward openings, LPF uses blended occlusion.
+                    bool applied = AudioRenderer.ApplySoundPath(sound, pathResult.Value, soundPos);
 
-                    int rawOpen = pathResult.Value.PathCount;
-                    int rawTotal = pathResult.Value.TotalPathCount;
-                    float rawOpenRatio = rawTotal > 0 ? (float)rawOpen / rawTotal : 0f;
-
-                    const float HYSTERESIS_ALPHA = 0.20f;  // EMA convergence (~200ms)
-                    const float HYSTERESIS_ENTER = 0.12f;  // Enter OPEN: ~3-4 ticks at 0.20+ ratio
-                    const float HYSTERESIS_EXIT = 0.03f;   // Exit OPEN: ~7 ticks of pure 0 ratio
-
-                    if (!cache.HysteresisStateSeeded)
+                    if (applied)
                     {
-                        // SEED: Trust first raycast result immediately.
-                        // Hysteresis gates TRANSITIONS, not initial state.
-                        // If first raycast finds open paths, enter OPEN right away.
-                        cache.SmoothedOpenRatio = rawOpenRatio;
-                        cache.HysteresisHasOpenPaths = rawOpen > 0;
-                        cache.HysteresisStateSeeded = true;
-                    }
-                    else
-                    {
-                        cache.SmoothedOpenRatio += (rawOpenRatio - cache.SmoothedOpenRatio) * HYSTERESIS_ALPHA;
-                    }
+                        float blendedOcc = (float)pathResult.Value.BlendedOcclusion;
+                        float airspaceRatio = pathResult.Value.SharedAirspaceRatio;
 
-                    // Hysteresis state transitions
-                    bool wasOpen = cache.HysteresisHasOpenPaths;
-                    if (wasOpen && cache.SmoothedOpenRatio < HYSTERESIS_EXIT)
-                        cache.HysteresisHasOpenPaths = false;
-                    else if (!wasOpen && cache.SmoothedOpenRatio > HYSTERESIS_ENTER)
-                        cache.HysteresisHasOpenPaths = true;
+                        // PATH CLARITY: Use open path ratio, not sharedAirspaceRatio.
+                        // sharedAirspaceRatio is from sound-source fibonacci rays (wrong for this).
+                        // Open path ratio comes from actual probe rays that found clear paths.
+                        int openPaths = pathResult.Value.PathCount;
+                        int totalPaths = pathResult.Value.TotalPathCount;
+                        float pathClarity = totalPaths > 0 ? (float)openPaths / totalPaths : 0f;
 
-                    if (cache.HysteresisHasOpenPaths && rawOpen > 0)
-                    {
-                        // OPEN MODE + OPEN PATHS THIS TICK: Full reposition + blended occlusion.
-                        // This is the normal/existing path — pathResult drives position and filter.
-                        bool applied = AudioRenderer.ApplySoundPath(sound, pathResult.Value, soundPos);
+                        // SPR-STYLE FLOOR: Two competing floors, take the MORE FAVORABLE (lower):
+                        // 1. ISSUE 1 FIX: Shared airspace floor (SPR-style) - based on ray success, NOT wall thickness
+                        //    SPR: floor = sqrt(sharedAirspaceRatio) * 0.2
+                        //    Independent of wall thickness - only depends on how many rays found clear paths.
+                        // 2. Clarity floor: Based on path clarity — high clarity = many clear paths
+                        //    Higher clarity → lower floor → allows more recovery.
 
-                        if (applied)
+                        // Shared airspace floor (SPR formula)
+                        float sharedAirspaceFilterFloor = MathF.Sqrt(airspaceRatio) * 0.2f;
+                        sharedAirspaceFilterFloor = Math.Max(sharedAirspaceFilterFloor, 0.01f); // Avoid log(0)
+                        float blockAbsorption = SoundPhysicsAdaptedModSystem.Config?.BlockAbsorption ?? 1.0f;
+                        float sharedAirspaceFloor = -MathF.Log(sharedAirspaceFilterFloor) / blockAbsorption;
+
+                        // Convert clarity floor to occlusion scale
+                        // clarity floor filter = sqrt(pathClarity) * 0.35 (slightly higher than SPR's 0.2)
+                        // Our filter formula: filter = exp(-occ * blockAbsorption)
+                        // So: occ = -ln(filter) / blockAbsorption
+                        float clarityFilterFloor = MathF.Sqrt(pathClarity) * 0.35f;
+                        clarityFilterFloor = Math.Max(clarityFilterFloor, 0.01f); // Avoid log(0)
+                        float clarityOccFloor = -MathF.Log(clarityFilterFloor) / blockAbsorption;
+
+                        // Take the MORE FAVORABLE (lower) ceiling — caps max occlusion
+                        // SPR intent: prevent repositioned sounds from being TOO muffled
+                        float occlusionFloor = Math.Min(sharedAirspaceFloor, clarityOccFloor);
+
+                        if (blendedOcc > occlusionFloor)
                         {
-                            float blendedOcc = (float)pathResult.Value.BlendedOcclusion;
-                            float airspaceRatio = pathResult.Value.SharedAirspaceRatio;
-
-                            int openPaths = pathResult.Value.PathCount;
-                            int totalPaths = pathResult.Value.TotalPathCount;
-                            float pathClarity = totalPaths > 0 ? (float)openPaths / totalPaths : 0f;
-
-                            // SPR-STYLE FLOOR: Two competing floors, take the MORE FAVORABLE (lower).
-                            float sharedAirspaceFilterFloor = MathF.Sqrt(airspaceRatio) * 0.2f;
-                            sharedAirspaceFilterFloor = Math.Max(sharedAirspaceFilterFloor, 0.01f);
-                            float blockAbsorption = SoundPhysicsAdaptedModSystem.Config?.BlockAbsorption ?? 1.0f;
-                            float sharedAirspaceFloor = -MathF.Log(sharedAirspaceFilterFloor) / blockAbsorption;
-
-                            float clarityFilterFloor = MathF.Sqrt(pathClarity) * 0.35f;
-                            clarityFilterFloor = Math.Max(clarityFilterFloor, 0.01f);
-                            float clarityOccFloor = -MathF.Log(clarityFilterFloor) / blockAbsorption;
-
-                            float occlusionFloor = Math.Min(sharedAirspaceFloor, clarityOccFloor);
-                            if (blendedOcc > occlusionFloor)
-                            {
-                                blendedOcc = occlusionFloor;
-                            }
-
-                            cache.LastSharedAirspaceRatio = airspaceRatio;
-                            cache.NearAcousticBoundary = (airspaceRatio > 0.02f && airspaceRatio < 0.5f)
-                                || (airspaceRatio < 0.02f && cache.SmoothedBlendedOcc < 3.0f);
-
-                            // ADAPTIVE EMA SMOOTHING on blended occlusion (existing logic)
-                            float delta = cache.HasSmoothedOcc ? Math.Abs(blendedOcc - cache.SmoothedBlendedOcc) : 0f;
-                            float occSmoothFactor = delta > 3.0f ? 0.70f
-                                                  : delta > 1.5f ? 0.55f
-                                                  : delta > 0.5f ? 0.40f
-                                                  : 0.25f;
-
-                            if (cache.HasSmoothedOcc)
-                            {
-                                cache.SmoothedBlendedOcc += (blendedOcc - cache.SmoothedBlendedOcc) * occSmoothFactor;
-                            }
-                            else
-                            {
-                                cache.SmoothedBlendedOcc = blendedOcc;
-                                cache.HasSmoothedOcc = true;
-                            }
-                            float smoothedOcc = cache.SmoothedBlendedOcc;
-
-                            float pathFilter = smoothedOcc <= 0 ? 1.0f
-                                : OcclusionCalculator.OcclusionToFilter(smoothedOcc);
-
-                            finalFilter = pathFilter;
-
-                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[HYST-OPEN] dOcc={occlusion:F2} bOcc={blendedOcc:F2} smooth={smoothedOcc:F2} filt={pathFilter:F3} " +
-                                $"clarity={pathClarity:P0} air={airspaceRatio:F2} ratio={cache.SmoothedOpenRatio:F3} alpha={occSmoothFactor:F2}" +
-                                $"{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
+                            blendedOcc = occlusionFloor;
                         }
-                    }
-                    else if (cache.HysteresisHasOpenPaths && rawOpen == 0)
-                    {
-                        // OPEN MODE + NO OPEN PATHS THIS TICK: Hold state, skip update.
-                        // Position stays at last target (SmoothAll keeps applying CurrentRepositionedPos).
-                        // Filter stays at SmoothedBlendedOcc from last valid open tick.
-                        // The hysteresis state will exit "open" mode if this persists
-                        // (SmoothedOpenRatio drops below EXIT_THRESHOLD after ~11 ticks = 550ms).
-                        if (cache.HasSmoothedOcc)
-                        {
-                            finalFilter = cache.SmoothedBlendedOcc <= 0 ? 1.0f
-                                : OcclusionCalculator.OcclusionToFilter(cache.SmoothedBlendedOcc);
-                        }
-                        cache.NearAcousticBoundary = true;
 
-                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[HYST-HOLD] rawOpen=0 smoothRatio={cache.SmoothedOpenRatio:F3} " +
-                            $"holding sOcc={cache.SmoothedBlendedOcc:F2} filt={finalFilter:F3}");
-                    }
-                    else
-                    {
-                        // CLOSED MODE: No stable open paths. Don't reposition.
-                        // Use direct occlusion (through-wall value, no open-path benefit).
-                        // Position smoothly returns to original via SmoothAll().
-                        AudioRenderer.ResetSoundPosition(sound, soundPos);
+                        // ACOUSTIC BOUNDARY DETECTION:
+                        // Track shared airspace to detect when player is near the edge between
+                        // "fully occluded" and "shared airspace". Low airspace (0.05-0.5) means
+                        // we're right at a corner/doorway — any step changes everything.
+                        // High airspace (>0.5) = well into shared space, stable.
+                        // Zero airspace = fully behind wall, also stable (until player moves).
+                        // The boundary zone is where it matters most.
+                        cache.LastSharedAirspaceRatio = airspaceRatio;
+                        cache.NearAcousticBoundary = (airspaceRatio > 0.02f && airspaceRatio < 0.5f)
+                            || (airspaceRatio < 0.02f && cache.SmoothedBlendedOcc < 3.0f);
 
-                        float closedOcc = occlusion;
-                        float delta = cache.HasSmoothedOcc ? Math.Abs(closedOcc - cache.SmoothedBlendedOcc) : 0f;
-                        float occSmoothFactor = delta > 3.0f ? 0.55f
-                                              : delta > 1.5f ? 0.40f
-                                              : delta > 0.5f ? 0.30f
-                                              : 0.20f;
+                        // ADAPTIVE EMA SMOOTHING:
+                        // Large changes = crossing acoustic boundary → converge fast
+                        // Small changes = probe ray jitter → smooth heavily (prevent flutter)
+                        //
+                        // Alpha values chosen for 50ms tick rate (boundary sounds):
+                        //   α=0.70 → converges in ~3 ticks (150ms) for huge changes
+                        //   α=0.55 → converges in ~4 ticks (200ms) for big changes
+                        //   α=0.40 → converges in ~5 ticks (250ms) for medium changes
+                        //   α=0.25 → slow convergence for jitter suppression
+                        //
+                        // Capped at 0.70 to prevent single-tick filter jumps that cause
+                        // audible pops (LPF has no internal smoothing in OpenAL).
+                        float delta = cache.HasSmoothedOcc ? Math.Abs(blendedOcc - cache.SmoothedBlendedOcc) : 0f;
+                        float occSmoothFactor = delta > 3.0f ? 0.70f   // huge jump (wall→clear): ~150ms
+                                              : delta > 1.5f ? 0.55f   // big change (rounding corner): ~200ms
+                                              : delta > 0.5f ? 0.40f   // medium change: ~250ms
+                                              : 0.25f;                 // small jitter: smooth
 
                         if (cache.HasSmoothedOcc)
                         {
-                            cache.SmoothedBlendedOcc += (closedOcc - cache.SmoothedBlendedOcc) * occSmoothFactor;
+                            cache.SmoothedBlendedOcc += (blendedOcc - cache.SmoothedBlendedOcc) * occSmoothFactor;
                         }
                         else
                         {
-                            cache.SmoothedBlendedOcc = closedOcc;
+                            cache.SmoothedBlendedOcc = blendedOcc;
                             cache.HasSmoothedOcc = true;
                         }
+                        float smoothedOcc = cache.SmoothedBlendedOcc;
 
-                        finalFilter = cache.SmoothedBlendedOcc <= 0 ? 1.0f
-                            : OcclusionCalculator.OcclusionToFilter(cache.SmoothedBlendedOcc);
+                        float pathFilter = smoothedOcc <= 0 ? 1.0f
+                            : OcclusionCalculator.OcclusionToFilter(smoothedOcc);
 
-                        cache.NearAcousticBoundary = cache.SmoothedOpenRatio > 0.02f;
+                        finalFilter = pathFilter;
 
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[HYST-CLOSED] ratio={cache.SmoothedOpenRatio:F3} dOcc={occlusion:F2} " +
-                            $"sOcc={cache.SmoothedBlendedOcc:F2} filt={finalFilter:F3}");
+                            $"[4B-LPF] dOcc={occlusion:F2} bOcc={blendedOcc:F2} smooth={smoothedOcc:F2} filt={pathFilter:F3} clarity={pathClarity:P0} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
                     }
 
-                    // Path offset logging (always, regardless of hysteresis mode)
                     if (updatedThisTick == 0 && pathResult.Value.RepositionOffset > 0.1)
                     {
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[4B-Path] off={pathResult.Value.RepositionOffset:F1}m bOcc={pathResult.Value.BlendedOcclusion:F2} " +
-                            $"paths={pathResult.Value.PathCount}/{pathResult.Value.TotalPathCount} perm={pathResult.Value.PermeatedPathCount} " +
-                            $"hyst={( cache.HysteresisHasOpenPaths ? "OPEN" : "CLOSED" )}");
+                            $"[4B-Path] off={pathResult.Value.RepositionOffset:F1}m bOcc={pathResult.Value.BlendedOcclusion:F2} paths={pathResult.Value.PathCount}/{pathResult.Value.TotalPathCount} perm={pathResult.Value.PermeatedPathCount}");
                     }
                 }
                 else
