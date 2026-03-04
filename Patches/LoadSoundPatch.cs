@@ -1023,14 +1023,18 @@ namespace soundphysicsadapted
                 // with recycled sourceIds that might still be playing other sounds
                 AudioRenderer.DetachGlobalFilter(sourceId);
 
-                // DEFERRED PROCESSING: Never raycast in Start() callback.
-                // During multiplayer world join, VS calls Start() on hundreds of sounds
-                // synchronously on the main thread. If each one runs 9 DDA occlusion rays
-                // + 128 reverb raycasts, the accumulated time freezes the client.
-                // Instead: register with neutral filter (1.0 = no occlusion), and let
-                // AudioPhysicsSystem.Update() handle raycasting on its 50ms tick with
-                // budget limits (max 25+6 sounds per tick).
-                ApplyLowPassFilter(loadedSound, 1.0f, null, soundName);
+                // During world loading (before LevelFinalize + warmup), register with
+                // neutral filter only. The tick system will handle raycasting later.
+                // After world is ready, apply immediate occlusion for responsive audio.
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady)
+                {
+                    ApplyLowPassFilter(loadedSound, 1.0f, null, soundName);
+                }
+                else
+                {
+                    // World is ready — apply immediate occlusion for this sound
+                    ApplyOcclusion(loadedSound, position, soundName);
+                }
             }
             catch (Exception ex)
             {
@@ -1070,9 +1074,33 @@ namespace soundphysicsadapted
                     AudioRenderer.ReattachFilter(loadedSound);
                 }
 
-                // DEFERRED PROCESSING: Reverb is handled by AudioPhysicsSystem.Update()
-                // on the tick cycle. Never raycast in Start() callback — see SoundStartPrefix
-                // comment for full rationale.
+                // Apply reverb only after world is fully loaded and warmed up.
+                // During loading, tick system will handle reverb with budget limits.
+                if (SoundPhysicsAdaptedModSystem.IsWorldReady && config.EnableCustomReverb)
+                {
+                    if (cachedBlockAccessor == null)
+                        cachedBlockAccessor = cachedApi?.World?.BlockAccessor;
+
+                    if (cachedBlockAccessor != null && cachedApi?.World?.Player?.Entity != null)
+                    {
+                        var player = cachedApi.World.Player.Entity;
+                        Vec3d playerPos = player.Pos.XYZ.Add(player.LocalEyePos);
+
+                        var soundParams = loadedSound.Params;
+                        Vec3f pos = soundParams?.Position;
+                        bool hasPosition = pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0);
+
+                        if (hasPosition)
+                        {
+                            Vec3d soundPosD = new Vec3d(pos.X, pos.Y, pos.Z);
+                            ApplyReverb(loadedSound, soundPosD, playerPos, cachedBlockAccessor);
+                        }
+                        else
+                        {
+                            ApplyReverb(loadedSound, playerPos, playerPos, cachedBlockAccessor);
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {

@@ -617,7 +617,7 @@ namespace soundphysicsadapted
         /// </summary>
         private void OnOcclusionUpdateTick(float dt)
         {
-            if (!config.Enabled || !_worldReady || clientApi?.World?.Player?.Entity == null)
+            if (!config.Enabled || !IsWorldReady || clientApi?.World?.Player?.Entity == null)
                 return;
 
             // Always update underwater state
