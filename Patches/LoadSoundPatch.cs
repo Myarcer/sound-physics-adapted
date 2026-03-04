@@ -1369,6 +1369,10 @@ namespace soundphysicsadapted
         private static HashSet<int> registeredSourceIds = new HashSet<int>();
         private static object sourceTrackLock = new object();
 
+        // FREEZE DIAGNOSTIC: Track HandleSourcePlay call frequency
+        private static int _diagHookCallCount = 0;
+        private static int _diagHookUntrackedCount = 0;
+
         // Cached reflection for attaching filter in hook
         private static MethodInfo alSourceMethod_Hook;
         private static object efxDirectFilterValue_Hook;
@@ -1544,6 +1548,9 @@ namespace soundphysicsadapted
         {
             try
             {
+                // FREEZE DIAGNOSTIC: Count every call
+                System.Threading.Interlocked.Increment(ref _diagHookCallCount);
+
                 // Track this sourceId as "actually played"
                 lock (sourceTrackLock)
                 {
@@ -1562,6 +1569,11 @@ namespace soundphysicsadapted
                         // Attach filter RIGHT before play - most reliable timing possible
                         alSourceMethod_Hook.Invoke(null, new object[] { sid, efxDirectFilterValue_Hook, filterId });
                     }
+                }
+                else
+                {
+                    // FREEZE DIAGNOSTIC: Track untracked source plays (e.g. altoflute retry loop)
+                    System.Threading.Interlocked.Increment(ref _diagHookUntrackedCount);
                 }
             }
             catch (Exception ex)
@@ -1670,6 +1682,23 @@ namespace soundphysicsadapted
 
                 return $"Registered={tracked}, Played={played}, UntrackedPlays={untracked}";
             }
+        }
+
+        /// <summary>
+        /// FREEZE DIAGNOSTIC: Get and reset hook call count since last query.
+        /// </summary>
+        public static int DiagGetAndResetHookCount()
+        {
+            return System.Threading.Interlocked.Exchange(ref _diagHookCallCount, 0);
+        }
+
+        /// <summary>
+        /// FREEZE DIAGNOSTIC: Get and reset untracked source play count since last query.
+        /// High values here indicate VS retry loops (e.g. altoflute.ogg InvalidValue).
+        /// </summary>
+        public static int DiagGetAndResetUntrackedCount()
+        {
+            return System.Threading.Interlocked.Exchange(ref _diagHookUntrackedCount, 0);
         }
 
         #endregion
