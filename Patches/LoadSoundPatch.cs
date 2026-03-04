@@ -1023,22 +1023,14 @@ namespace soundphysicsadapted
                 // with recycled sourceIds that might still be playing other sounds
                 AudioRenderer.DetachGlobalFilter(sourceId);
 
-                // WORLD-JOIN GUARD: Skip heavy raycasting until world is fully loaded.
-                // During multiplayer world join, the block accessor is incomplete — DDA raycasts
-                // take 100+ seconds and freeze the client. player != null is NOT sufficient;
-                // the entity exists before chunks finish loading.
-                // Register sound with neutral filter (1.0) - AudioPhysicsSystem tick will
-                // pick it up and calculate proper occlusion once world is ready.
-                if (!SoundPhysicsAdaptedModSystem.IsWorldReady)
-                {
-                    // Still register with neutral filter so HandleSourcePlay can find it
-                    ApplyLowPassFilter(loadedSound, 1.0f, null, soundName);
-                    return;
-                }
-
-                // Apply occlusion BEFORE Start() calls AL.SourcePlay()
-                // This ensures the filter is attached before any samples play
-                ApplyOcclusion(loadedSound, position, soundName);
+                // DEFERRED PROCESSING: Never raycast in Start() callback.
+                // During multiplayer world join, VS calls Start() on hundreds of sounds
+                // synchronously on the main thread. If each one runs 9 DDA occlusion rays
+                // + 128 reverb raycasts, the accumulated time freezes the client.
+                // Instead: register with neutral filter (1.0 = no occlusion), and let
+                // AudioPhysicsSystem.Update() handle raycasting on its 50ms tick with
+                // budget limits (max 25+6 sounds per tick).
+                ApplyLowPassFilter(loadedSound, 1.0f, null, soundName);
             }
             catch (Exception ex)
             {
@@ -1078,47 +1070,9 @@ namespace soundphysicsadapted
                     AudioRenderer.ReattachFilter(loadedSound);
                 }
 
-                // WORLD-JOIN GUARD: Skip reverb raycasting until world is fully loaded.
-                // AcousticRaytracer.Calculate fires 32 rays with 4 bounces each (128+ DDA raycasts)
-                // per sound. During mass sound loading on world join this would freeze the client.
-                // AudioPhysicsSystem will calculate reverb on its normal tick cycle.
-                if (!SoundPhysicsAdaptedModSystem.IsWorldReady)
-                {
-                    return;
-                }
-
-                // CRITICAL: Apply reverb AFTER source is playing!
-                // Aux sends can only be connected to sources in AL_PLAYING state
-                if (config.EnableCustomReverb)
-                {
-                    if (cachedBlockAccessor == null)
-                        cachedBlockAccessor = cachedApi?.World?.BlockAccessor;
-
-                    if (cachedBlockAccessor != null && cachedApi?.World?.Player?.Entity != null)
-                    {
-                        var player = cachedApi.World.Player.Entity;
-                        Vec3d playerPos = player.Pos.XYZ.Add(player.LocalEyePos);
-
-                        var soundParams = loadedSound.Params;
-                        Vec3f pos = soundParams?.Position;
-
-                        // Check if sound has a valid world position
-                        bool hasPosition = pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0);
-
-                        if (hasPosition)
-                        {
-                            // Positional sound - use actual position
-                            Vec3d soundPosD = new Vec3d(pos.X, pos.Y, pos.Z);
-                            ApplyReverb(loadedSound, soundPosD, playerPos, cachedBlockAccessor);
-                        }
-                        else
-                        {
-                            // NON-POSITIONAL SOUND (block breaking, tool use, etc.)
-                            // Treat as if sound is at player position - matches vanilla reverb behavior
-                            ApplyReverb(loadedSound, playerPos, playerPos, cachedBlockAccessor);
-                        }
-                    }
-                }
+                // DEFERRED PROCESSING: Reverb is handled by AudioPhysicsSystem.Update()
+                // on the tick cycle. Never raycast in Start() callback — see SoundStartPrefix
+                // comment for full rationale.
             }
             catch (Exception ex)
             {

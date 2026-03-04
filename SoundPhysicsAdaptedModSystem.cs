@@ -55,7 +55,9 @@ namespace soundphysicsadapted
         // before the world is fully loaded. Without this, DDA raycasts against an
         // incomplete block accessor take 100+ seconds and freeze the client.
         private static bool _worldReady = false;
-        public static bool IsWorldReady => _worldReady;
+        private static int _warmupTicksRemaining = 0;
+        private const int WARMUP_TICKS = 100; // ~2.5s of real game frames (100 * 25ms)
+        public static bool IsWorldReady => _worldReady && _warmupTicksRemaining <= 0;
 
         // === FREEZE DIAGNOSTIC: Heartbeat + timing infrastructure ===
         private static Stopwatch _diagStopwatch = new Stopwatch();
@@ -499,8 +501,9 @@ namespace soundphysicsadapted
             api.Event.LevelFinalize += () =>
             {
                 _worldReady = true;
-                DiagnosticLog("WORLD-READY: LevelFinalize fired. Tick handlers and raycasting now enabled.");
-                api.Logger.Notification("[SoundPhysicsAdapted] World ready — occlusion/reverb processing enabled");
+                _warmupTicksRemaining = WARMUP_TICKS;
+                DiagnosticLog($"WORLD-READY: LevelFinalize fired. Warming up for {WARMUP_TICKS} ticks before enabling raycasting.");
+                api.Logger.Notification("[SoundPhysicsAdapted] World ready — warmup started, raycasting deferred");
             };
 
             // Phase 3: Initialize reverb effect system
@@ -559,6 +562,19 @@ namespace soundphysicsadapted
         {
             if (!config.Enabled || !AudioRenderer.IsInitialized)
                 return;
+
+            // Warmup countdown: burns down after LevelFinalize, ensures game loop is
+            // actually ticking before we start raycasting. Prevents freeze when
+            // hundreds of async-loaded sounds trigger Start() during the first few frames.
+            if (_warmupTicksRemaining > 0)
+            {
+                _warmupTicksRemaining--;
+                if (_warmupTicksRemaining == 0)
+                {
+                    DiagnosticLog("WARMUP-DONE: Raycasting now enabled.");
+                    clientApi?.Logger.Notification("[SoundPhysicsAdapted] Warmup complete — occlusion/reverb processing enabled");
+                }
+            }
 
             // FREEZE DIAGNOSTIC: Track frame intervals via this 25ms tick
             if (_diagFpsStopwatch.IsRunning)
@@ -928,6 +944,7 @@ namespace soundphysicsadapted
 
             // Reset world readiness
             _worldReady = false;
+            _warmupTicksRemaining = 0;
 
             // Dispose AudioPhysicsSystem
             acousticsManager?.Dispose();
