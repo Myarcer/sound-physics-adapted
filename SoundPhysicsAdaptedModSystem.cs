@@ -50,6 +50,13 @@ namespace soundphysicsadapted
         private static WeatherAudioManager weatherManager;
         private long weatherTimerId = 0;
 
+        // === WORLD READINESS GATE ===
+        // Prevents tick handlers and Harmony patches from running expensive raycasts
+        // before the world is fully loaded. Without this, DDA raycasts against an
+        // incomplete block accessor take 100+ seconds and freeze the client.
+        private static bool _worldReady = false;
+        public static bool IsWorldReady => _worldReady;
+
         // === FREEZE DIAGNOSTIC: Heartbeat + timing infrastructure ===
         private static Stopwatch _diagStopwatch = new Stopwatch();
         private static long _diagHeartbeatCounter = 0;
@@ -486,6 +493,16 @@ namespace soundphysicsadapted
                 api.Logger.Debug("[SoundPhysicsAdapted] Hooked BlockChanged event");
             }
 
+            // WORLD READINESS: Defer all heavy processing until LevelFinalize.
+            // The block accessor is incomplete/slow before this fires, causing 100s+ freezes
+            // in DDA raycasts. player != null is NOT sufficient — entity exists before chunks load.
+            api.Event.LevelFinalize += () =>
+            {
+                _worldReady = true;
+                DiagnosticLog("WORLD-READY: LevelFinalize fired. Tick handlers and raycasting now enabled.");
+                api.Logger.Notification("[SoundPhysicsAdapted] World ready — occlusion/reverb processing enabled");
+            };
+
             // Phase 3: Initialize reverb effect system
             if (config.EnableCustomReverb)
             {
@@ -584,7 +601,7 @@ namespace soundphysicsadapted
         /// </summary>
         private void OnOcclusionUpdateTick(float dt)
         {
-            if (!config.Enabled || clientApi?.World?.Player?.Entity == null)
+            if (!config.Enabled || !_worldReady || clientApi?.World?.Player?.Entity == null)
                 return;
 
             // Always update underwater state
@@ -908,6 +925,9 @@ namespace soundphysicsadapted
 
                 clientApi.Event.BlockChanged -= OnBlockChanged;
             }
+
+            // Reset world readiness
+            _worldReady = false;
 
             // Dispose AudioPhysicsSystem
             acousticsManager?.Dispose();

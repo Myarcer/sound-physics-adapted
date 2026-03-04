@@ -1023,14 +1023,13 @@ namespace soundphysicsadapted
                 // with recycled sourceIds that might still be playing other sounds
                 AudioRenderer.DetachGlobalFilter(sourceId);
 
-                // WORLD-JOIN GUARD: If player entity isn't ready yet, skip heavy raycasting.
-                // During multiplayer world join, dozens of sounds start before the player entity
-                // exists. Running occlusion raycasts (9 DDA rays each) for all of them
-                // synchronously on the main thread causes a hard freeze.
+                // WORLD-JOIN GUARD: Skip heavy raycasting until world is fully loaded.
+                // During multiplayer world join, the block accessor is incomplete — DDA raycasts
+                // take 100+ seconds and freeze the client. player != null is NOT sufficient;
+                // the entity exists before chunks finish loading.
                 // Register sound with neutral filter (1.0) - AudioPhysicsSystem tick will
-                // pick it up and calculate proper occlusion once player is ready.
-                var player = cachedApi.World?.Player?.Entity;
-                if (player == null)
+                // pick it up and calculate proper occlusion once world is ready.
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady)
                 {
                     // Still register with neutral filter so HandleSourcePlay can find it
                     ApplyLowPassFilter(loadedSound, 1.0f, null, soundName);
@@ -1079,11 +1078,11 @@ namespace soundphysicsadapted
                     AudioRenderer.ReattachFilter(loadedSound);
                 }
 
-                // WORLD-JOIN GUARD: Skip reverb raycasting if player entity not ready.
+                // WORLD-JOIN GUARD: Skip reverb raycasting until world is fully loaded.
                 // AcousticRaytracer.Calculate fires 32 rays with 4 bounces each (128+ DDA raycasts)
                 // per sound. During mass sound loading on world join this would freeze the client.
                 // AudioPhysicsSystem will calculate reverb on its normal tick cycle.
-                if (cachedApi?.World?.Player?.Entity == null)
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady)
                 {
                     return;
                 }
