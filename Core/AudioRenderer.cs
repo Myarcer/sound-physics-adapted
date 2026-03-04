@@ -76,6 +76,12 @@ namespace soundphysicsadapted
         private static ConcurrentDictionary<ILoadedSound, FilterEntry> activeFilters
             = new ConcurrentDictionary<ILoadedSound, FilterEntry>();
 
+        // OPTIMIZATION: Reverse lookup from sourceId -> sound for O(1) lookups in HandleSourcePlay
+        // Without this, IsSourceTracked/GetFilterForSource iterate the entire activeFilters dict (O(n))
+        // which causes O(n²) during world join when hundreds of sounds start simultaneously
+        private static ConcurrentDictionary<int, ILoadedSound> sourceIdToSound
+            = new ConcurrentDictionary<int, ILoadedSound>();
+
         // Reflection for getting sourceId from LoadedSoundNative
         private static FieldInfo sourceIdField;
         private static Type loadedSoundNativeType;
@@ -366,13 +372,14 @@ namespace soundphysicsadapted
                 // correct AL position with the old entry's stale repositioned position.
                 // This caused intermittent panning bugs (thud sounds playing from
                 // grasshopper's repositioned position because they shared a sourceId).
-                foreach (var kvp in activeFilters)
+                // Use reverse lookup for O(1) instead of iterating all activeFilters
+                if (sourceIdToSound.TryGetValue(sourceId, out var oldSound) && oldSound != sound)
                 {
-                    if (kvp.Value.SourceId == sourceId && kvp.Key != sound)
+                    if (activeFilters.TryGetValue(oldSound, out var oldEntry))
                     {
-                        kvp.Value.CurrentRepositionedPos = null;
-                        kvp.Value.TargetRepositionedPos = null;
-                        kvp.Value.OriginalSoundPos = null;
+                        oldEntry.CurrentRepositionedPos = null;
+                        oldEntry.TargetRepositionedPos = null;
+                        oldEntry.OriginalSoundPos = null;
                     }
                 }
 
@@ -388,6 +395,7 @@ namespace soundphysicsadapted
                 };
 
                 activeFilters[sound] = entry;
+                sourceIdToSound[sourceId] = sound;
                 totalFiltersCreated++;
 
 
@@ -1419,6 +1427,12 @@ namespace soundphysicsadapted
         {
             try
             {
+                // Remove from reverse lookup map
+                if (entry.SourceId > 0)
+                {
+                    sourceIdToSound.TryRemove(entry.SourceId, out _);
+                }
+
                 // DO NOT detach filter from source!
                 // The sourceId may have been recycled for a new sound.
                 // Detaching here would remove the filter from that new sound.
@@ -1479,6 +1493,7 @@ namespace soundphysicsadapted
                 CleanupEntry(kvp.Value);
             }
             activeFilters.Clear();
+            sourceIdToSound.Clear();
 
             SoundPhysicsAdaptedModSystem.Log(
                 $"[SoundFilterManager] Disposed. Created={totalFiltersCreated}, Deleted={totalFiltersDeleted}");
@@ -1506,12 +1521,7 @@ namespace soundphysicsadapted
             if (!IsInitialized || sourceId <= 0)
                 return false;
 
-            foreach (var kvp in activeFilters)
-            {
-                if (kvp.Value.SourceId == sourceId)
-                    return true;
-            }
-            return false;
+            return sourceIdToSound.ContainsKey(sourceId);
         }
 
         /// <summary>
@@ -1523,10 +1533,10 @@ namespace soundphysicsadapted
             if (!IsInitialized || sourceId <= 0)
                 return 0;
 
-            foreach (var kvp in activeFilters)
+            if (sourceIdToSound.TryGetValue(sourceId, out var sound))
             {
-                if (kvp.Value.SourceId == sourceId)
-                    return kvp.Value.FilterId;
+                if (activeFilters.TryGetValue(sound, out var entry))
+                    return entry.FilterId;
             }
             return 0;
         }
