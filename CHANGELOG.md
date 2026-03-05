@@ -20,6 +20,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Solid-face fast path now correctly skipped for open interactable blocks
 - Reverb and occlusion deferred during world load instead of applied immediately
 
+## [0.1.6.1] - 2026-03-02
+
+### Fixed
+- Resonator state not saving to chunk on server (ToTreeAttributes/FromTreeAttributes patches now applied server-side)
+- Client-server desync when only client has mod installed
+- Carry On mod detection missing on server side
+- Tooltip now shows correct key binding based on Carry On presence
+
+## [0.1.6] - 2026-03-02
+
+### Added
+- Thunder & lightning overhaul: dedicated enclosure system, 1000-block range with realistic falloff
+- Rumble volume variety (0.2–1.0x RNG), indoor cracks muffled with aggressive LPF (500Hz floor)
+- Thunder distance thresholds rescaled to match bolt distribution, raised source limits (L1:12, L2:20)
+- March-along probe rays for cave exit detection, player-centric DDA heights for weather below player
+- SoundSourceAdjuster for door Y-position correction and multiblock placeholder resolution
+- Rain position averaging across nearest 9 columns instead of single nearest
+- Config migration system for seamless upgrades between versions
+- ConfigLib integration for optional in-game settings GUI
+
+### Fixed
+- Sounds at player position losing stereo (no longer forced to mono downmix)
+- Spawn-time position fingerprinting prevents self-occlusion on player-emitted sounds
+- Per-sound range used for reverb attenuation (removed MaxSoundDistance hard gate)
+- Occlusion floor/ceiling inversion that made repositioned sounds too muffled
+- Music pitch getting stuck after exiting water
+
+### Changed
+- Tuned adaptive EMA for more realistic acoustic transitions
+
+## [0.1.5] - 2026-02-25
+
+### Added
+- Reverb cache redesign with composite key (soundCell + playerCell) — auto-invalidates on player movement
+- Close sounds use 2-block player cells (responsive), far sounds use 8-block cells (stable)
+- Acoustic boundary detection via SharedAirspaceRatio — sounds near corners/doorways get every-tick updates
+
+### Changed
+- Adaptive EMA smoothing scales alpha by change magnitude (large: 0.70/150ms, medium: 0.55/200ms, small: 0.25)
+- Corner transitions reduced from ~1s to ~300ms with no discontinuities
+
+### Fixed
+- Filter discontinuity when sound crossed occ<1.0 threshold into skipRepositioning branch
+- Capped max EMA alpha at 0.70 to prevent single-tick LPF pops
+
 ## [0.1.4] - 2026-02-22
 
 ### Added
