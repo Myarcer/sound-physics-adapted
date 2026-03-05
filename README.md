@@ -37,17 +37,6 @@ Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the 
 
 ---
 
-## What's New in 0.1.7
-
-- **Medieval Expansion compatibility** — Doors, gates, and multi-block structures from Medieval Expansion now work correctly with sound occlusion and weather detection
-- **Thunder realism** — Speed-of-sound delay, 1000-block range, natural distance falloff, and rumble variety
-- **Multiplayer stability** — Fixed freezes when joining servers and server-side sync issues
-- **Smoother audio** — Acoustic boundary detection, adaptive smoothing, and reduced jitter
-- **Better reverb** — Through-wall reverb is now muffled instead of silent, redesigned cache system
-- **ConfigLib support** — If you have ConfigLib installed, tweak settings from an in-game GUI
-
----
-
 ## Install
 
 1. Download the latest `.zip` from [Releases](https://github.com/Myarcer/sound-physics-adapted/releases)
