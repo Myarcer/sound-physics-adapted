@@ -86,8 +86,8 @@ namespace soundphysicsadapted
                 return adjusted;
             }
 
-            // Debug: log door blocks that didn't need shifting (height <= 1, e.g. trapdoors)
-            if (code.Contains("door"))
+            // Debug: log door/gate blocks that didn't need shifting (height <= 1, e.g. trapdoors)
+            if (code.Contains("door") || code.Contains("gate") || code.Contains("portcullis"))
             {
                 int height = block.Attributes?["height"]?.AsInt(0) ?? 0;
                 SoundPhysicsAdaptedModSystem.DebugLog(
@@ -191,10 +191,10 @@ namespace soundphysicsadapted
             string code = block.Code?.Path;
             if (code == null) return 0f;
 
-            // Match door blocks: "door-*", "roughhewndoor-*", gate blocks, etc.
-            // Also matches "cokeovendoor", "dvnum-door-*" (mod doors)
+            // Match door/gate blocks: "door-*", "roughhewndoor-*", "gate3x3", etc.
+            // Also matches "cokeovendoor", "dvnum-door-*" (mod doors), modded gates
             // Excludes trapdoors implicitly via height check (trapdoors have height=1)
-            if (!code.Contains("door")) return 0f;
+            if (!code.Contains("door") && !code.Contains("gate") && !code.Contains("portcullis")) return 0f;
 
             // Read the height attribute — VS doors define this in block JSON.
             // Standard doors: height=2, large/castle doors: height=3+

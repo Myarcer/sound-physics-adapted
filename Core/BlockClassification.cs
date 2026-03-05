@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 
@@ -35,6 +36,10 @@ namespace soundphysicsadapted
         // 0 = not cached, 1 = is interactable, 2 = is NOT interactable
         private static readonly byte[] isWeatherInteractableCache = new byte[BLOCK_CACHE_SIZE];
 
+        // Cache for IsOpenInteractable (door/gate in opened state — skip collision)
+        // 0 = not cached, 1 = is open interactable, 2 = is NOT
+        private static readonly byte[] isOpenInteractableCache = new byte[BLOCK_CACHE_SIZE];
+
         /// <summary>
         /// Clear all block caches. Call when config reloads or materials change.
         /// </summary>
@@ -44,6 +49,7 @@ namespace soundphysicsadapted
             Array.Clear(treatAsFullCubeCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(hasMultipleSolidFacesCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isWeatherInteractableCache, 0, BLOCK_CACHE_SIZE);
+            Array.Clear(isOpenInteractableCache, 0, BLOCK_CACHE_SIZE);
             cachedOcclusionPerSolidBlock = -1f;
         }
 
@@ -276,10 +282,61 @@ namespace soundphysicsadapted
 
         private static bool CheckWeatherInteractable(Block block)
         {
+            // --- Behavior check (universal, works for ALL mods) ---
+            // Any block using VS door/trapdoor mechanics will have these behaviors.
+            var behaviors = block.BlockBehaviors;
+            if (behaviors != null && behaviors.Length > 0)
+            {
+                for (int i = 0; i < behaviors.Length; i++)
+                {
+                    string typeName = behaviors[i].GetType().Name;
+                    if (typeName == "BlockBehaviorDoor" || typeName == "BlockBehaviorTrapDoor")
+                        return true;
+                }
+            }
+
+            // --- Fallback: block code substring check ---
+            // Catches edge cases where mods don't use standard behaviors
+            // but follow naming conventions (e.g. "gate3x3", "portcullis").
             string path = block.Code?.Path;
             if (path == null) return false;
-            // Matches "door-roughhewn-closed-north", "trapdoor-aged-opened-up", etc.
-            return path.StartsWith("door-") || path.StartsWith("trapdoor-");
+
+            return path.Contains("door") || path.Contains("gate") || path.Contains("portcullis");
+        }
+
+        /// <summary>
+        /// Check if a door/gate/trapdoor block is in the opened state.
+        /// Modded multi-block gates (e.g., Medieval Expansion) use "spacer" blocks
+        /// that retain collision boxes even when the gate is opened. This check lets
+        /// the DDA skip collision testing and treat them as pass-through.
+        /// Cached per block ID (each opened/closed variant has a unique ID).
+        /// </summary>
+        public static bool IsOpenInteractable(Block block)
+        {
+            if (block == null) return false;
+
+            int blockId = block.Id;
+            if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
+            {
+                byte cached = isOpenInteractableCache[blockId];
+                if (cached != 0)
+                    return cached == 1;
+
+                bool result = CheckOpenInteractable(block);
+                isOpenInteractableCache[blockId] = result ? (byte)1 : (byte)2;
+                return result;
+            }
+
+            return CheckOpenInteractable(block);
+        }
+
+        private static bool CheckOpenInteractable(Block block)
+        {
+            if (!IsWeatherInteractable(block)) return false;
+            string path = block.Code?.Path;
+            if (path == null) return false;
+            // VS door/gate variants encode state: "door-oak-opened-north", "gate3x3-spacer-oak-opened-north"
+            return path.Contains("opened") || path.Contains("-open-");
         }
 
         /// <summary>

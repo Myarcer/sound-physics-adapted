@@ -504,11 +504,16 @@ namespace soundphysicsadapted
                     ctx.DirectCount++;
                     ctx.DirectWeight += candidate.Weight;
 
+                    double skyOpeningY = result.BestEntryPoint == null
+                        ? InferCeilingHeight(candidate.WorldX, candidate.WorldZ, candidate.RainY, ctx.BlockAccessor)
+                        : double.NaN;
+
                     if (ctx.DebugWeather)
                     {
                         WeatherAudioManager.WeatherDebugLog(
                             $"  CAND[{i}] ({candidate.WorldX},{candidate.WorldZ}) rainY={candidate.RainY} dist={candidate.HorizontalDist:F1} " +
-                            $"DIRECT: bestOccl={result.BestOcclusion:F2} < {effectiveThreshold:F2}{(alreadyCached ? " (hysteresis)" : "")}");
+                            $"DIRECT: bestOccl={result.BestOcclusion:F2} < {effectiveThreshold:F2}{(alreadyCached ? " (hysteresis)" : "")}" +
+                            $" entry={(result.BestEntryPoint != null ? result.BestEntryPoint.Y.ToString("F0") : "null")} skyOpeningY={skyOpeningY:F0}");
                     }
 
                     ctx.FreshVerified.Add(new VerifiedRainPosition
@@ -518,11 +523,20 @@ namespace soundphysicsadapted
                         Occlusion = result.BestOcclusion + result.BestInteractableOcclusion,
                         Distance = (float)result.BestRainPos.DistanceTo(ctx.PlayerEarPos),
                         ColumnX = candidate.WorldX,
-                        ColumnZ = candidate.WorldZ
+                        ColumnZ = candidate.WorldZ,
+                        SkyOpeningY = skyOpeningY
                     });
 
                     ctx.Viz?.AddDda(candidate.WorldX, candidate.RainY + (int)result.BestHeight, candidate.WorldZ,
                         EnclosureDebugVisualizer.VizColor.Confirmed);
+
+                    // Show wind position if ceiling height was inferred (sky opening)
+                    {
+                        var lastVrp = ctx.FreshVerified[ctx.FreshVerified.Count - 1];
+                        if (!double.IsNaN(lastVrp.SkyOpeningY))
+                            ctx.Viz?.AddDda(candidate.WorldX, (int)lastVrp.SkyOpeningY, candidate.WorldZ,
+                                EnclosureDebugVisualizer.VizColor.Wind);
+                    }
                 }
                 else
                 {
@@ -817,7 +831,10 @@ namespace soundphysicsadapted
                             Occlusion = bestNeighborOcc + bestNeighborInteractable,
                             Distance = (float)bestNeighborPos.DistanceTo(ctx.PlayerEarPos),
                             ColumnX = nx,
-                            ColumnZ = nz
+                            ColumnZ = nz,
+                            SkyOpeningY = bestNeighborEntry == null
+                                ? InferCeilingHeight(nx, nz, neighborRainH, ctx.BlockAccessor)
+                                : double.NaN
                         });
 
                         ctx.DirectCount++;
@@ -826,6 +843,14 @@ namespace soundphysicsadapted
                         foundForThis = true;
 
                         ctx.Viz?.AddDda(nx, neighborRainH + 1, nz, EnclosureDebugVisualizer.VizColor.Neighbor);
+
+                        // Show wind position if ceiling height was inferred (sky opening)
+                        {
+                            var lastVrp = ctx.FreshVerified[ctx.FreshVerified.Count - 1];
+                            if (!double.IsNaN(lastVrp.SkyOpeningY))
+                                ctx.Viz?.AddDda(nx, (int)lastVrp.SkyOpeningY, nz,
+                                    EnclosureDebugVisualizer.VizColor.Wind);
+                        }
 
                         if (ctx.DebugWeather)
                         {
@@ -955,13 +980,24 @@ namespace soundphysicsadapted
                                 Occlusion = pathOcc + probeInteractable,
                                 Distance = (float)rainSourcePos.DistanceTo(ctx.PlayerEarPos),
                                 ColumnX = bx,
-                                ColumnZ = bz
+                                ColumnZ = bz,
+                                SkyOpeningY = entryPoint == null
+                                    ? InferCeilingHeight(bx, bz, rainH, ctx.BlockAccessor)
+                                    : double.NaN
                             });
 
                             ctx.ProbeFinds++;
                             foundForDirection = true;
 
                             ctx.Viz?.AddDda(bx, rainH + 1, bz, EnclosureDebugVisualizer.VizColor.Probe);
+
+                            // Show wind position if ceiling height was inferred (sky opening)
+                            {
+                                var lastVrp = ctx.FreshVerified[ctx.FreshVerified.Count - 1];
+                                if (!double.IsNaN(lastVrp.SkyOpeningY))
+                                    ctx.Viz?.AddDda(bx, (int)lastVrp.SkyOpeningY, bz,
+                                        EnclosureDebugVisualizer.VizColor.Wind);
+                            }
 
                             if (ctx.DebugWeather)
                             {
@@ -1177,6 +1213,57 @@ namespace soundphysicsadapted
             public float BestOcclusion;
             public float Weight;
         }
+
+        /// <summary>
+        /// Infer the ceiling height above a sky opening column by searching
+        /// outward in expanding rings for neighbors with high rain heights.
+        /// High neighbors indicate surrounding roof/wall geometry — the lowest
+        /// high neighbor is the most likely ceiling edge where wind enters.
+        /// Searches up to 6 blocks out to handle large roof holes (up to ~12 blocks across).
+        /// </summary>
+        /// <param name="columnX">World X of the opening column</param>
+        /// <param name="columnZ">World Z of the opening column</param>
+        /// <param name="columnRainY">Rain height at this column (floor level)</param>
+        /// <param name="blockAccessor">Block accessor for heightmap queries</param>
+        /// <returns>Estimated ceiling Y, or Double.NaN if no ceiling detected (open sky)</returns>
+        private static double InferCeilingHeight(int columnX, int columnZ, int columnRainY, IBlockAccessor blockAccessor)
+        {
+            // Minimum height difference to consider a neighbor as "roof geometry"
+            // 3 blocks avoids picking up small terrain bumps / stairs / fences
+            const int HEIGHT_THRESHOLD = 3;
+            const int MAX_SEARCH_DIST = 6; // Covers holes up to ~12 blocks across
+
+            int bestCeilingY = int.MaxValue;
+
+            // Search outward in expanding rings: check cardinal + diagonal at each distance.
+            // Stop at first ring that finds a high neighbor (closest roof edge is most relevant).
+            for (int dist = 1; dist <= MAX_SEARCH_DIST; dist++)
+            {
+                // Check all positions on the square perimeter at this distance
+                for (int dx = -dist; dx <= dist; dx++)
+                {
+                    for (int dz = -dist; dz <= dist; dz++)
+                    {
+                        // Only check positions ON the perimeter (skip interior — already checked)
+                        if (Math.Abs(dx) != dist && Math.Abs(dz) != dist) continue;
+
+                        int h = blockAccessor.GetRainMapHeightAt(columnX + dx, columnZ + dz);
+                        if (h - columnRainY > HEIGHT_THRESHOLD && h < bestCeilingY)
+                            bestCeilingY = h;
+                    }
+                }
+
+                // If we found a high neighbor in this ring, stop — closest roof edge wins
+                if (bestCeilingY != int.MaxValue)
+                    break;
+            }
+
+            if (bestCeilingY == int.MaxValue)
+                return double.NaN; // No high neighbors within 6 blocks — open sky
+
+            // Opening is at ceiling level + 1 (the air block where wind enters)
+            return bestCeilingY + 1.0;
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -1210,6 +1297,7 @@ namespace soundphysicsadapted
         private int lastPartialCount;
         private int lastNeighborCount;
         private int lastProbeCount;
+        private int lastWindCount;
         private int lastTotalSamples;
         private int lastToVerify;
 
@@ -1222,7 +1310,8 @@ namespace soundphysicsadapted
             Blocked,    // Red — blocked (occluded)
             Partial,    // Orange — partial (neighbor search)
             Neighbor,   // Cyan — neighbor hit
-            Probe       // Green — probe ray cave exit
+            Probe,      // Green — probe ray cave exit
+            Wind        // Magenta — wind source position (ceiling height)
         }
 
         // VS uses ABGR byte order: ColorFromRgba(R, G, B, A)
@@ -1239,6 +1328,7 @@ namespace soundphysicsadapted
         //     Cyan   = neighbor hit (found opening laterally from partial)
         //     Green  = probe ray hit (cave exit - found sky via directional ray)
         //     Dim Orange = over budget (exposed but not checked this ring)
+        //     Magenta = wind source position (ceiling height for sky openings)
         private static readonly int[] Colors = {
             ColorUtil.ColorFromRgba(0, 0, 255, 128),     // Covered - Blue
             ColorUtil.ColorFromRgba(255, 255, 0, 100),   // Exposed - Yellow
@@ -1248,6 +1338,7 @@ namespace soundphysicsadapted
             ColorUtil.ColorFromRgba(255, 128, 0, 200),   // Partial - Orange
             ColorUtil.ColorFromRgba(0, 255, 255, 200),   // Neighbor - Cyan
             ColorUtil.ColorFromRgba(0, 255, 128, 200),   // Probe - Green
+            ColorUtil.ColorFromRgba(255, 0, 255, 220),   // Wind - Magenta
         };
 
         /// <summary>
@@ -1270,6 +1361,7 @@ namespace soundphysicsadapted
             public int PartialCount;
             public int NeighborCount;
             public int ProbeCount;
+            public int WindCount;
 
             public void AddSample(int x, int y, int z, VizColor color)
             {
@@ -1290,6 +1382,7 @@ namespace soundphysicsadapted
                     case VizColor.Partial: PartialCount++; break;
                     case VizColor.Neighbor: NeighborCount++; break;
                     case VizColor.Probe: ProbeCount++; break;
+                    case VizColor.Wind: WindCount++; break;
                 }
             }
         }
@@ -1333,6 +1426,7 @@ namespace soundphysicsadapted
                 lastPartialCount = data.PartialCount;
                 lastNeighborCount = data.NeighborCount;
                 lastProbeCount = data.ProbeCount;
+                lastWindCount = data.WindCount;
                 lastTotalSamples = data.SamplePositions.Count;
                 lastToVerify = 0; // Not tracked per-viz anymore — available from debug log
 
@@ -1371,7 +1465,7 @@ namespace soundphysicsadapted
             return $"\nViz: samples={lastTotalSamples} covered={lastCoveredCount}(blue) " +
                    $"exposed={lastExposedCount}(yellow) toVerify={lastToVerify}/{WeatherEnclosureCalculator.MAX_DDA_CANDIDATES}\n" +
                    $"     confirmed={lastVerifiedCount}(white) blocked={lastBlockedCount}(red) " +
-                   $"partial={lastPartialCount}(orange) neighbor={lastNeighborCount}(cyan) probe={lastProbeCount}(green)";
+                   $"partial={lastPartialCount}(orange) neighbor={lastNeighborCount}(cyan) probe={lastProbeCount}(green) wind={lastWindCount}(magenta)";
         }
 
         public void Dispose()
@@ -1413,5 +1507,14 @@ namespace soundphysicsadapted
         /// </summary>
         public int ColumnX;
         public int ColumnZ;
+
+        /// <summary>
+        /// Estimated ceiling height where sky opening exists. For wall openings
+        /// (EntryPos != null), this is unused — wind uses EntryPos.Y.
+        /// For sky openings (EntryPos == null), this is the inferred ceiling height
+        /// so wind can be placed at the opening rather than at floor level.
+        /// Double.NaN means not computed / no valid ceiling found.
+        /// </summary>
+        public double SkyOpeningY;
     }
 }

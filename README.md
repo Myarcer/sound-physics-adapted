@@ -32,7 +32,19 @@ Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the 
 | **Required on client** | No (but only the client running it hears the effects) |
 | **CarryOn** | Compatible (dedicated patches) |
 | **RP Voice Chat** | Internal API Built, ready for integration (Waiting on RP Voice Chat Dev Team) |
+| **Medieval Expansion** | Compatible (doors & gates fully supported) |
 | **Other Mods** | Should be non issues, report here if needed. Tested with CaveSymphony / ForestSymphony |
+
+---
+
+## What's New in 0.1.7
+
+- **Medieval Expansion compatibility** — Doors, gates, and multi-block structures from Medieval Expansion now work correctly with sound occlusion and weather detection
+- **Thunder realism** — Speed-of-sound delay, 1000-block range, natural distance falloff, and rumble variety
+- **Multiplayer stability** — Fixed freezes when joining servers and server-side sync issues
+- **Smoother audio** — Acoustic boundary detection, adaptive smoothing, and reduced jitter
+- **Better reverb** — Through-wall reverb is now muffled instead of silent, redesigned cache system
+- **ConfigLib support** — If you have ConfigLib installed, tweak settings from an in-game GUI
 
 ---
 

@@ -58,6 +58,14 @@ namespace soundphysicsadapted
         /// the opening is flagged for re-verification. Falls back to WorldPos for sky openings.
         /// </summary>
         public List<Vec3d> MemberEntryPositions;
+
+        /// <summary>
+        /// Wind source centroid: same X/Z as Centroid, but Y is derived from
+        /// SkyOpeningY (ceiling height) for sky openings instead of floor level.
+        /// For wall openings (EntryPos != null), matches Centroid exactly.
+        /// Wind enters through openings, not at the floor where rain splashes.
+        /// </summary>
+        public Vec3d WindCentroid;
     }
 
     /// <summary>
@@ -177,15 +185,17 @@ namespace soundphysicsadapted
 
                     if (memberCount > 0)
                     {
+                        var centroid = new Vec3d(centX / centWeightSum, centY / centWeightSum, centZ / centWeightSum);
                         resultClusters.Add(new OpeningCluster
                         {
-                            Centroid = new Vec3d(centX / centWeightSum, centY / centWeightSum, centZ / centWeightSum),
+                            Centroid = centroid,
                             MemberCount = memberCount,
                             AverageOcclusion = totalOcclusion / memberCount,
                             AverageDistance = totalDistance / memberCount,
                             TotalWeight = totalWeight,
                             MemberPositions = memberPositions,
-                            MemberEntryPositions = memberEntryPositions
+                            MemberEntryPositions = memberEntryPositions,
+                            WindCentroid = ComputeWindCentroid(centroid, openings, consumed, count, memberPositions)
                         });
                         clusterIdx++;
                     }
@@ -274,15 +284,17 @@ namespace soundphysicsadapted
                 }
 
                 // Compute occlusion-weighted centroid
+                var centroid2 = new Vec3d(centX / centWeightSum, centY / centWeightSum, centZ / centWeightSum);
                 resultClusters.Add(new OpeningCluster
                 {
-                    Centroid = new Vec3d(centX / centWeightSum, centY / centWeightSum, centZ / centWeightSum),
+                    Centroid = centroid2,
                     MemberCount = memberCount,
                     AverageOcclusion = totalOcclusion / memberCount,
                     AverageDistance = totalDistance / memberCount,
                     TotalWeight = totalWeight,
                     MemberPositions = memberPositions,
-                    MemberEntryPositions = memberEntryPositions
+                    MemberEntryPositions = memberEntryPositions,
+                    WindCentroid = ComputeWindCentroid(centroid2, openings, consumed, count, memberPositions)
                 });
             }
 
@@ -290,6 +302,63 @@ namespace soundphysicsadapted
             resultClusters.Sort((a, b) => b.TotalWeight.CompareTo(a.TotalWeight));
 
             return resultClusters;
+        }
+
+        /// <summary>
+        /// Compute the wind centroid for a cluster: same X/Z as the regular centroid,
+        /// but Y is derived from SkyOpeningY (ceiling height) for sky openings.
+        /// Uses cluster-level propagation: if any member has a valid SkyOpeningY,
+        /// the max value is used for the entire cluster (edge columns know the roof height,
+        /// interior columns of large holes inherit it).
+        /// </summary>
+        private static Vec3d ComputeWindCentroid(
+            Vec3d centroid,
+            IReadOnlyList<VerifiedRainPosition> allOpenings,
+            bool[] consumed,
+            int totalCount,
+            List<Vec3d> memberPositions)
+        {
+            // Find the max valid SkyOpeningY among cluster members
+            double maxSkyY = double.NaN;
+
+            for (int i = 0; i < totalCount; i++)
+            {
+                // Only check members that were consumed into THIS cluster
+                // Match by checking if their WorldPos is in memberPositions
+                var op = allOpenings[i];
+                bool isMember = false;
+                for (int m = 0; m < memberPositions.Count; m++)
+                {
+                    if (memberPositions[m].X == op.WorldPos.X &&
+                        memberPositions[m].Y == op.WorldPos.Y &&
+                        memberPositions[m].Z == op.WorldPos.Z)
+                    {
+                        isMember = true;
+                        break;
+                    }
+                }
+                if (!isMember) continue;
+
+                // Only sky openings (EntryPos == null) contribute SkyOpeningY
+                if (op.EntryPos != null) continue;
+                if (double.IsNaN(op.SkyOpeningY)) continue;
+
+                if (double.IsNaN(maxSkyY) || op.SkyOpeningY > maxSkyY)
+                    maxSkyY = op.SkyOpeningY;
+            }
+
+            // If no valid SkyOpeningY found, wind uses same position as rain
+            if (double.IsNaN(maxSkyY))
+                return new Vec3d(centroid.X, centroid.Y, centroid.Z);
+
+            if (SoundPhysicsAdaptedModSystem.Config?.DebugMode == true
+                && SoundPhysicsAdaptedModSystem.Config?.DebugPositionalWeather == true)
+            {
+                WeatherAudioManager.WeatherDebugLog(
+                    $"[5A-WIND] WindCentroid: centroidY={centroid.Y:F1} -> windY={maxSkyY:F1} (ceiling)");
+            }
+
+            return new Vec3d(centroid.X, maxSkyY, centroid.Z);
         }
     }
 }

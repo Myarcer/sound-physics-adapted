@@ -66,6 +66,13 @@ namespace soundphysicsadapted
         /// </summary>
         public System.Func<bool, AssetLocation> AssetResolver { get; set; }
 
+        /// <summary>
+        /// Position selector: (opening) → Vec3d world position for the source.
+        /// When null (default), uses opening.WorldPos. Wind pool overrides this
+        /// to use opening.WindWorldPos for ceiling-height placement on sky openings.
+        /// </summary>
+        public System.Func<TrackedOpening, Vec3d> PositionSelector { get; set; }
+
         // ── Tunable parameters (sensible defaults, overridable per type) ──
 
         /// <summary>Fade-in rate per tick (exponential). Higher = faster fade-in.</summary>
@@ -196,16 +203,17 @@ namespace soundphysicsadapted
                     if (trackedOpenings[o].TrackingId == slot.TrackingId)
                     {
                         var opening = trackedOpenings[o];
-                        slot.WorldPos = opening.WorldPos;
+                        var pos = PositionSelector != null ? PositionSelector(opening) : opening.WorldPos;
+                        slot.WorldPos = pos;
                         float baseVol = CalculateVolume(opening, intensity, volumeMultiplier);
                         slot.TargetVolume = baseVol * ProximityFadeFactor(opening, earPos);
 
                         if (slot.Sound != null && slot.Sound.IsPlaying)
                         {
                             slot.Sound.SetPosition(new Vec3f(
-                                (float)opening.WorldPos.X,
-                                (float)opening.WorldPos.Y,
-                                (float)opening.WorldPos.Z));
+                                (float)pos.X,
+                                (float)pos.Y,
+                                (float)pos.Z));
                         }
 
                         openingAssigned[o] = true;
@@ -254,7 +262,8 @@ namespace soundphysicsadapted
                 }
 
                 targetSlot.TrackingId = newOpening.TrackingId;
-                targetSlot.WorldPos = newOpening.WorldPos;
+                var newPos = PositionSelector != null ? PositionSelector(newOpening) : newOpening.WorldPos;
+                targetSlot.WorldPos = newPos;
                 targetSlot.Active = true;
                 targetSlot.CurrentVolume = 0f;
                 float baseVol2 = CalculateVolume(newOpening, intensity, volumeMultiplier);
@@ -266,7 +275,7 @@ namespace soundphysicsadapted
                 {
                     WeatherAudioManager.WeatherDebugLog(
                         $"[5B-{debugTag}] ASSIGN slot={bestSlot} trackId={newOpening.TrackingId} " +
-                        $"pos=({newOpening.WorldPos.X:F0},{newOpening.WorldPos.Y:F0},{newOpening.WorldPos.Z:F0}) " +
+                        $"pos=({newPos.X:F0},{newPos.Y:F0},{newPos.Z:F0}) " +
                         $"targetVol={targetSlot.TargetVolume:F3}");
                 }
             }
@@ -723,7 +732,8 @@ namespace soundphysicsadapted
                     $"pos=({slot.WorldPos?.X:F0},{slot.WorldPos?.Y:F0},{slot.WorldPos?.Z:F0}) " +
                     $"vol={slot.CurrentVolume:F3}/{slot.TargetVolume:F3} " +
                     $"directOcc={directStr} effOcc={effectiveStr} audible={audible} " +
-                    $"playing={slot.Sound?.IsPlaying ?? false}");
+                    $"playing={slot.Sound?.IsPlaying ?? false} " +
+                    $"posMode={(PositionSelector != null ? "wind" : "default")}");
             }
             return sb.ToString().TrimEnd();
         }

@@ -1023,9 +1023,18 @@ namespace soundphysicsadapted
                 // with recycled sourceIds that might still be playing other sounds
                 AudioRenderer.DetachGlobalFilter(sourceId);
 
-                // Apply occlusion BEFORE Start() calls AL.SourcePlay()
-                // This ensures the filter is attached before any samples play
-                ApplyOcclusion(loadedSound, position, soundName);
+                // During world loading (before LevelFinalize + warmup), register with
+                // neutral filter only. The tick system will handle raycasting later.
+                // After world is ready, apply immediate occlusion for responsive audio.
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady)
+                {
+                    ApplyLowPassFilter(loadedSound, 1.0f, null, soundName);
+                }
+                else
+                {
+                    // World is ready — apply immediate occlusion for this sound
+                    ApplyOcclusion(loadedSound, position, soundName);
+                }
             }
             catch (Exception ex)
             {
@@ -1065,9 +1074,9 @@ namespace soundphysicsadapted
                     AudioRenderer.ReattachFilter(loadedSound);
                 }
 
-                // CRITICAL: Apply reverb AFTER source is playing!
-                // Aux sends can only be connected to sources in AL_PLAYING state
-                if (config.EnableCustomReverb)
+                // Apply reverb only after world is fully loaded and warmed up.
+                // During loading, tick system will handle reverb with budget limits.
+                if (SoundPhysicsAdaptedModSystem.IsWorldReady && config.EnableCustomReverb)
                 {
                     if (cachedBlockAccessor == null)
                         cachedBlockAccessor = cachedApi?.World?.BlockAccessor;
@@ -1079,20 +1088,15 @@ namespace soundphysicsadapted
 
                         var soundParams = loadedSound.Params;
                         Vec3f pos = soundParams?.Position;
-
-                        // Check if sound has a valid world position
                         bool hasPosition = pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0);
 
                         if (hasPosition)
                         {
-                            // Positional sound - use actual position
                             Vec3d soundPosD = new Vec3d(pos.X, pos.Y, pos.Z);
                             ApplyReverb(loadedSound, soundPosD, playerPos, cachedBlockAccessor);
                         }
                         else
                         {
-                            // NON-POSITIONAL SOUND (block breaking, tool use, etc.)
-                            // Treat as if sound is at player position - matches vanilla reverb behavior
                             ApplyReverb(loadedSound, playerPos, playerPos, cachedBlockAccessor);
                         }
                     }
@@ -1346,6 +1350,10 @@ namespace soundphysicsadapted
         private static HashSet<int> registeredSourceIds = new HashSet<int>();
         private static object sourceTrackLock = new object();
 
+        // FREEZE DIAGNOSTIC: Track HandleSourcePlay call frequency
+        private static int _diagHookCallCount = 0;
+        private static int _diagHookUntrackedCount = 0;
+
         // Cached reflection for attaching filter in hook
         private static MethodInfo alSourceMethod_Hook;
         private static object efxDirectFilterValue_Hook;
@@ -1521,6 +1529,9 @@ namespace soundphysicsadapted
         {
             try
             {
+                // FREEZE DIAGNOSTIC: Count every call
+                System.Threading.Interlocked.Increment(ref _diagHookCallCount);
+
                 // Track this sourceId as "actually played"
                 lock (sourceTrackLock)
                 {
@@ -1539,6 +1550,11 @@ namespace soundphysicsadapted
                         // Attach filter RIGHT before play - most reliable timing possible
                         alSourceMethod_Hook.Invoke(null, new object[] { sid, efxDirectFilterValue_Hook, filterId });
                     }
+                }
+                else
+                {
+                    // FREEZE DIAGNOSTIC: Track untracked source plays (e.g. altoflute retry loop)
+                    System.Threading.Interlocked.Increment(ref _diagHookUntrackedCount);
                 }
             }
             catch (Exception ex)
@@ -1647,6 +1663,23 @@ namespace soundphysicsadapted
 
                 return $"Registered={tracked}, Played={played}, UntrackedPlays={untracked}";
             }
+        }
+
+        /// <summary>
+        /// FREEZE DIAGNOSTIC: Get and reset hook call count since last query.
+        /// </summary>
+        public static int DiagGetAndResetHookCount()
+        {
+            return System.Threading.Interlocked.Exchange(ref _diagHookCallCount, 0);
+        }
+
+        /// <summary>
+        /// FREEZE DIAGNOSTIC: Get and reset untracked source play count since last query.
+        /// High values here indicate VS retry loops (e.g. altoflute.ogg InvalidValue).
+        /// </summary>
+        public static int DiagGetAndResetUntrackedCount()
+        {
+            return System.Threading.Interlocked.Exchange(ref _diagHookUntrackedCount, 0);
         }
 
         #endregion

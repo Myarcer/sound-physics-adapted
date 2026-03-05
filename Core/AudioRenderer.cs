@@ -76,6 +76,12 @@ namespace soundphysicsadapted
         private static ConcurrentDictionary<ILoadedSound, FilterEntry> activeFilters
             = new ConcurrentDictionary<ILoadedSound, FilterEntry>();
 
+        // OPTIMIZATION: Reverse lookup from sourceId -> sound for O(1) lookups in HandleSourcePlay
+        // Without this, IsSourceTracked/GetFilterForSource iterate the entire activeFilters dict (O(n))
+        // which causes O(n²) during world join when hundreds of sounds start simultaneously
+        private static ConcurrentDictionary<int, ILoadedSound> sourceIdToSound
+            = new ConcurrentDictionary<int, ILoadedSound>();
+
         // Reflection for getting sourceId from LoadedSoundNative
         private static FieldInfo sourceIdField;
         private static Type loadedSoundNativeType;
@@ -96,6 +102,35 @@ namespace soundphysicsadapted
 
         public static bool IsInitialized { get; private set; } = false;
         public static int ActiveFilterCount => activeFilters.Count;
+
+        /// <summary>
+        /// Lightweight check: is the sound still alive (not disposed, weak ref valid)?
+        /// Uses cached isDisposedProperty reflection — no per-call GetProperty overhead.
+        /// Returns false if the sound is disposed or unreachable.
+        /// </summary>
+        private static bool IsSoundAlive(ILoadedSound sound, FilterEntry entry)
+        {
+            try
+            {
+                if (!isDisposedPropertyChecked)
+                {
+                    isDisposedProperty = sound.GetType().GetProperty("IsDisposed");
+                    isDisposedPropertyChecked = true;
+                }
+
+                if (isDisposedProperty != null)
+                {
+                    return !(bool)isDisposedProperty.GetValue(sound);
+                }
+
+                // Fallback: weak reference check
+                return entry.SoundRef.TryGetTarget(out _);
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
         /// <summary>
         /// Check if a sound is registered in the active filters pipeline.
@@ -337,13 +372,14 @@ namespace soundphysicsadapted
                 // correct AL position with the old entry's stale repositioned position.
                 // This caused intermittent panning bugs (thud sounds playing from
                 // grasshopper's repositioned position because they shared a sourceId).
-                foreach (var kvp in activeFilters)
+                // Use reverse lookup for O(1) instead of iterating all activeFilters
+                if (sourceIdToSound.TryGetValue(sourceId, out var oldSound) && oldSound != sound)
                 {
-                    if (kvp.Value.SourceId == sourceId && kvp.Key != sound)
+                    if (activeFilters.TryGetValue(oldSound, out var oldEntry))
                     {
-                        kvp.Value.CurrentRepositionedPos = null;
-                        kvp.Value.TargetRepositionedPos = null;
-                        kvp.Value.OriginalSoundPos = null;
+                        oldEntry.CurrentRepositionedPos = null;
+                        oldEntry.TargetRepositionedPos = null;
+                        oldEntry.OriginalSoundPos = null;
                     }
                 }
 
@@ -359,6 +395,7 @@ namespace soundphysicsadapted
                 };
 
                 activeFilters[sound] = entry;
+                sourceIdToSound[sourceId] = sound;
                 totalFiltersCreated++;
 
 
@@ -847,6 +884,9 @@ namespace soundphysicsadapted
             if (!activeFilters.TryGetValue(sound, out var entry)) return;
             if (entry.SourceId <= 0 || entry.CurrentRepositionedPos == null) return;
 
+            // Skip if sound was disposed — prevents OpenAL InvalidName on stale sourceId
+            if (!IsSoundAlive(sound, entry)) return;
+
             try
             {
                 Vec3d pos = entry.CurrentRepositionedPos;
@@ -1076,7 +1116,13 @@ namespace soundphysicsadapted
 
             foreach (var kvp in activeFilters)
             {
+                var sound = kvp.Key;
                 var entry = kvp.Value;
+
+                // Skip disposed/dead sounds — prevents OpenAL InvalidName errors
+                // when DisposeOnFinish sounds are recycled between ticks
+                if (!IsSoundAlive(sound, entry))
+                    continue;
 
                 // === FILTER SMOOTHING (existing) ===
                 // Calculate target with underwater multiplier
@@ -1381,6 +1427,12 @@ namespace soundphysicsadapted
         {
             try
             {
+                // Remove from reverse lookup map
+                if (entry.SourceId > 0)
+                {
+                    sourceIdToSound.TryRemove(entry.SourceId, out _);
+                }
+
                 // DO NOT detach filter from source!
                 // The sourceId may have been recycled for a new sound.
                 // Detaching here would remove the filter from that new sound.
@@ -1416,46 +1468,12 @@ namespace soundphysicsadapted
 
             foreach (var kvp in activeFilters)
             {
-                var sound = kvp.Key;
-                var entry = kvp.Value;
-
-                // Check if sound is disposed
-                bool isDisposed = false;
-                try
+                if (!IsSoundAlive(kvp.Key, kvp.Value))
                 {
-                    // OPTIMIZATION: Cache the PropertyInfo lookup (one-time cost)
-                    if (!isDisposedPropertyChecked)
-                    {
-                        isDisposedProperty = sound.GetType().GetProperty("IsDisposed");
-                        isDisposedPropertyChecked = true;
-                    }
-
-                    if (isDisposedProperty != null)
-                    {
-                        isDisposed = (bool)isDisposedProperty.GetValue(sound);
-                    }
-                    else
-                    {
-                        // Try to check via weak reference
-                        if (!entry.SoundRef.TryGetTarget(out _))
-                        {
-                            isDisposed = true;
-                        }
-                    }
-                }
-                catch
-                {
-                    // If we can't access the sound, assume it's disposed
-                    isDisposed = true;
-                }
-
-                if (isDisposed)
-                {
-                    toRemove.Add(sound);
+                    toRemove.Add(kvp.Key);
                 }
             }
 
-            // Remove disposed sounds
             foreach (var sound in toRemove)
             {
                 if (activeFilters.TryRemove(sound, out var entry))
@@ -1475,6 +1493,7 @@ namespace soundphysicsadapted
                 CleanupEntry(kvp.Value);
             }
             activeFilters.Clear();
+            sourceIdToSound.Clear();
 
             SoundPhysicsAdaptedModSystem.Log(
                 $"[SoundFilterManager] Disposed. Created={totalFiltersCreated}, Deleted={totalFiltersDeleted}");
@@ -1502,12 +1521,7 @@ namespace soundphysicsadapted
             if (!IsInitialized || sourceId <= 0)
                 return false;
 
-            foreach (var kvp in activeFilters)
-            {
-                if (kvp.Value.SourceId == sourceId)
-                    return true;
-            }
-            return false;
+            return sourceIdToSound.ContainsKey(sourceId);
         }
 
         /// <summary>
@@ -1519,10 +1533,10 @@ namespace soundphysicsadapted
             if (!IsInitialized || sourceId <= 0)
                 return 0;
 
-            foreach (var kvp in activeFilters)
+            if (sourceIdToSound.TryGetValue(sourceId, out var sound))
             {
-                if (kvp.Value.SourceId == sourceId)
-                    return kvp.Value.FilterId;
+                if (activeFilters.TryGetValue(sound, out var entry))
+                    return entry.FilterId;
             }
             return 0;
         }

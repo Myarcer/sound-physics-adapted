@@ -3,6 +3,7 @@ using Vintagestory.API.Client;
 using Vintagestory.API.Server;
 using Vintagestory.API.MathTools;
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using HarmonyLib;
@@ -48,6 +49,33 @@ namespace soundphysicsadapted
         // Phase 5A: Weather audio manager
         private static WeatherAudioManager weatherManager;
         private long weatherTimerId = 0;
+
+        // === WORLD READINESS GATE ===
+        // Prevents tick handlers and Harmony patches from running expensive raycasts
+        // before the world is fully loaded. Without this, DDA raycasts against an
+        // incomplete block accessor take 100+ seconds and freeze the client.
+        private static bool _worldReady = false;
+        private static int _warmupTicksRemaining = 0;
+        private const int WARMUP_TICKS = 100; // ~2.5s of real game frames (100 * 25ms)
+        public static bool IsWorldReady => _worldReady && _warmupTicksRemaining <= 0;
+
+        // === FREEZE DIAGNOSTIC: Heartbeat + timing infrastructure ===
+        private static Stopwatch _diagStopwatch = new Stopwatch();
+        private static long _diagHeartbeatCounter = 0;
+        private static long _diagLastHeartbeatLogMs = 0;
+        private const long DIAG_HEARTBEAT_INTERVAL_MS = 5000; // Log heartbeat every 5s
+        private static long _diagSmoothTickCount = 0;
+        private static long _diagOcclusionTickCount = 0;
+        private static long _diagCleanupTickCount = 0;
+        private static double _diagSmoothTotalMs = 0;
+        private static double _diagOcclusionTotalMs = 0;
+        private static double _diagSmoothMaxMs = 0;
+        private static double _diagOcclusionMaxMs = 0;
+        // FPS tracking: measure frame time via smoothing tick (fires every 25ms game tick)
+        private static Stopwatch _diagFpsStopwatch = new Stopwatch();
+        private static long _diagFrameCount = 0;
+        private static double _diagFrameTimeSum = 0;
+        private static double _diagFrameTimeMax = 0;
         
         // Mod compatibility detection
         private static bool carryOnModLoaded = false;
@@ -458,10 +486,25 @@ namespace soundphysicsadapted
                 smoothingTimerId = api.Event.RegisterGameTickListener(OnSmoothingTick, (int)AudioRenderer.SmoothTickIntervalMs);
                 api.Logger.Debug("[SoundPhysicsAdapted] Registered cleanup, occlusion, and smoothing tick handlers");
 
+                // FREEZE DIAGNOSTIC: Log that diagnostics are active
+                DiagnosticLog("DIAG-INIT: Freeze diagnostic logging ACTIVE. Heartbeat every 5s. Look for [SPA-DIAG] entries.");
+                _diagLastHeartbeatLogMs = api.ElapsedMilliseconds;
+
                 // Optimization: Invalidate cache on block changes
                 api.Event.BlockChanged += OnBlockChanged;
                 api.Logger.Debug("[SoundPhysicsAdapted] Hooked BlockChanged event");
             }
+
+            // WORLD READINESS: Defer all heavy processing until LevelFinalize.
+            // The block accessor is incomplete/slow before this fires, causing 100s+ freezes
+            // in DDA raycasts. player != null is NOT sufficient — entity exists before chunks load.
+            api.Event.LevelFinalize += () =>
+            {
+                _worldReady = true;
+                _warmupTicksRemaining = WARMUP_TICKS;
+                DiagnosticLog($"WORLD-READY: LevelFinalize fired. Warming up for {WARMUP_TICKS} ticks before enabling raycasting.");
+                api.Logger.Notification("[SoundPhysicsAdapted] World ready — warmup started, raycasting deferred");
+            };
 
             // Phase 3: Initialize reverb effect system
             if (config.EnableCustomReverb)
@@ -507,6 +550,7 @@ namespace soundphysicsadapted
         /// </summary>
         private void OnCleanupTick(float dt)
         {
+            _diagCleanupTickCount++;
             AudioRenderer.CleanupDisposed();
         }
 
@@ -519,7 +563,40 @@ namespace soundphysicsadapted
             if (!config.Enabled || !AudioRenderer.IsInitialized)
                 return;
 
+            // Warmup countdown: burns down after LevelFinalize, ensures game loop is
+            // actually ticking before we start raycasting. Prevents freeze when
+            // hundreds of async-loaded sounds trigger Start() during the first few frames.
+            if (_warmupTicksRemaining > 0)
+            {
+                _warmupTicksRemaining--;
+                if (_warmupTicksRemaining == 0)
+                {
+                    DiagnosticLog("WARMUP-DONE: Raycasting now enabled.");
+                    clientApi?.Logger.Notification("[SoundPhysicsAdapted] Warmup complete — occlusion/reverb processing enabled");
+                }
+            }
+
+            // FREEZE DIAGNOSTIC: Track frame intervals via this 25ms tick
+            if (_diagFpsStopwatch.IsRunning)
+            {
+                double frameMs = _diagFpsStopwatch.Elapsed.TotalMilliseconds;
+                _diagFrameTimeSum += frameMs;
+                _diagFrameCount++;
+                if (frameMs > _diagFrameTimeMax) _diagFrameTimeMax = frameMs;
+            }
+            _diagFpsStopwatch.Restart();
+
+            // FREEZE DIAGNOSTIC: Time SmoothAll
+            _diagStopwatch.Restart();
             AudioRenderer.SmoothAll();
+            _diagStopwatch.Stop();
+            double smoothMs = _diagStopwatch.Elapsed.TotalMilliseconds;
+            _diagSmoothTickCount++;
+            _diagSmoothTotalMs += smoothMs;
+            if (smoothMs > _diagSmoothMaxMs) _diagSmoothMaxMs = smoothMs;
+
+            // Heartbeat: log stats every 5s (always, bypass DebugMode)
+            EmitDiagnosticHeartbeat();
         }
 
         /// <summary>
@@ -540,7 +617,7 @@ namespace soundphysicsadapted
         /// </summary>
         private void OnOcclusionUpdateTick(float dt)
         {
-            if (!config.Enabled || clientApi?.World?.Player?.Entity == null)
+            if (!config.Enabled || !IsWorldReady || clientApi?.World?.Player?.Entity == null)
                 return;
 
             // Always update underwater state
@@ -549,9 +626,24 @@ namespace soundphysicsadapted
             var player = clientApi.World.Player.Entity;
             Vec3d currentPos = player.Pos.XYZ.Add(player.LocalEyePos);
 
+            // FREEZE DIAGNOSTIC: Time the full occlusion update
+            _diagStopwatch.Restart();
+
             // AudioPhysicsSystem: all sounds every tick, raycast gated by distance intervals
             long currentTimeMs = clientApi.World.ElapsedMilliseconds;
             acousticsManager?.Update(currentPos, clientApi.World.BlockAccessor, currentTimeMs);
+
+            _diagStopwatch.Stop();
+            double occMs = _diagStopwatch.Elapsed.TotalMilliseconds;
+            _diagOcclusionTickCount++;
+            _diagOcclusionTotalMs += occMs;
+            if (occMs > _diagOcclusionMaxMs) _diagOcclusionMaxMs = occMs;
+
+            // Warn immediately if a single tick takes >50ms
+            if (occMs > 50.0)
+            {
+                DiagnosticLog($"DIAG-SLOW: OcclusionTick took {occMs:F1}ms! filters={AudioRenderer.ActiveFilterCount}");
+            }
         }
 
         private void RegisterCommands(ICoreClientAPI api)
@@ -850,6 +942,10 @@ namespace soundphysicsadapted
                 clientApi.Event.BlockChanged -= OnBlockChanged;
             }
 
+            // Reset world readiness
+            _worldReady = false;
+            _warmupTicksRemaining = 0;
+
             // Dispose AudioPhysicsSystem
             acousticsManager?.Dispose();
             acousticsManager = null;
@@ -964,6 +1060,63 @@ namespace soundphysicsadapted
         {
             if (config?.DebugMode != true || clientApi == null) return;
             RateLimitedLog(message);
+        }
+
+        /// <summary>
+        /// FREEZE DIAGNOSTIC: Always logs to debug log, bypasses DebugMode and rate limiting.
+        /// Used only for critical diagnostic messages during freeze investigation.
+        /// Remove after freeze is resolved.
+        /// </summary>
+        public static void DiagnosticLog(string message)
+        {
+            clientApi?.Logger.Debug($"[SPA-DIAG] {message}");
+        }
+
+        /// <summary>
+        /// FREEZE DIAGNOSTIC: Emits a heartbeat every 5s with accumulated tick stats.
+        /// If heartbeats stop appearing in the log, the tick handlers stopped firing.
+        /// If heartbeats continue but show high ms values, we found the bottleneck.
+        /// </summary>
+        private void EmitDiagnosticHeartbeat()
+        {
+            if (clientApi == null) return;
+            long nowMs = clientApi.ElapsedMilliseconds;
+            if (nowMs - _diagLastHeartbeatLogMs < DIAG_HEARTBEAT_INTERVAL_MS) return;
+
+            _diagHeartbeatCounter++;
+
+            // Calculate FPS from smoothing tick intervals
+            double avgFrameMs = _diagFrameCount > 0 ? _diagFrameTimeSum / _diagFrameCount : 0;
+            double fps = avgFrameMs > 0 ? 1000.0 / avgFrameMs : 0;
+
+            // Average ms per tick
+            double avgSmoothMs = _diagSmoothTickCount > 0 ? _diagSmoothTotalMs / _diagSmoothTickCount : 0;
+            double avgOccMs = _diagOcclusionTickCount > 0 ? _diagOcclusionTotalMs / _diagOcclusionTickCount : 0;
+
+            int hookCalls = LoadSoundPatch.DiagGetAndResetHookCount();
+            int hookUntracked = LoadSoundPatch.DiagGetAndResetUntrackedCount();
+
+            DiagnosticLog(
+                $"HEARTBEAT #{_diagHeartbeatCounter} | " +
+                $"fps={fps:F1} avgFrame={avgFrameMs:F1}ms maxFrame={_diagFrameTimeMax:F1}ms | " +
+                $"smooth: {_diagSmoothTickCount}ticks avg={avgSmoothMs:F2}ms max={_diagSmoothMaxMs:F2}ms | " +
+                $"occlusion: {_diagOcclusionTickCount}ticks avg={avgOccMs:F2}ms max={_diagOcclusionMaxMs:F2}ms | " +
+                $"cleanup: {_diagCleanupTickCount}ticks | " +
+                $"filters={AudioRenderer.ActiveFilterCount} | " +
+                $"hooks={hookCalls} untracked={hookUntracked}");
+
+            // Reset accumulators
+            _diagSmoothTickCount = 0;
+            _diagSmoothTotalMs = 0;
+            _diagSmoothMaxMs = 0;
+            _diagOcclusionTickCount = 0;
+            _diagOcclusionTotalMs = 0;
+            _diagOcclusionMaxMs = 0;
+            _diagCleanupTickCount = 0;
+            _diagFrameCount = 0;
+            _diagFrameTimeSum = 0;
+            _diagFrameTimeMax = 0;
+            _diagLastHeartbeatLogMs = nowMs;
         }
 
         /// <summary>

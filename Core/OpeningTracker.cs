@@ -95,6 +95,13 @@ namespace soundphysicsadapted
         /// If the opening is genuinely sealed, it won't be re-found → persistence timeout → removal.
         /// </summary>
         public bool ForceReverify;
+
+        /// <summary>
+        /// Wind source position: same X/Z as WorldPos, but Y is at ceiling height
+        /// for sky openings (where wind enters through the hole, not at floor level).
+        /// For wall openings, matches WorldPos. Used by the wind PositionalSourcePool.
+        /// </summary>
+        public Vec3d WindWorldPos;
     }
 
     /// <summary>
@@ -360,12 +367,42 @@ namespace soundphysicsadapted
                     tracked.MemberEntryPositions = cluster.MemberEntryPositions != null
                         ? new List<Vec3d>(cluster.MemberEntryPositions) : null;
                     tracked.LastVerifiedPlayerPos = new Vec3d(playerEarPos.X, playerEarPos.Y, playerEarPos.Z);
+
+                    // WindWorldPos: smooth toward cluster's WindCentroid (same logic as WorldPos)
+                    if (tracked.WindWorldPos == null)
+                    {
+                        tracked.WindWorldPos = new Vec3d(cluster.WindCentroid.X, cluster.WindCentroid.Y, cluster.WindCentroid.Z);
+                    }
+                    else
+                    {
+                        double wdx = cluster.WindCentroid.X - tracked.WindWorldPos.X;
+                        double wdy = cluster.WindCentroid.Y - tracked.WindWorldPos.Y;
+                        double wdz = cluster.WindCentroid.Z - tracked.WindWorldPos.Z;
+                        double windShiftSq = wdx * wdx + wdy * wdy + wdz * wdz;
+
+                        if (windShiftSq < POSITION_SNAP_THRESHOLD_SQ)
+                            tracked.WindWorldPos = new Vec3d(cluster.WindCentroid.X, cluster.WindCentroid.Y, cluster.WindCentroid.Z);
+                        else if (windShiftSq > POSITION_SNAP_MAX_SQ)
+                            tracked.WindWorldPos = new Vec3d(cluster.WindCentroid.X, cluster.WindCentroid.Y, cluster.WindCentroid.Z);
+                        else
+                        {
+                            float wLerp = windShiftSq < 1.0 ? POSITION_LERP_FACTOR
+                                        : windShiftSq < 4.0 ? POSITION_LERP_FACTOR * 0.4f
+                                        : POSITION_LERP_FACTOR * 0.15f;
+                            tracked.WindWorldPos = new Vec3d(
+                                tracked.WindWorldPos.X + wdx * wLerp,
+                                tracked.WindWorldPos.Y + wdy * wLerp,
+                                tracked.WindWorldPos.Z + wdz * wLerp);
+                        }
+                    }
+
                     clusterConsumed[bestCluster] = true;
 
                     if (debug)
                     {
                         WeatherAudioManager.WeatherDebugLog(
                             $"[5B-TRACK] RE-VERIFIED id={tracked.TrackingId} pos=({tracked.WorldPos.X:F0},{tracked.WorldPos.Y:F0},{tracked.WorldPos.Z:F0}) " +
+                            $"windY={tracked.WindWorldPos?.Y:F0} " +
                             $"members={cluster.MemberCount} occl={cluster.AverageOcclusion:F2}");
                     }
                 }
@@ -388,6 +425,7 @@ namespace soundphysicsadapted
                 var newOpening = new TrackedOpening
                 {
                     WorldPos = cluster.Centroid,
+                    WindWorldPos = new Vec3d(cluster.WindCentroid.X, cluster.WindCentroid.Y, cluster.WindCentroid.Z),
                     ClusterWeight = cluster.MemberCount,
                     SmoothedClusterWeight = Math.Min(cluster.MemberCount, 1f),  // Start at 1, ramp up
                     LastKnownOcclusion = cluster.AverageOcclusion,
@@ -844,6 +882,7 @@ namespace soundphysicsadapted
                 sb.AppendLine(
                     $"  Opening[{i}] id={t.TrackingId} " +
                     $"pos=({t.WorldPos.X:F0},{t.WorldPos.Y:F0},{t.WorldPos.Z:F0}) " +
+                    $"windY={t.WindWorldPos?.Y:F0} " +
                     $"weight={t.ClusterWeight} occ={t.LastKnownOcclusion:F2} " +
                     $"age={ageSec}s {verStr}");
             }
