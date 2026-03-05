@@ -504,11 +504,16 @@ namespace soundphysicsadapted
                     ctx.DirectCount++;
                     ctx.DirectWeight += candidate.Weight;
 
+                    double skyOpeningY = result.BestEntryPoint == null
+                        ? InferCeilingHeight(candidate.WorldX, candidate.WorldZ, candidate.RainY, ctx.BlockAccessor)
+                        : double.NaN;
+
                     if (ctx.DebugWeather)
                     {
                         WeatherAudioManager.WeatherDebugLog(
                             $"  CAND[{i}] ({candidate.WorldX},{candidate.WorldZ}) rainY={candidate.RainY} dist={candidate.HorizontalDist:F1} " +
-                            $"DIRECT: bestOccl={result.BestOcclusion:F2} < {effectiveThreshold:F2}{(alreadyCached ? " (hysteresis)" : "")}");
+                            $"DIRECT: bestOccl={result.BestOcclusion:F2} < {effectiveThreshold:F2}{(alreadyCached ? " (hysteresis)" : "")}" +
+                            $" entry={(result.BestEntryPoint != null ? result.BestEntryPoint.Y.ToString("F0") : "null")} skyOpeningY={skyOpeningY:F0}");
                     }
 
                     ctx.FreshVerified.Add(new VerifiedRainPosition
@@ -519,13 +524,19 @@ namespace soundphysicsadapted
                         Distance = (float)result.BestRainPos.DistanceTo(ctx.PlayerEarPos),
                         ColumnX = candidate.WorldX,
                         ColumnZ = candidate.WorldZ,
-                        SkyOpeningY = result.BestEntryPoint == null
-                            ? InferCeilingHeight(candidate.WorldX, candidate.WorldZ, candidate.RainY, ctx.BlockAccessor)
-                            : double.NaN
+                        SkyOpeningY = skyOpeningY
                     });
 
                     ctx.Viz?.AddDda(candidate.WorldX, candidate.RainY + (int)result.BestHeight, candidate.WorldZ,
                         EnclosureDebugVisualizer.VizColor.Confirmed);
+
+                    // Show wind position if ceiling height was inferred (sky opening)
+                    {
+                        var lastVrp = ctx.FreshVerified[ctx.FreshVerified.Count - 1];
+                        if (!double.IsNaN(lastVrp.SkyOpeningY))
+                            ctx.Viz?.AddDda(candidate.WorldX, (int)lastVrp.SkyOpeningY, candidate.WorldZ,
+                                EnclosureDebugVisualizer.VizColor.Wind);
+                    }
                 }
                 else
                 {
@@ -833,6 +844,14 @@ namespace soundphysicsadapted
 
                         ctx.Viz?.AddDda(nx, neighborRainH + 1, nz, EnclosureDebugVisualizer.VizColor.Neighbor);
 
+                        // Show wind position if ceiling height was inferred (sky opening)
+                        {
+                            var lastVrp = ctx.FreshVerified[ctx.FreshVerified.Count - 1];
+                            if (!double.IsNaN(lastVrp.SkyOpeningY))
+                                ctx.Viz?.AddDda(nx, (int)lastVrp.SkyOpeningY, nz,
+                                    EnclosureDebugVisualizer.VizColor.Wind);
+                        }
+
                         if (ctx.DebugWeather)
                         {
                             WeatherAudioManager.WeatherDebugLog(
@@ -971,6 +990,14 @@ namespace soundphysicsadapted
                             foundForDirection = true;
 
                             ctx.Viz?.AddDda(bx, rainH + 1, bz, EnclosureDebugVisualizer.VizColor.Probe);
+
+                            // Show wind position if ceiling height was inferred (sky opening)
+                            {
+                                var lastVrp = ctx.FreshVerified[ctx.FreshVerified.Count - 1];
+                                if (!double.IsNaN(lastVrp.SkyOpeningY))
+                                    ctx.Viz?.AddDda(bx, (int)lastVrp.SkyOpeningY, bz,
+                                        EnclosureDebugVisualizer.VizColor.Wind);
+                            }
 
                             if (ctx.DebugWeather)
                             {
@@ -1270,6 +1297,7 @@ namespace soundphysicsadapted
         private int lastPartialCount;
         private int lastNeighborCount;
         private int lastProbeCount;
+        private int lastWindCount;
         private int lastTotalSamples;
         private int lastToVerify;
 
@@ -1282,7 +1310,8 @@ namespace soundphysicsadapted
             Blocked,    // Red — blocked (occluded)
             Partial,    // Orange — partial (neighbor search)
             Neighbor,   // Cyan — neighbor hit
-            Probe       // Green — probe ray cave exit
+            Probe,      // Green — probe ray cave exit
+            Wind        // Magenta — wind source position (ceiling height)
         }
 
         // VS uses ABGR byte order: ColorFromRgba(R, G, B, A)
@@ -1299,6 +1328,7 @@ namespace soundphysicsadapted
         //     Cyan   = neighbor hit (found opening laterally from partial)
         //     Green  = probe ray hit (cave exit - found sky via directional ray)
         //     Dim Orange = over budget (exposed but not checked this ring)
+        //     Magenta = wind source position (ceiling height for sky openings)
         private static readonly int[] Colors = {
             ColorUtil.ColorFromRgba(0, 0, 255, 128),     // Covered - Blue
             ColorUtil.ColorFromRgba(255, 255, 0, 100),   // Exposed - Yellow
@@ -1308,6 +1338,7 @@ namespace soundphysicsadapted
             ColorUtil.ColorFromRgba(255, 128, 0, 200),   // Partial - Orange
             ColorUtil.ColorFromRgba(0, 255, 255, 200),   // Neighbor - Cyan
             ColorUtil.ColorFromRgba(0, 255, 128, 200),   // Probe - Green
+            ColorUtil.ColorFromRgba(255, 0, 255, 220),   // Wind - Magenta
         };
 
         /// <summary>
@@ -1330,6 +1361,7 @@ namespace soundphysicsadapted
             public int PartialCount;
             public int NeighborCount;
             public int ProbeCount;
+            public int WindCount;
 
             public void AddSample(int x, int y, int z, VizColor color)
             {
@@ -1350,6 +1382,7 @@ namespace soundphysicsadapted
                     case VizColor.Partial: PartialCount++; break;
                     case VizColor.Neighbor: NeighborCount++; break;
                     case VizColor.Probe: ProbeCount++; break;
+                    case VizColor.Wind: WindCount++; break;
                 }
             }
         }
@@ -1393,6 +1426,7 @@ namespace soundphysicsadapted
                 lastPartialCount = data.PartialCount;
                 lastNeighborCount = data.NeighborCount;
                 lastProbeCount = data.ProbeCount;
+                lastWindCount = data.WindCount;
                 lastTotalSamples = data.SamplePositions.Count;
                 lastToVerify = 0; // Not tracked per-viz anymore — available from debug log
 
@@ -1431,7 +1465,7 @@ namespace soundphysicsadapted
             return $"\nViz: samples={lastTotalSamples} covered={lastCoveredCount}(blue) " +
                    $"exposed={lastExposedCount}(yellow) toVerify={lastToVerify}/{WeatherEnclosureCalculator.MAX_DDA_CANDIDATES}\n" +
                    $"     confirmed={lastVerifiedCount}(white) blocked={lastBlockedCount}(red) " +
-                   $"partial={lastPartialCount}(orange) neighbor={lastNeighborCount}(cyan) probe={lastProbeCount}(green)";
+                   $"partial={lastPartialCount}(orange) neighbor={lastNeighborCount}(cyan) probe={lastProbeCount}(green) wind={lastWindCount}(magenta)";
         }
 
         public void Dispose()

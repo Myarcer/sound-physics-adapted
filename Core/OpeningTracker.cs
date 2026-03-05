@@ -402,6 +402,7 @@ namespace soundphysicsadapted
                     {
                         WeatherAudioManager.WeatherDebugLog(
                             $"[5B-TRACK] RE-VERIFIED id={tracked.TrackingId} pos=({tracked.WorldPos.X:F0},{tracked.WorldPos.Y:F0},{tracked.WorldPos.Z:F0}) " +
+                            $"windY={tracked.WindWorldPos?.Y:F0} " +
                             $"members={cluster.MemberCount} occl={cluster.AverageOcclusion:F2}");
                     }
                 }

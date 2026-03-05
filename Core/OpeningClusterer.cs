@@ -351,6 +351,13 @@ namespace soundphysicsadapted
             if (double.IsNaN(maxSkyY))
                 return new Vec3d(centroid.X, centroid.Y, centroid.Z);
 
+            if (SoundPhysicsAdaptedModSystem.Config?.DebugMode == true
+                && SoundPhysicsAdaptedModSystem.Config?.DebugPositionalWeather == true)
+            {
+                WeatherAudioManager.WeatherDebugLog(
+                    $"[5A-WIND] WindCentroid: centroidY={centroid.Y:F1} -> windY={maxSkyY:F1} (ceiling)");
+            }
+
             return new Vec3d(centroid.X, maxSkyY, centroid.Z);
         }
     }
