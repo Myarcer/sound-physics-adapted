@@ -7,34 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.1.7] - 2026-03-05
 
 ### Added
-- Config migration system for seamless upgrades between versions
-- Acoustic boundary detection with adaptive EMA smoothing
-- Cave exit detection via march-along probe rays
-- Player-centric DDA heights for weather below player elevation
-- Thunder enclosure system (independent from VS deepnessSub)
-- Thunder range extended to 1000 blocks with natural falloff and speed-of-sound delay
-- Lightning sound override and rumble RNG variety
-- ConfigLib integration for optional in-game settings GUI
 - Medieval Expansion mod compatibility (doors, gates, and spacer blocks)
-- Universal door/gate detection for modded blocks
+- Universal door/gate detection for modded blocks (portcullis, etc.)
+- Wind sources now positioned at ceiling height for sky openings instead of floor level
+- Ceiling height inference for wind placement (searches nearby roof geometry)
+- Wind debug visualization (magenta blocks at inferred ceiling height)
+- World-ready gate and warmup system — defers raycasting until world is fully loaded
 
 ### Fixed
-- Server-side persistence, CarryOn detection, and pause/resume desync
-- Block self-occlusion at spawn boundaries
-- Mono downmix for sounds at local player position (preserves L/R panning)
-- Underwater music pitch getting stuck on water exit
-- Reverb through walls now muffled instead of silent (SPR-style cutoff)
-- Repositioned sounds no longer over-muffled (inverted occlusion floor/ceiling)
-- Indoor thunder cracks use dedicated LPF instead of volume hack
-- Gate/door occlusion guarded behind world-ready checks (fixes multiplayer join freeze)
-- Opened gates/doors with spacer blocks no longer block sound
-
-### Changed
-- Reverb cache redesigned with composite key (soundCell + playerCell)
-- Debug flags consolidated to top of config
-- Smoother audio transitions via weighted trimmed mean and tuned EMA
-- Rain uses averaged nearest 9 columns instead of single nearest
-- Thunder asset thresholds rescaled to match bolt distribution
+- Multiplayer join freeze caused by raycasting against incomplete block accessor
+- Opened gates/doors with spacer blocks no longer block sound (Medieval Expansion)
+- Solid-face fast path now correctly skipped for open interactable blocks
+- Reverb and occlusion deferred during world load instead of applied immediately
 
 ## [0.1.4] - 2026-02-22
 
