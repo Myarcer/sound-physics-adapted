@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 
@@ -276,10 +277,26 @@ namespace soundphysicsadapted
 
         private static bool CheckWeatherInteractable(Block block)
         {
+            // --- Behavior check (universal, works for ALL mods) ---
+            // Any block using VS door/trapdoor mechanics will have these behaviors.
+            var behaviors = block.BlockBehaviors;
+            if (behaviors != null && behaviors.Length > 0)
+            {
+                for (int i = 0; i < behaviors.Length; i++)
+                {
+                    string typeName = behaviors[i].GetType().Name;
+                    if (typeName == "BlockBehaviorDoor" || typeName == "BlockBehaviorTrapDoor")
+                        return true;
+                }
+            }
+
+            // --- Fallback: block code substring check ---
+            // Catches edge cases where mods don't use standard behaviors
+            // but follow naming conventions (e.g. "gate3x3", "portcullis").
             string path = block.Code?.Path;
             if (path == null) return false;
-            // Matches "door-roughhewn-closed-north", "trapdoor-aged-opened-up", etc.
-            return path.StartsWith("door-") || path.StartsWith("trapdoor-");
+
+            return path.Contains("door") || path.Contains("gate") || path.Contains("portcullis");
         }
 
         /// <summary>
