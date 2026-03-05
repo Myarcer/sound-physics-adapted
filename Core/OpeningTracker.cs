@@ -881,6 +881,7 @@ namespace soundphysicsadapted
                 sb.AppendLine(
                     $"  Opening[{i}] id={t.TrackingId} " +
                     $"pos=({t.WorldPos.X:F0},{t.WorldPos.Y:F0},{t.WorldPos.Z:F0}) " +
+                    $"windY={t.WindWorldPos?.Y:F0} " +
                     $"weight={t.ClusterWeight} occ={t.LastKnownOcclusion:F2} " +
                     $"age={ageSec}s {verStr}");
             }

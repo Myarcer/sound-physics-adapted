@@ -1188,10 +1188,11 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Infer the ceiling height above a sky opening column by checking
-        /// the 4 cardinal neighbors' rain heights. High neighbors indicate
-        /// surrounding roof/wall geometry — the lowest high neighbor is the
-        /// most likely ceiling edge where wind enters.
+        /// Infer the ceiling height above a sky opening column by searching
+        /// outward in expanding rings for neighbors with high rain heights.
+        /// High neighbors indicate surrounding roof/wall geometry — the lowest
+        /// high neighbor is the most likely ceiling edge where wind enters.
+        /// Searches up to 6 blocks out to handle large roof holes (up to ~12 blocks across).
         /// </summary>
         /// <param name="columnX">World X of the opening column</param>
         /// <param name="columnZ">World Z of the opening column</param>
@@ -1203,22 +1204,35 @@ namespace soundphysicsadapted
             // Minimum height difference to consider a neighbor as "roof geometry"
             // 3 blocks avoids picking up small terrain bumps / stairs / fences
             const int HEIGHT_THRESHOLD = 3;
+            const int MAX_SEARCH_DIST = 6; // Covers holes up to ~12 blocks across
 
             int bestCeilingY = int.MaxValue;
 
-            // Check 4 cardinal neighbors
-            int n = blockAccessor.GetRainMapHeightAt(columnX, columnZ - 1);
-            int s = blockAccessor.GetRainMapHeightAt(columnX, columnZ + 1);
-            int e = blockAccessor.GetRainMapHeightAt(columnX + 1, columnZ);
-            int w = blockAccessor.GetRainMapHeightAt(columnX - 1, columnZ);
+            // Search outward in expanding rings: check cardinal + diagonal at each distance.
+            // Stop at first ring that finds a high neighbor (closest roof edge is most relevant).
+            for (int dist = 1; dist <= MAX_SEARCH_DIST; dist++)
+            {
+                // Check all positions on the square perimeter at this distance
+                for (int dx = -dist; dx <= dist; dx++)
+                {
+                    for (int dz = -dist; dz <= dist; dz++)
+                    {
+                        // Only check positions ON the perimeter (skip interior — already checked)
+                        if (Math.Abs(dx) != dist && Math.Abs(dz) != dist) continue;
 
-            if (n - columnRainY > HEIGHT_THRESHOLD && n < bestCeilingY) bestCeilingY = n;
-            if (s - columnRainY > HEIGHT_THRESHOLD && s < bestCeilingY) bestCeilingY = s;
-            if (e - columnRainY > HEIGHT_THRESHOLD && e < bestCeilingY) bestCeilingY = e;
-            if (w - columnRainY > HEIGHT_THRESHOLD && w < bestCeilingY) bestCeilingY = w;
+                        int h = blockAccessor.GetRainMapHeightAt(columnX + dx, columnZ + dz);
+                        if (h - columnRainY > HEIGHT_THRESHOLD && h < bestCeilingY)
+                            bestCeilingY = h;
+                    }
+                }
+
+                // If we found a high neighbor in this ring, stop — closest roof edge wins
+                if (bestCeilingY != int.MaxValue)
+                    break;
+            }
 
             if (bestCeilingY == int.MaxValue)
-                return double.NaN; // No high neighbors — open sky, no ceiling to infer
+                return double.NaN; // No high neighbors within 6 blocks — open sky
 
             // Opening is at ceiling level + 1 (the air block where wind enters)
             return bestCeilingY + 1.0;

@@ -732,7 +732,8 @@ namespace soundphysicsadapted
                     $"pos=({slot.WorldPos?.X:F0},{slot.WorldPos?.Y:F0},{slot.WorldPos?.Z:F0}) " +
                     $"vol={slot.CurrentVolume:F3}/{slot.TargetVolume:F3} " +
                     $"directOcc={directStr} effOcc={effectiveStr} audible={audible} " +
-                    $"playing={slot.Sound?.IsPlaying ?? false}");
+                    $"playing={slot.Sound?.IsPlaying ?? false} " +
+                    $"posMode={(PositionSelector != null ? "wind" : "default")}");
             }
             return sb.ToString().TrimEnd();
         }
