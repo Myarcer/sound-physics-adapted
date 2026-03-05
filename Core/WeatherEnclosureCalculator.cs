@@ -282,7 +282,6 @@ namespace soundphysicsadapted
             public int DirectCount;
             public float DirectWeight;
             public float ExposedTotalWeight;
-            public float WeightedOcclusionSum;  // Sum of (weight * normalizedOcclusion) for continuous DDA averaging
             public int NeighborFinds;
             public int ProbeFinds;
 
@@ -499,15 +498,6 @@ namespace soundphysicsadapted
                 // Find best audible path through this column (multi-height DDA)
                 var result = FindBestPath(ctx, candidate, effectiveThreshold, i);
 
-                // Accumulate continuous weighted occlusion for aggregate metric.
-                // Uses 1 - exp(-occ * 0.6) to map DDA values (0..10) to 0..1 range:
-                //   0 blocks → 0.00, 1 block (~0.65-1.0) → 0.32-0.45,
-                //   2-3 blocks → 0.55-0.83, 5+ blocks → 0.95+
-                // This preserves material-thickness gradients that the binary
-                // direct/blocked classification discards.
-                float normalizedOcclusion = 1f - MathF.Exp(-result.BestOcclusion * 0.6f);
-                ctx.WeightedOcclusionSum += candidate.Weight * normalizedOcclusion;
-
                 if (result.BestOcclusion < effectiveThreshold)
                 {
                     // Clear path found — rain is audible from this column
@@ -518,7 +508,7 @@ namespace soundphysicsadapted
                     {
                         WeatherAudioManager.WeatherDebugLog(
                             $"  CAND[{i}] ({candidate.WorldX},{candidate.WorldZ}) rainY={candidate.RainY} dist={candidate.HorizontalDist:F1} " +
-                            $"DIRECT: bestOccl={result.BestOcclusion:F2} normOccl={normalizedOcclusion:F2} < {effectiveThreshold:F2}{(alreadyCached ? " (hysteresis)" : "")}");
+                            $"DIRECT: bestOccl={result.BestOcclusion:F2} < {effectiveThreshold:F2}{(alreadyCached ? " (hysteresis)" : "")}");
                     }
 
                     ctx.FreshVerified.Add(new VerifiedRainPosition
@@ -540,7 +530,7 @@ namespace soundphysicsadapted
                     {
                         WeatherAudioManager.WeatherDebugLog(
                             $"  CAND[{i}] ({candidate.WorldX},{candidate.WorldZ}) rainY={candidate.RainY} dist={candidate.HorizontalDist:F1} " +
-                            $"OCCLUDED: bestOccl={result.BestOcclusion:F2} normOccl={normalizedOcclusion:F2} (all heights blocked)");
+                            $"OCCLUDED: bestOccl={result.BestOcclusion:F2} (all heights blocked)");
                     }
 
                     // Collect for Step 3 -- nearby wall with thin occlusion -> opening might be adjacent
@@ -1074,22 +1064,9 @@ namespace soundphysicsadapted
             for (int r = 0; r < distanceKeysToRemove.Count; r++)
                 openingCache.Remove(distanceKeysToRemove[r]);
 
-            // ── Compute occlusion factor ──
-            // Binary ratio: fraction of exposed columns that are blocked (for legacy
-            // sky-coverage bounds and debug). Preserved for DDA bounds calculation.
-            float binaryDdaOcclusion = ctx.ExposedTotalWeight > 0f
+            // Compute occlusion factor
+            float rawDdaOcclusion = ctx.ExposedTotalWeight > 0f
                 ? 1f - (ctx.DirectWeight / ctx.ExposedTotalWeight)
-                : 1f;
-
-            // Continuous weighted-average occlusion: uses actual material-thickness
-            // values from DDA instead of binary direct/blocked classification.
-            // This preserves the gradient between thin walls and deep caves:
-            //   1-block wall (DDA ~0.65-1.0) → normalized ~0.32-0.45
-            //   2-3 blocks (DDA ~1.3-3.0)    → normalized ~0.55-0.83
-            //   5+ blocks / deep cave         → normalized ~0.95-1.0
-            //   No exposed candidates         → 1.0 (fully enclosed)
-            float weightedAvgOcclusion = ctx.ExposedTotalWeight > 0f
-                ? ctx.WeightedOcclusionSum / ctx.ExposedTotalWeight
                 : 1f;
 
             // ── DDA-informed bounds for SkyCoverage ──
@@ -1099,19 +1076,17 @@ namespace soundphysicsadapted
             //
             // Floor: high DDA occlusion (walls blocking) → SkyCov can't be artificially low.
             //   Fixes small rooms (3x4) where tiny roof covers few of ~480 scan columns.
-            //   Uses binary ratio (not weighted avg) since this is about whether paths
-            //   exist at all, not material thickness.
-            //   At binaryDda=0.95 (room): floor=0.71, lifting 0.34 → 0.71
+            //   At rawDda=0.95 (room): floor=0.71, lifting 0.34 → 0.71
             //   Always active — independent of player column exposure.
             //
             // Ceiling: low DDA occlusion (clear air paths) → SkyCov can't be inflated.
             //   Fixes narrow alleys where distant building roofs inflate SkyCov to 0.90+.
-            //   At binaryDda=0.05 (alley): ceiling=0.19, capping 0.90 → 0.19
+            //   At rawDda=0.05 (alley): ceiling=0.19, capping 0.90 → 0.19
             //   ONLY active when player IS personally exposed to sky (standing in rain).
             //   When player is under cover (cavern, room), ceiling stays at 1.0 so the
             //   raw SkyCoverage isn't capped — the player IS enclosed, we want high values.
             //   2-block vertical gradient prevents audio pops at overhang edges.
-            float skyFloor = binaryDdaOcclusion * 0.75f;
+            float skyFloor = rawDdaOcclusion * 0.75f;
 
             // Player exposure gate: check if the player's own column is exposed to rain
             int playerRainH = ctx.BlockAccessor.GetRainMapHeightAt(ctx.PlayerX, ctx.PlayerZ);
@@ -1130,7 +1105,7 @@ namespace soundphysicsadapted
             float exposedFraction = (float)ctx.ExposedCandidates.Count / samplePoints.Length;
             exposureGate *= Math.Clamp(exposedFraction * 20f, 0f, 1f);
 
-            float baseCeiling = 0.15f + 0.85f * binaryDdaOcclusion;
+            float baseCeiling = 0.15f + 0.85f * rawDdaOcclusion;
             // lerp(1.0, baseCeiling, exposureGate): full cap when exposed, no cap when covered
             float skyCeiling = baseCeiling + (1.0f - baseCeiling) * (1.0f - exposureGate);
 
@@ -1140,20 +1115,16 @@ namespace soundphysicsadapted
             if (ctx.DebugWeather && Math.Abs(SkyCoverage - rawSky) > 0.01f)
             {
                 WeatherAudioManager.WeatherDebugLog(
-                    $"  DDA BOUNDS: binaryDda={binaryDdaOcclusion:F2} weightedAvg={weightedAvgOcclusion:F2} " +
-                    $"floor={skyFloor:F2} ceil={skyCeiling:F2} " +
+                    $"  DDA BOUNDS: rawDda={rawDdaOcclusion:F2} floor={skyFloor:F2} ceil={skyCeiling:F2} " +
                     $"gate={exposureGate:F2} vMargin={vertMargin} sky {rawSky:F2} -> {SkyCoverage:F2}");
             }
 
-            // Safety floor: gentle correlation between SkyCoverage and Occlusion.
-            // High sky coverage with very LOW continuous occlusion is contradictory only
-            // in deep enclosed spaces (caves), not in thin-walled buildings.
-            // Use a weaker floor (cubic instead of quadratic) so that:
-            //   SkyCov=0.95 (house) → floor=0.86*0.95=0.81 — but weightedAvg already
-            //   captures material thickness naturally, so this rarely overrides.
-            //   Only kicks in when weightedAvg is suspiciously low for the coverage level.
-            float skyCoverageFloor = SkyCoverage * SkyCoverage * SkyCoverage * 0.5f;
-            OcclusionFactor = Math.Max(weightedAvgOcclusion, skyCoverageFloor);
+            // Safety floor: SkyCoverage and OcclusionFactor should be correlated.
+            // High sky coverage (mostly roofed) with zero DDA occlusion is contradictory —
+            // rain MUST pass through material to reach a covered player.
+            // Quadratic: gentle at low coverage, strong at high.
+            float skyCoverageFloor = SkyCoverage * SkyCoverage;
+            OcclusionFactor = Math.Max(rawDdaOcclusion, skyCoverageFloor);
         }
 
         // ══════════════════════════════════════════════════════════════
