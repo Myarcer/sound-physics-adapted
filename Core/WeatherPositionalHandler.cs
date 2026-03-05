@@ -84,6 +84,10 @@ namespace soundphysicsadapted
             windPool.FadeInRate = 0.15f;  // ~1.2s to 90%
             windPool.FadeOutRate = 0.08f; // ~3.5s fade (wind lingers)
 
+            // Wind position: use WindWorldPos (ceiling height for sky openings)
+            // instead of WorldPos (rain impact / floor level)
+            windPool.PositionSelector = (opening) => opening.WindWorldPos ?? opening.WorldPos;
+
             // ── Hail pool ──
             hailPool = new PositionalSourcePool(
                 capi,

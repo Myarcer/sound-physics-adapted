@@ -518,7 +518,10 @@ namespace soundphysicsadapted
                         Occlusion = result.BestOcclusion + result.BestInteractableOcclusion,
                         Distance = (float)result.BestRainPos.DistanceTo(ctx.PlayerEarPos),
                         ColumnX = candidate.WorldX,
-                        ColumnZ = candidate.WorldZ
+                        ColumnZ = candidate.WorldZ,
+                        SkyOpeningY = result.BestEntryPoint == null
+                            ? InferCeilingHeight(candidate.WorldX, candidate.WorldZ, candidate.RainY, ctx.BlockAccessor)
+                            : double.NaN
                     });
 
                     ctx.Viz?.AddDda(candidate.WorldX, candidate.RainY + (int)result.BestHeight, candidate.WorldZ,
@@ -817,7 +820,10 @@ namespace soundphysicsadapted
                             Occlusion = bestNeighborOcc + bestNeighborInteractable,
                             Distance = (float)bestNeighborPos.DistanceTo(ctx.PlayerEarPos),
                             ColumnX = nx,
-                            ColumnZ = nz
+                            ColumnZ = nz,
+                            SkyOpeningY = bestNeighborEntry == null
+                                ? InferCeilingHeight(nx, nz, neighborRainH, ctx.BlockAccessor)
+                                : double.NaN
                         });
 
                         ctx.DirectCount++;
@@ -955,7 +961,10 @@ namespace soundphysicsadapted
                                 Occlusion = pathOcc + probeInteractable,
                                 Distance = (float)rainSourcePos.DistanceTo(ctx.PlayerEarPos),
                                 ColumnX = bx,
-                                ColumnZ = bz
+                                ColumnZ = bz,
+                                SkyOpeningY = entryPoint == null
+                                    ? InferCeilingHeight(bx, bz, rainH, ctx.BlockAccessor)
+                                    : double.NaN
                             });
 
                             ctx.ProbeFinds++;
@@ -1176,6 +1185,43 @@ namespace soundphysicsadapted
             public int RainY;
             public float BestOcclusion;
             public float Weight;
+        }
+
+        /// <summary>
+        /// Infer the ceiling height above a sky opening column by checking
+        /// the 4 cardinal neighbors' rain heights. High neighbors indicate
+        /// surrounding roof/wall geometry — the lowest high neighbor is the
+        /// most likely ceiling edge where wind enters.
+        /// </summary>
+        /// <param name="columnX">World X of the opening column</param>
+        /// <param name="columnZ">World Z of the opening column</param>
+        /// <param name="columnRainY">Rain height at this column (floor level)</param>
+        /// <param name="blockAccessor">Block accessor for heightmap queries</param>
+        /// <returns>Estimated ceiling Y, or Double.NaN if no ceiling detected (open sky)</returns>
+        private static double InferCeilingHeight(int columnX, int columnZ, int columnRainY, IBlockAccessor blockAccessor)
+        {
+            // Minimum height difference to consider a neighbor as "roof geometry"
+            // 3 blocks avoids picking up small terrain bumps / stairs / fences
+            const int HEIGHT_THRESHOLD = 3;
+
+            int bestCeilingY = int.MaxValue;
+
+            // Check 4 cardinal neighbors
+            int n = blockAccessor.GetRainMapHeightAt(columnX, columnZ - 1);
+            int s = blockAccessor.GetRainMapHeightAt(columnX, columnZ + 1);
+            int e = blockAccessor.GetRainMapHeightAt(columnX + 1, columnZ);
+            int w = blockAccessor.GetRainMapHeightAt(columnX - 1, columnZ);
+
+            if (n - columnRainY > HEIGHT_THRESHOLD && n < bestCeilingY) bestCeilingY = n;
+            if (s - columnRainY > HEIGHT_THRESHOLD && s < bestCeilingY) bestCeilingY = s;
+            if (e - columnRainY > HEIGHT_THRESHOLD && e < bestCeilingY) bestCeilingY = e;
+            if (w - columnRainY > HEIGHT_THRESHOLD && w < bestCeilingY) bestCeilingY = w;
+
+            if (bestCeilingY == int.MaxValue)
+                return double.NaN; // No high neighbors — open sky, no ceiling to infer
+
+            // Opening is at ceiling level + 1 (the air block where wind enters)
+            return bestCeilingY + 1.0;
         }
     }
 
@@ -1413,5 +1459,14 @@ namespace soundphysicsadapted
         /// </summary>
         public int ColumnX;
         public int ColumnZ;
+
+        /// <summary>
+        /// Estimated ceiling height where sky opening exists. For wall openings
+        /// (EntryPos != null), this is unused — wind uses EntryPos.Y.
+        /// For sky openings (EntryPos == null), this is the inferred ceiling height
+        /// so wind can be placed at the opening rather than at floor level.
+        /// Double.NaN means not computed / no valid ceiling found.
+        /// </summary>
+        public double SkyOpeningY;
     }
 }
