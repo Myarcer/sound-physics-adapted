@@ -694,9 +694,21 @@ namespace soundphysicsadapted
                 }
                 else if (pathResult.HasValue)
                 {
+                    // PERMEATED-ONLY CHECK: When ALL paths are through-wall (zero open paths),
+                    // repositioning is meaningless — there's no opening to localize toward.
+                    // The weighted direction from random wall-bleed rays is unstable, causing
+                    // offset to jump 5m→19m→37m between ticks (beehive flutter bug).
+                    // SPR doesn't reposition permeated-only sounds either.
+                    // Keep LPF filtering (below) but skip the position shift.
+                    bool allPermeated = pathResult.Value.PathCount == 0 && pathResult.Value.PermeatedPathCount > 0;
+                    if (allPermeated)
+                    {
+                        AudioRenderer.ResetSoundPosition(sound, soundPos);
+                    }
+
                     // Occluded: full path resolution with opening probes.
                     // Position shifts toward openings, LPF uses blended occlusion.
-                    bool applied = AudioRenderer.ApplySoundPath(sound, pathResult.Value, soundPos);
+                    bool applied = allPermeated || AudioRenderer.ApplySoundPath(sound, pathResult.Value, soundPos);
 
                     if (applied)
                     {
