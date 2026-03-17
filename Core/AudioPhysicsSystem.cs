@@ -67,6 +67,16 @@ namespace soundphysicsadapted
             // can lerp toward silence without needing to re-raytrace the throttled sound.
             public float ThrottleFade = 1.0f;
             public float CachedFilterForFade = 1.0f;
+
+            // Throttle oscillation detection: prevents volume wobble when sounds
+            // repeatedly cross the budget boundary (throttled↔unthrottled).
+            // When 3+ transitions happen within 10s, fade is frozen at current level.
+            // Unfreezes after 5s of stability (no transitions) in either state.
+            public bool LastThrottledState;
+            public long LastThrottleTransitionMs;
+            public int ThrottleTransitionCount;
+            public long ThrottleWindowStartMs;
+            public bool ThrottleFrozen;
         }
 
         private Dictionary<ILoadedSound, SoundCacheEntry> soundCache = new Dictionary<ILoadedSound, SoundCacheEntry>();
@@ -414,6 +424,48 @@ namespace soundphysicsadapted
             float minFilter = config?.MinLowPassFilter ?? 0.001f;
             float fadeDurationMs = (config?.ThrottleFadeSeconds ?? 0.5f) * 1000f;
 
+            // === THROTTLE OSCILLATION DETECTION ===
+            // When a sound repeatedly crosses the budget boundary (e.g. beehive at 40 blocks
+            // losing its slot every time a nearby boar grunts), the fade direction keeps
+            // reversing, causing audible volume wobble. Detect this and freeze the fade.
+            bool throttleStateChanged = (isThrottled != cache.LastThrottledState);
+            cache.LastThrottledState = isThrottled;
+
+            if (throttleStateChanged)
+            {
+                cache.LastThrottleTransitionMs = currentTimeMs;
+
+                // Reset tracking window if expired (>10s since window start)
+                if (currentTimeMs - cache.ThrottleWindowStartMs > 10000)
+                {
+                    cache.ThrottleTransitionCount = 0;
+                    cache.ThrottleWindowStartMs = currentTimeMs;
+                }
+                cache.ThrottleTransitionCount++;
+
+                // 3+ transitions in 10s = oscillating → freeze fade at current level
+                if (cache.ThrottleTransitionCount >= 3 && !cache.ThrottleFrozen)
+                {
+                    cache.ThrottleFrozen = true;
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"[THROTTLE] Froze fade for {soundName} at {cache.ThrottleFade:F2} " +
+                        $"({cache.ThrottleTransitionCount} transitions in {(currentTimeMs - cache.ThrottleWindowStartMs) / 1000f:F1}s)");
+                }
+            }
+
+            // Unfreeze when stable: no transitions for 5+ seconds means the budget settled
+            if (cache.ThrottleFrozen && cache.LastThrottleTransitionMs > 0
+                && currentTimeMs - cache.LastThrottleTransitionMs > 5000)
+            {
+                cache.ThrottleFrozen = false;
+                cache.ThrottleTransitionCount = 0;
+                cache.ThrottleWindowStartMs = currentTimeMs;
+                // ThrottleFade stays at current value — normal fade logic resumes
+                // from here, smoothly converging to the correct final state.
+                SoundPhysicsAdaptedModSystem.DebugLog(
+                    $"[THROTTLE] Unfroze fade for {soundName} (stable 5s, fade={cache.ThrottleFade:F2})");
+            }
+
             // Compute how much to step the fade based on real elapsed time.
             // Clamped to [0,1] so new sounds (LastUpdateTimeMs=0) don't get huge steps.
             long elapsedMs = cache.LastUpdateTimeMs > 0 ? currentTimeMs - cache.LastUpdateTimeMs : 50L;
@@ -421,7 +473,8 @@ namespace soundphysicsadapted
 
             if (isThrottled)
             {
-                cache.ThrottleFade = Math.Max(0f, cache.ThrottleFade - fadeStep);
+                if (!cache.ThrottleFrozen)
+                    cache.ThrottleFade = Math.Max(0f, cache.ThrottleFade - fadeStep);
 
                 float fadedFilter = minFilter + (cache.CachedFilterForFade - minFilter) * cache.ThrottleFade;
                 AudioRenderer.SetOcclusion(sound, fadedFilter, soundPos, soundName);
@@ -434,11 +487,27 @@ namespace soundphysicsadapted
             else
             {
                 // Step fade up (fading in from a previous throttle, or already at 1 — no-op).
-                cache.ThrottleFade = Math.Min(1f, cache.ThrottleFade + fadeStep);
+                if (!cache.ThrottleFrozen)
+                    cache.ThrottleFade = Math.Min(1f, cache.ThrottleFade + fadeStep);
             }
 
+            // NOTE: Sound occlusion uses OcclusionCalculator.Calculate() (multi-ray with voting),
+            // intentionally different from WeatherEnclosureCalculator's DDA path
+            // (CalculateWeatherPathOcclusionWithEntry). Weather DDA separates structural vs
+            // interactable occlusion so weather sources can spawn through closed doors/trapdoors
+            // — rain is audible through a door even when the door itself occludes. Sound
+            // occlusion here treats ALL blocking geometry uniformly for accurate per-sound LPF.
             float occlusion = OcclusionCalculator.Calculate(soundPos, playerPos, blockAccessor);
             float directFilter = occlusion <= 0 ? 1.0f : OcclusionCalculator.OcclusionToFilter(occlusion);
+
+            // Interval compensation factor for EMA smoothing below.
+            // Alpha values are tuned for 50ms (CLOSE_INTERVAL) ticks. Far sounds update
+            // at 200-500ms intervals, so each update must converge proportionally more.
+            // Math: α_compensated = 1 - (1-α)^(interval/baseInterval)
+            // This ensures convergence TIME is consistent regardless of update rate.
+            float intervalRatio = (cache.NearAcousticBoundary || distance <= CLOSE_DISTANCE) ? 1f
+                                : distance <= NEAR_DISTANCE ? NEAR_INTERVAL_MS / (float)CLOSE_INTERVAL_MS
+                                : FAR_INTERVAL_MS / (float)CLOSE_INTERVAL_MS;
 
             // Read per-sound range from vanilla SoundParams for reverb distance attenuation.
             // Default 32 blocks = vanilla default. Used instead of the old global MaxSoundDistance config.
@@ -599,6 +668,9 @@ namespace soundphysicsadapted
                         // Still converging from previous occlusion — smooth toward clear
                         float clearDelta = cache.SmoothedBlendedOcc - occlusion;
                         float clearAlpha = clearDelta > 1.5f ? 0.55f : clearDelta > 0.5f ? 0.40f : 0.30f;
+                        // Compensate for update interval (far sounds update less often)
+                        if (intervalRatio > 1f)
+                            clearAlpha = 1f - MathF.Pow(1f - clearAlpha, intervalRatio);
                         cache.SmoothedBlendedOcc += (occlusion - cache.SmoothedBlendedOcc) * clearAlpha;
                         // Use smoothed filter instead of raw direct filter for continuity
                         finalFilter = cache.SmoothedBlendedOcc <= 0 ? 1.0f
@@ -696,6 +768,12 @@ namespace soundphysicsadapted
                                               : delta > 1.5f ? 0.55f   // big change (rounding corner): ~200ms
                                               : delta > 0.5f ? 0.40f   // medium change: ~250ms
                                               : 0.25f;                 // small jitter: smooth
+
+                        // Compensate for update interval (far sounds update less often).
+                        // Without this, a far sound at 500ms interval with α=0.25 takes
+                        // ~6s to converge vs ~0.6s for a close sound at 50ms — 10x slower.
+                        if (intervalRatio > 1f)
+                            occSmoothFactor = 1f - MathF.Pow(1f - occSmoothFactor, intervalRatio);
 
                         if (cache.HasSmoothedOcc)
                         {
