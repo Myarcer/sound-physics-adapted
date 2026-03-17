@@ -7,34 +7,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.1.7] - 2026-03-05
 
 ### Added
-- Config migration system for seamless upgrades between versions
-- Acoustic boundary detection with adaptive EMA smoothing
-- Cave exit detection via march-along probe rays
-- Player-centric DDA heights for weather below player elevation
-- Thunder enclosure system (independent from VS deepnessSub)
-- Thunder range extended to 1000 blocks with natural falloff and speed-of-sound delay
-- Lightning sound override and rumble RNG variety
-- ConfigLib integration for optional in-game settings GUI
 - Medieval Expansion mod compatibility (doors, gates, and spacer blocks)
-- Universal door/gate detection for modded blocks
+- Universal door/gate detection for modded blocks (portcullis, etc.)
+- Wind sources now positioned at ceiling height for sky openings instead of floor level
+- Ceiling height inference for wind placement (searches nearby roof geometry)
+- Wind debug visualization (magenta blocks at inferred ceiling height)
+- World-ready gate and warmup system — defers raycasting until world is fully loaded
 
 ### Fixed
-- Server-side persistence, CarryOn detection, and pause/resume desync
-- Block self-occlusion at spawn boundaries
-- Mono downmix for sounds at local player position (preserves L/R panning)
-- Underwater music pitch getting stuck on water exit
-- Reverb through walls now muffled instead of silent (SPR-style cutoff)
-- Repositioned sounds no longer over-muffled (inverted occlusion floor/ceiling)
-- Indoor thunder cracks use dedicated LPF instead of volume hack
-- Gate/door occlusion guarded behind world-ready checks (fixes multiplayer join freeze)
-- Opened gates/doors with spacer blocks no longer block sound
+- Multiplayer join freeze caused by raycasting against incomplete block accessor
+- Opened gates/doors with spacer blocks no longer block sound (Medieval Expansion)
+- Solid-face fast path now correctly skipped for open interactable blocks
+- Reverb and occlusion deferred during world load instead of applied immediately
+
+## [0.1.6.1] - 2026-03-02
+
+### Fixed
+- Resonator state not saving to chunk on server (ToTreeAttributes/FromTreeAttributes patches now applied server-side)
+- Client-server desync when only client has mod installed
+- Carry On mod detection missing on server side
+- Tooltip now shows correct key binding based on Carry On presence
+
+## [0.1.6] - 2026-03-02
+
+### Added
+- Thunder & lightning overhaul: dedicated enclosure system, 1000-block range with realistic falloff
+- Rumble volume variety (0.2–1.0x RNG), indoor cracks muffled with aggressive LPF (500Hz floor)
+- Thunder distance thresholds rescaled to match bolt distribution, raised source limits (L1:12, L2:20)
+- March-along probe rays for cave exit detection, player-centric DDA heights for weather below player
+- SoundSourceAdjuster for door Y-position correction and multiblock placeholder resolution
+- Rain position averaging across nearest 9 columns instead of single nearest
+- Config migration system for seamless upgrades between versions
+- ConfigLib integration for optional in-game settings GUI
+
+### Fixed
+- Sounds at player position losing stereo (no longer forced to mono downmix)
+- Spawn-time position fingerprinting prevents self-occlusion on player-emitted sounds
+- Per-sound range used for reverb attenuation (removed MaxSoundDistance hard gate)
+- Occlusion floor/ceiling inversion that made repositioned sounds too muffled
+- Music pitch getting stuck after exiting water
 
 ### Changed
-- Reverb cache redesigned with composite key (soundCell + playerCell)
-- Debug flags consolidated to top of config
-- Smoother audio transitions via weighted trimmed mean and tuned EMA
-- Rain uses averaged nearest 9 columns instead of single nearest
-- Thunder asset thresholds rescaled to match bolt distribution
+- Tuned adaptive EMA for more realistic acoustic transitions
+
+## [0.1.5] - 2026-02-25
+
+### Added
+- Reverb cache redesign with composite key (soundCell + playerCell) — auto-invalidates on player movement
+- Close sounds use 2-block player cells (responsive), far sounds use 8-block cells (stable)
+- Acoustic boundary detection via SharedAirspaceRatio — sounds near corners/doorways get every-tick updates
+
+### Changed
+- Adaptive EMA smoothing scales alpha by change magnitude (large: 0.70/150ms, medium: 0.55/200ms, small: 0.25)
+- Corner transitions reduced from ~1s to ~300ms with no discontinuities
+
+### Fixed
+- Filter discontinuity when sound crossed occ<1.0 threshold into skipRepositioning branch
+- Capped max EMA alpha at 0.70 to prevent single-tick LPF pops
 
 ## [0.1.4] - 2026-02-22
 
