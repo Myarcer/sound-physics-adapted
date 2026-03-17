@@ -1023,10 +1023,11 @@ namespace soundphysicsadapted
                 // with recycled sourceIds that might still be playing other sounds
                 AudioRenderer.DetachGlobalFilter(sourceId);
 
-                // During world loading (before LevelFinalize + warmup), register with
-                // neutral filter only. The tick system will handle raycasting later.
-                // After world is ready, apply immediate occlusion for responsive audio.
-                if (!SoundPhysicsAdaptedModSystem.IsWorldReady)
+                // After LevelFinalize, block accessor is available — apply cheap direct
+                // occlusion immediately so sounds don't play at full volume during warmup.
+                // IsWorldDataLoaded = LevelFinalize fired (block data ready).
+                // IsWorldReady = also warmup complete (gates heavy ACOUSTICS tick only).
+                if (!SoundPhysicsAdaptedModSystem.IsWorldDataLoaded)
                 {
                     ApplyLowPassFilter(loadedSound, 1.0f, null, soundName);
                 }

@@ -130,8 +130,12 @@ namespace soundphysicsadapted
             int sCellY = (int)Math.Floor(soundPos.Y / SOUND_CELL_SIZE);
             int sCellZ = (int)Math.Floor(soundPos.Z / SOUND_CELL_SIZE);
 
-            // Far sounds use larger player cells (less sensitive to small movements)
-            int pCellSize = distance > FAR_DISTANCE ? FAR_PLAYER_CELL_SIZE : PLAYER_CELL_SIZE;
+            // Far sounds use larger player cells (less sensitive to small movements).
+            // Dead-zone: use FAR cells starting 5 blocks early to prevent key oscillation
+            // when a sound hovers right at the FAR_DISTANCE threshold — otherwise tiny
+            // distance changes flip between 2-block and 8-block player cells, causing
+            // alternating cache hits/misses and subtle reverb flutter.
+            int pCellSize = distance > (FAR_DISTANCE - 5f) ? FAR_PLAYER_CELL_SIZE : PLAYER_CELL_SIZE;
             int pCellX = (int)Math.Floor(playerPos.X / pCellSize);
             int pCellY = (int)Math.Floor(playerPos.Y / pCellSize);
             int pCellZ = (int)Math.Floor(playerPos.Z / pCellSize);

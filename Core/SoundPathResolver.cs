@@ -263,6 +263,11 @@ namespace soundphysicsadapted
 
             // Compute apparent direction from weighted sum of all paths
             double dirLength = Math.Sqrt(weightedX * weightedX + weightedY * weightedY + weightedZ * weightedZ);
+            // SPR-style coherence check: when opposing paths nearly cancel (e.g. sound
+            // wrapping both sides of a wall), the resultant vector is short relative to
+            // total weight. Reject repositioning to prevent left/right flickering.
+            // SPR uses normalized.length() < 0.5; we check dirLength/totalWeight < 0.5.
+            if (totalWeight > 0.0001 && dirLength / totalWeight < 0.5) return null;
             if (dirLength < 0.0001) return null; // Directions cancel out
 
             Vec3d apparentDir = new Vec3d(
