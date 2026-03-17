@@ -154,6 +154,14 @@ namespace soundphysicsadapted
             bool hasDirectAirspace = singleRayOcclusion < 0.1f;
             float directOcclusion = multiRayOcclusion >= 0 ? multiRayOcclusion : singleRayOcclusion;
 
+            // At >25m behind a wall, opening probes are skipped. Bounce rays fire in
+            // random fibonacci directions — any "open" bounce is a false positive whose
+            // direction has nothing to do with the actual opening. A single such ray
+            // outweighs the direct path ~78x and places the sound on the wrong side.
+            // Only the direct path contributes to repositioning in this case.
+            bool skipBounceReposition = soundDistance > 25f
+                && directOcclusion >= config.PermeationOcclusionThreshold;
+
             for (int i = 0; i < numRays; i++)
             {
                 float fiN = (float)i / numRays;
@@ -221,7 +229,7 @@ namespace soundphysicsadapted
                         _cacheableBounceCount++;
                     }
 
-                    if (config.EnableSoundRepositioning)
+                    if (config.EnableSoundRepositioning && !skipBounceReposition)
                     {
                         _reusableFromPlayerToBounce.Set(bpX - playerPos.X, bpY - playerPos.Y, bpZ - playerPos.Z);
                         double dirLen = _reusableFromPlayerToBounce.Length();
@@ -432,7 +440,13 @@ namespace soundphysicsadapted
                 pathResolver.AddPath(dirNorm, directDist, directWeight, directOcclusion, config.PermeationOcclusionThreshold);
             }
 
+            // At >25m behind a wall, bounce directions are unreliable (no opening probes).
+            // Only the direct path contributes to repositioning.
+            bool skipBounceReposition = directDist > 25f
+                && directOcclusion >= config.PermeationOcclusionThreshold;
+
             // Add cached bounce paths (shared geometry, per-sound weighting)
+            if (!skipBounceReposition)
             for (int i = 0; i < cell.BouncePointCount; i++)
             {
                 var bp = cell.BouncePoints[i];
