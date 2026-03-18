@@ -40,6 +40,10 @@ namespace soundphysicsadapted
         // 0 = not cached, 1 = is open interactable, 2 = is NOT
         private static readonly byte[] isOpenInteractableCache = new byte[BLOCK_CACHE_SIZE];
 
+        // Cache for IsChiseledBlock (custom voxel geometry — needs AABB path)
+        // 0 = not cached, 1 = is chiseled, 2 = is NOT chiseled
+        private static readonly byte[] isChiseledBlockCache = new byte[BLOCK_CACHE_SIZE];
+
         /// <summary>
         /// Clear all block caches. Call when config reloads or materials change.
         /// </summary>
@@ -50,6 +54,7 @@ namespace soundphysicsadapted
             Array.Clear(hasMultipleSolidFacesCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isWeatherInteractableCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isOpenInteractableCache, 0, BLOCK_CACHE_SIZE);
+            Array.Clear(isChiseledBlockCache, 0, BLOCK_CACHE_SIZE);
             cachedOcclusionPerSolidBlock = -1f;
         }
 
@@ -145,11 +150,39 @@ namespace soundphysicsadapted
         /// <summary>
         /// Check if a block is "solid enough" to occlude sound/weather.
         /// Combines all three checks: full cube, any solid face, or config override.
+        /// Excludes chiseled blocks — they report SideSolid based on the shared Block type,
+        /// not the per-instance voxel shape. Must use AABB collision path instead.
         /// This is the standard check used by both sound and weather DDA systems.
         /// </summary>
         public static bool IsSolidForOcclusion(Block block)
         {
+            if (IsChiseledBlock(block)) return false;
             return IsFullCube(block) || HasMultipleSolidFaces(block) || ShouldTreatAsFullCube(block);
+        }
+
+        /// <summary>
+        /// Check if a block is a chiseled block (custom voxel geometry).
+        /// Chiseled blocks share a single Block type but each instance has unique geometry
+        /// stored in the BlockEntity. SideSolid is unreliable — always route through AABB.
+        /// Cached per block ID.
+        /// </summary>
+        public static bool IsChiseledBlock(Block block)
+        {
+            if (block == null) return false;
+
+            int blockId = block.Id;
+            if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
+            {
+                byte cached = isChiseledBlockCache[blockId];
+                if (cached != 0)
+                    return cached == 1;
+
+                bool result = block.Code?.Path?.StartsWith("chiseledblock") == true;
+                isChiseledBlockCache[blockId] = result ? (byte)1 : (byte)2;
+                return result;
+            }
+
+            return block.Code?.Path?.StartsWith("chiseledblock") == true;
         }
 
         /// <summary>

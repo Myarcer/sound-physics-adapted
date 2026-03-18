@@ -284,10 +284,13 @@ namespace soundphysicsadapted
             );
 
             double offset = soundPos.DistanceTo(apparentPos);
-            // No MinRepositionOffset threshold — always return a result.
-            // When offset is tiny, position naturally stays near-original
-            // and position smoothing handles the rest. A threshold here
-            // causes null flickering and resets smoothing state.
+
+            // Reject implausible repositioning: if the offset exceeds the original
+            // player-to-sound distance, the sound would be placed further from its
+            // source than the player is. This happens when sparse bounce data at long
+            // range (>25m, no opening probes) produces a single surviving path pointing
+            // in a random direction (e.g. beehive at 38m: offset=58m, wrong side).
+            if (offset > originalDist) return null;
 
             return new SoundPathResult(
                 apparentPos, soundPos, avgOcclusion, avgDistance,

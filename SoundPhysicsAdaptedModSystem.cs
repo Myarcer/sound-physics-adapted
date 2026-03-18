@@ -56,8 +56,11 @@ namespace soundphysicsadapted
         // incomplete block accessor take 100+ seconds and freeze the client.
         private static bool _worldReady = false;
         private static int _warmupTicksRemaining = 0;
-        private const int WARMUP_TICKS = 100; // ~2.5s of real game frames (100 * 25ms)
+        private const int WARMUP_TICKS = 4; // ~100ms stabilization after LevelFinalize
+        /// <summary>Full readiness: world loaded + warmup complete. Gates heavy ACOUSTICS tick.</summary>
         public static bool IsWorldReady => _worldReady && _warmupTicksRemaining <= 0;
+        /// <summary>Block accessor available (LevelFinalize fired). Gates cheap single-ray occlusion on sound start.</summary>
+        public static bool IsWorldDataLoaded => _worldReady;
 
         // === FREEZE DIAGNOSTIC: Heartbeat + timing infrastructure ===
         private static Stopwatch _diagStopwatch = new Stopwatch();
