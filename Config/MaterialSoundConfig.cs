@@ -287,8 +287,6 @@ namespace soundphysicsadapted
                         // causing them to take the solid fast path with occ=1.0.
                         // Override to near-zero so they behave like normal foliage.
                         { "wildgrass:*", 0.02f },
-                        // Clutter — small decorative items (bottles, plates on shelves)
-                        { "game:clutter*", 0.0f },
                         // Stone paths — flat ground surface like wooden paths
                         { "game:stonepath*", 0.0f },
                         // Mechanical power — multiblock placeholder blocks

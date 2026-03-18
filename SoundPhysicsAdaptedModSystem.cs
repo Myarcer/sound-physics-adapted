@@ -272,7 +272,15 @@ namespace soundphysicsadapted
             catch (Exception ex)
             {
                 api.Logger.Error($"[SoundPhysicsAdapted] Failed to load material config: {ex.Message}");
-                materialConfig = MaterialSoundConfig.CreateDefault();
+                try
+                {
+                    materialConfig = MaterialSoundConfig.CreateDefault();
+                }
+                catch (Exception ex2)
+                {
+                    api.Logger.Error($"[SoundPhysicsAdapted] CreateDefault also failed: {ex2.Message}");
+                    materialConfig = new MaterialSoundConfig();
+                }
             }
 
             // Initialize sound override manager (logs active overrides)
