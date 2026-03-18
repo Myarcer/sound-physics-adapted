@@ -263,6 +263,16 @@ namespace soundphysicsadapted
                         // Placed grass
                         { "game:placeddrygrass-*", 0.0f },
                         { "game:drygrass-*", 0.0f },
+                        // Paintings — thin flat decorative, no collision, should not occlude
+                        { "game:painting-*", 0.0f },
+                        // Clutter — small decorative items (bottles, plates, etc.)
+                        { "game:clutter*", 0.0f },
+                        // Stone paths — flat ground surface like wooden paths
+                        { "game:stonepath*", 0.0f },
+                        // Mechanical power — multiblock markers, axles are narrow
+                        { "game:mpmultiblockwood*", 0.0f },
+                        // Wildgrass mod — mod sets SideSolid on grass blocks, causing full occlusion
+                        { "wildgrass:*", 0.02f },
                         // Structural plant blocks — thatch/sod roofing and hay bales
                         // VS classifies these as BlockMaterial.Plant (0.02) but they're
                         // dense packed building materials that should block sound/rain.
