@@ -222,8 +222,9 @@ namespace soundphysicsadapted
                         { "game:barrel-*", 0.5f },
                         // Furniture
                         { "game:bed-*", 0.3f },
-                        // Leaves - have collision boxes, denser foliage = more muffling
-                        { "game:leaves-*", 0.08f },
+                        // Branchy leaves — VS gives these collision boxes (you stand on them),
+                        // so they go through AABB ray intersection, not the foliage skip path.
+                        // Normal leaves have NO collision boxes and are auto-skipped (occ=0).
                         { "game:leavesbranchy-*", 0.12f },
                         // Snow layers - ignored for occlusion (too thin)
                         { "game:snowlayer-*", 0.0f },
