@@ -181,6 +181,52 @@ namespace soundphysicsadapted
                         materialConfig.Occlusion.Materials["glass"] = 0.8f;
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated config: updated glass occlusion to 0.8");
                     }
+
+                    // Version 2 migration: structural plant block overrides for thatch/sod roofing
+                    if (materialConfig.Version < 2)
+                    {
+                        var overrides = materialConfig.Occlusion.BlockOverrides;
+                        if (overrides != null)
+                        {
+                            // All thatch/sod roofing variants (Plant material = 0.02 is far too low)
+                            var thatchOverrides = new System.Collections.Generic.Dictionary<string, float>
+                            {
+                                { "game:slantedroofing-thatch*", 0.55f },
+                                { "game:slantedroofing-sod*", 0.55f },
+                                { "game:slantedroofingbottom-thatch*", 0.55f },
+                                { "game:slantedroofingbottom-sod*", 0.55f },
+                                { "game:slantedroofingcornerinner-thatch*", 0.55f },
+                                { "game:slantedroofingcornerinner-sod*", 0.55f },
+                                { "game:slantedroofingcornerouter-thatch*", 0.55f },
+                                { "game:slantedroofingcornerouter-sod*", 0.55f },
+                                { "game:slantedroofingridge-thatch*", 0.55f },
+                                { "game:slantedroofingridge-sod*", 0.55f },
+                                { "game:slantedroofingridgeend-thatch*", 0.55f },
+                                { "game:slantedroofingridgeend-sod*", 0.55f },
+                                { "game:slantedroofingtip-thatch*", 0.55f },
+                                { "game:slantedroofingtip-sod*", 0.55f },
+                                { "game:slantedroofinghalfleft-*", 0.45f },
+                                { "game:slantedroofinghalfright-*", 0.45f },
+                                { "game:hay-*", 0.4f }
+                            };
+                            foreach (var kvp in thatchOverrides)
+                            {
+                                if (!overrides.ContainsKey(kvp.Key))
+                                    overrides[kvp.Key] = kvp.Value;
+                            }
+                        }
+
+                        // Broaden TreatAsFullCube: all slanted roofing has geometry that rays miss
+                        if (materialConfig.Occlusion.TreatAsFullCube != null)
+                        {
+                            materialConfig.Occlusion.TreatAsFullCube.RemoveAll(p => p.StartsWith("game:slantedroofing"));
+                            if (!materialConfig.Occlusion.TreatAsFullCube.Contains("game:slantedroofing*"))
+                                materialConfig.Occlusion.TreatAsFullCube.Add("game:slantedroofing*");
+                        }
+
+                        materialConfig.Version = 2;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v2: added thatch/sod roofing overrides + broadened TreatAsFullCube");
+                    }
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");

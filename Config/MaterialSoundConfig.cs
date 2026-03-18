@@ -177,7 +177,7 @@ namespace soundphysicsadapted
         {
             return new MaterialSoundConfig
             {
-                Version = 1,
+                Version = 2,
                 Occlusion = new OcclusionSection
                 {
                     Materials = new Dictionary<string, float>
@@ -253,12 +253,16 @@ namespace soundphysicsadapted
                         // dense packed building materials that should block sound/rain.
                         { "game:slantedroofing-thatch*", 0.55f },
                         { "game:slantedroofing-sod*", 0.55f },
+                        { "game:slantedroofingbottom-thatch*", 0.55f },
+                        { "game:slantedroofingbottom-sod*", 0.55f },
                         { "game:slantedroofingcornerinner-thatch*", 0.55f },
                         { "game:slantedroofingcornerinner-sod*", 0.55f },
                         { "game:slantedroofingcornerouter-thatch*", 0.55f },
                         { "game:slantedroofingcornerouter-sod*", 0.55f },
                         { "game:slantedroofingridge-thatch*", 0.55f },
                         { "game:slantedroofingridge-sod*", 0.55f },
+                        { "game:slantedroofingridgeend-thatch*", 0.55f },
+                        { "game:slantedroofingridgeend-sod*", 0.55f },
                         { "game:slantedroofingtip-thatch*", 0.55f },
                         { "game:slantedroofingtip-sod*", 0.55f },
                         // Half-roof edge caps — thinner but still structural
@@ -271,11 +275,10 @@ namespace soundphysicsadapted
                     {
                         // Leaded glass panes fill most of the block - skip expensive AABB testing
                         "game:glasspane-leaded-*",
-                        // Half-roof caps: collision boxes don't intersect diagonal rays,
-                        // causing them to register zero occlusion. Treat as full cube
-                        // so the block override value is used directly.
-                        "game:slantedroofinghalfleft-*",
-                        "game:slantedroofinghalfright-*"
+                        // ALL slanted roofing: collision boxes are sloped geometry that
+                        // diagonal DDA rays frequently miss. Treat as full cube so the
+                        // block's occlusion value (override or material) is always applied.
+                        "game:slantedroofing*"
                     }
                 },
                 Reflectivity = new ReflectivitySection
