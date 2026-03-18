@@ -222,13 +222,7 @@ namespace soundphysicsadapted
                         { "game:barrel-*", 0.5f },
                         // Furniture
                         { "game:bed-*", 0.3f },
-                        // Vegetation - walkable but slightly muffles sound
-                        { "game:tallgrass-*", 0.01f },
-                        { "game:flower-*", 0.01f },
-                        { "game:fern-*", 0.02f },
-                        { "game:waterlily-*", 0.01f },
-                        { "game:mushroom-*", 0.01f },
-                        // Leaves - denser foliage, more muffling
+                        // Leaves - have collision boxes, denser foliage = more muffling
                         { "game:leaves-*", 0.08f },
                         { "game:leavesbranchy-*", 0.12f },
                         // Snow layers - ignored for occlusion (too thin)
@@ -263,16 +257,16 @@ namespace soundphysicsadapted
                         // Placed grass
                         { "game:placeddrygrass-*", 0.0f },
                         { "game:drygrass-*", 0.0f },
-                        // Paintings — thin flat decorative, no collision, should not occlude
-                        { "game:painting-*", 0.0f },
-                        // Clutter — small decorative items (bottles, plates, etc.)
+                        // Wildgrass mod — mod sets SideSolid on grass blocks,
+                        // causing them to take the solid fast path with occ=1.0.
+                        // Override to near-zero so they behave like normal foliage.
+                        { "wildgrass:*", 0.02f },
+                        // Clutter — small decorative items (bottles, plates on shelves)
                         { "game:clutter*", 0.0f },
                         // Stone paths — flat ground surface like wooden paths
                         { "game:stonepath*", 0.0f },
-                        // Mechanical power — multiblock markers, axles are narrow
+                        // Mechanical power — multiblock placeholder blocks
                         { "game:mpmultiblockwood*", 0.0f },
-                        // Wildgrass mod — mod sets SideSolid on grass blocks, causing full occlusion
-                        { "wildgrass:*", 0.02f },
                         // Structural plant blocks — thatch/sod roofing and hay bales
                         // VS classifies these as BlockMaterial.Plant (0.02) but they're
                         // dense packed building materials that should block sound/rain.
