@@ -222,10 +222,22 @@ namespace soundphysicsadapted
                         { "game:barrel-*", 0.5f },
                         // Furniture
                         { "game:bed-*", 0.3f },
-                        // Branchy leaves — VS gives these collision boxes (you stand on them),
-                        // so they go through AABB ray intersection, not the foliage skip path.
-                        // Normal leaves have NO collision boxes and are auto-skipped (occ=0).
+                        // Vegetation — walkable, slight muffling from dense foliage
+                        { "game:tallgrass-*", 0.01f },
+                        { "game:flower-*", 0.01f },
+                        { "game:fern-*", 0.02f },
+                        { "game:waterlily-*", 0.01f },
+                        { "game:mushroom-*", 0.01f },
+                        // Leaves — dense canopy muffles sound
+                        { "game:leaves-*", 0.08f },
                         { "game:leavesbranchy-*", 0.12f },
+                        // Berry bushes — thick foliage
+                        { "game:bigberrybush-*", 0.06f },
+                        { "game:smallberrybush-*", 0.04f },
+                        // Paintings — thin flat decorative panel on wall, no sound blocking
+                        { "game:painting-*", 0.0f },
+                        // Clutter — small decorative items (bottles, plates on shelves)
+                        { "game:clutter*", 0.0f },
                         // Snow layers - ignored for occlusion (too thin)
                         { "game:snowlayer-*", 0.0f },
                         // Path blocks - flat ground surface, solid bottom face but shouldn't occlude
