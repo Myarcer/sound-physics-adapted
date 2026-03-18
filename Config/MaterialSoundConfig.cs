@@ -231,9 +231,22 @@ namespace soundphysicsadapted
                         // Leaves — dense canopy muffles sound
                         { "game:leaves-*", 0.08f },
                         { "game:leavesbranchy-*", 0.12f },
-                        // Berry bushes — thick foliage
+                        // Berry bushes — thick foliage muffles sound
+                        // Vanilla VS
                         { "game:bigberrybush-*", 0.06f },
                         { "game:smallberrybush-*", 0.04f },
+                        // Wildcraft Fruit & Nuts mod (wildcraftfruit)
+                        { "wildcraftfruit:berrybush-*", 0.06f },
+                        { "wildcraftfruit:shortberrybush-*", 0.04f },
+                        { "wildcraftfruit:shrubberrybush-*", 0.06f },
+                        { "wildcraftfruit:pricklyberrybush-*", 0.06f },
+                        { "wildcraftfruit:pricklyshortbush-*", 0.04f },
+                        { "wildcraftfruit:topberrybush-*", 0.06f },
+                        { "wildcraftfruit:bottomberrybush-*", 0.06f },
+                        { "wildcraftfruit:toppricklybush-*", 0.06f },
+                        { "wildcraftfruit:bottompricklybush-*", 0.06f },
+                        { "wildcraftfruit:bottomtreebush-*", 0.06f },
+                        { "wildcraftfruit:groundberryplant-*", 0.02f },
                         // Paintings — thin flat decorative panel on wall, no sound blocking
                         { "game:painting-*", 0.0f },
                         // Clutter — small decorative items (bottles, plates on shelves)
