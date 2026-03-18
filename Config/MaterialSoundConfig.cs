@@ -269,7 +269,7 @@ namespace soundphysicsadapted
                         { "game:candle-*", 0.0f },
                         // Signs — thin flat panels
                         { "game:sign-*", 0.0f },
-                        // Anvils — small solid objects on ground, shouldn't occlude room-scale rays
+                        // Anvils — override for testing, unsure if to keep?
                         { "game:anvil-*", 0.0f },
                         // Ingot piles, plate piles — flat ground stacks
                         { "game:ingotpile-*", 0.0f },
