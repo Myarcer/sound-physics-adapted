@@ -227,6 +227,43 @@ namespace soundphysicsadapted
                         materialConfig.Version = 2;
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v2: added thatch/sod roofing overrides + broadened TreatAsFullCube");
                     }
+
+                    // Version 3 migration: decorative block overrides
+                    // Toolracks, torchhholders, lanterns, anvils etc. were missing from
+                    // saved configs, causing their material occlusion (wood=0.6, metal=0.95)
+                    // to apply. These items should be acoustically transparent.
+                    if (materialConfig.Version < 3)
+                    {
+                        var overrides = materialConfig.Occlusion.BlockOverrides;
+                        if (overrides != null)
+                        {
+                            var decorativeOverrides = new System.Collections.Generic.Dictionary<string, float>
+                            {
+                                { "game:firepit-*", 0.0f },
+                                { "game:toolrack-*", 0.0f },
+                                { "game:torchholder-*", 0.0f },
+                                { "game:lantern-*", 0.0f },
+                                { "game:candle-*", 0.0f },
+                                { "game:sign-*", 0.0f },
+                                { "game:anvil-*", 0.0f },
+                                { "game:ingotpile-*", 0.0f },
+                                { "game:platepile-*", 0.0f },
+                                { "game:supportbeam-*", 0.0f },
+                                { "game:stationarybasket-*", 0.0f },
+                                { "game:groundstorage*", 0.0f },
+                                { "game:placeddrygrass-*", 0.0f },
+                                { "game:drygrass-*", 0.0f }
+                            };
+                            foreach (var kvp in decorativeOverrides)
+                            {
+                                if (!overrides.ContainsKey(kvp.Key))
+                                    overrides[kvp.Key] = kvp.Value;
+                            }
+                        }
+
+                        materialConfig.Version = 3;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v3: added decorative block overrides (toolrack, torchholder, lantern, anvil, etc.)");
+                    }
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");

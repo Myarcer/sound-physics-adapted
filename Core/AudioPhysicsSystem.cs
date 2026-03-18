@@ -781,6 +781,15 @@ namespace soundphysicsadapted
                                               : delta > 0.5f ? 0.40f   // medium change: ~250ms
                                               : 0.25f;                 // small jitter: smooth
 
+                        // Weather sources (rain/wind heard through openings) get heavier
+                        // smoothing to prevent LPF wobble from decorative objects
+                        // (toolracks, torchhholders) intermittently entering/exiting the
+                        // DDA ray path as the player moves laterally under a porch.
+                        if (soundName != null && soundName.Contains("weather/"))
+                        {
+                            occSmoothFactor *= 0.5f;  // Double convergence time
+                        }
+
                         // Compensate for update interval (far sounds update less often).
                         // Without this, a far sound at 500ms interval with α=0.25 takes
                         // ~6s to converge vs ~0.6s for a close sound at 50ms — 10x slower.

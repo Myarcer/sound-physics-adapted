@@ -243,6 +243,21 @@ namespace soundphysicsadapted
                         { "game:firepit-*", 0.0f },
                         // Tool racks
                         { "game:toolrack-*", 0.0f },
+                        // Torch holders, lanterns, candles — wall decorations
+                        { "game:torchholder-*", 0.0f },
+                        { "game:lantern-*", 0.0f },
+                        { "game:candle-*", 0.0f },
+                        // Signs — thin flat panels
+                        { "game:sign-*", 0.0f },
+                        // Anvils — small solid objects on ground, shouldn't occlude room-scale rays
+                        { "game:anvil-*", 0.0f },
+                        // Ingot piles, plate piles — flat ground stacks
+                        { "game:ingotpile-*", 0.0f },
+                        { "game:platepile-*", 0.0f },
+                        // Support beams — narrow wooden frames
+                        { "game:supportbeam-*", 0.0f },
+                        // Stationary baskets
+                        { "game:stationarybasket-*", 0.0f },
                         // Ground storage (flat piles)
                         { "game:groundstorage*", 0.0f },
                         // Placed grass
