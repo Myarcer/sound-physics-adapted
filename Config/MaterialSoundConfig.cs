@@ -247,12 +247,35 @@ namespace soundphysicsadapted
                         { "game:groundstorage*", 0.0f },
                         // Placed grass
                         { "game:placeddrygrass-*", 0.0f },
-                        { "game:drygrass-*", 0.0f }
+                        { "game:drygrass-*", 0.0f },
+                        // Structural plant blocks — thatch/sod roofing and hay bales
+                        // VS classifies these as BlockMaterial.Plant (0.02) but they're
+                        // dense packed building materials that should block sound/rain.
+                        { "game:slantedroofing-thatch*", 0.55f },
+                        { "game:slantedroofing-sod*", 0.55f },
+                        { "game:slantedroofingcornerinner-thatch*", 0.55f },
+                        { "game:slantedroofingcornerinner-sod*", 0.55f },
+                        { "game:slantedroofingcornerouter-thatch*", 0.55f },
+                        { "game:slantedroofingcornerouter-sod*", 0.55f },
+                        { "game:slantedroofingridge-thatch*", 0.55f },
+                        { "game:slantedroofingridge-sod*", 0.55f },
+                        { "game:slantedroofingtip-thatch*", 0.55f },
+                        { "game:slantedroofingtip-sod*", 0.55f },
+                        // Half-roof edge caps — thinner but still structural
+                        { "game:slantedroofinghalfleft-*", 0.45f },
+                        { "game:slantedroofinghalfright-*", 0.45f },
+                        // Hay bales — packed dry grass blocks
+                        { "game:hay-*", 0.4f }
                     },
                     TreatAsFullCube = new List<string>
                     {
                         // Leaded glass panes fill most of the block - skip expensive AABB testing
-                        "game:glasspane-leaded-*"
+                        "game:glasspane-leaded-*",
+                        // Half-roof caps: collision boxes don't intersect diagonal rays,
+                        // causing them to register zero occlusion. Treat as full cube
+                        // so the block override value is used directly.
+                        "game:slantedroofinghalfleft-*",
+                        "game:slantedroofinghalfright-*"
                     }
                 },
                 Reflectivity = new ReflectivitySection
