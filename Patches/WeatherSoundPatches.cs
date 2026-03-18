@@ -70,7 +70,6 @@ namespace soundphysicsadapted.Patches
         private static FieldInfo _lightningWeatherSysField;
         private static FieldInfo _lightningCapiField;
         private static FieldInfo _nearLightningCoolDownField;
-        private static bool _lightningPatchApplied = false;
 
         /// <summary>
         /// Set the thunder handler reference so patches can route events to it.
@@ -269,7 +268,6 @@ namespace soundphysicsadapted.Patches
                     api.Logger.Warning("[SoundPhysicsAdapted] LightningFlash type not found");
                 }
 
-                _lightningPatchApplied = true;
                 api.Logger.Notification("[SoundPhysicsAdapted] Lightning/thunder patches APPLIED (Phase 5C)");
             }
             catch (Exception ex)

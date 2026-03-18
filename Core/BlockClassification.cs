@@ -64,7 +64,6 @@ namespace soundphysicsadapted
         /// </summary>
         public static bool IsFullCube(Block block)
         {
-            if (block.SideSolid == null) return false;
             return block.SideSolid[BlockFacing.indexUP] &&
                    block.SideSolid[BlockFacing.indexDOWN] &&
                    block.SideSolid[BlockFacing.indexNORTH] &&
@@ -83,7 +82,7 @@ namespace soundphysicsadapted
         /// </summary>
         public static bool HasMultipleSolidFaces(Block block)
         {
-            if (block == null || block.SideSolid == null) return false;
+            if (block == null) return false;
 
             int blockId = block.Id;
             if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
