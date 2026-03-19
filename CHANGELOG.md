@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Weather DDA start-position detection — proper step-back test instead of always skipping first block
 - Fences/glass rain occlusion — thin geometry now applies correct material occlusion instead of near-zero AABB estimate
 - Config initialization crash — duplicate key in defaults crashed material config loading
+- Multiblock door spacers causing phantom occlusion — upper blocks of vanilla 2×3 gates (and similar multi-block doors) no longer register as solid wood in DDA raycasts
 
 ## [0.1.7] - 2026-03-05
 
