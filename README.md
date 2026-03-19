@@ -87,6 +87,30 @@ The mod ZIP lands in `Releases/` and auto-deploys to your mods folder.
 
 ---
 
+## Development Workflow
+
+**Branches:**
+- `main` — Release branch. Only receives merges from `dev` when a version is ready to ship.
+- `dev` — Active development. All work happens here.
+- `v0.1.7`, etc. — Archived snapshots of `dev` at previous release points.
+
+**Release process:**
+1. Work on `dev` locally, push to remote `dev` via subtree push
+2. When ready to release: merge `dev` → `main` on GitHub (or subtree push to main)
+3. Create a GitHub release from `main` with the zip from `Releases/`
+4. Tag the release (e.g. `v0.1.8`)
+
+**Subtree commands (from monorepo root):**
+```
+# Push dev
+git subtree push --prefix projects/sound-physics-adapted sound-physics dev
+
+# Push release to main
+git subtree push --prefix projects/sound-physics-adapted sound-physics main
+```
+
+---
+
 
 ## Mod API
 
