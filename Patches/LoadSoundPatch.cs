@@ -460,6 +460,9 @@ namespace soundphysicsadapted
         {
             try
             {
+                // STARTUP GATE: Skip mono downmix during loading — no audible difference
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
+
                 var config = SoundPhysicsAdaptedModSystem.Config;
                 if (config == null || !config.Enabled) return;
 
@@ -738,6 +741,9 @@ namespace soundphysicsadapted
             monoSwapKey = null;
             monoSwapOriginal = null;
 
+            // STARTUP GATE: Skip mono swap during loading
+            if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
+
             if (soundAudioDataDict == null) return;
 
             // Check both mechanisms: thread-local flag (weather) and per-asset set (resonator)
@@ -835,6 +841,9 @@ namespace soundphysicsadapted
                 monoSwapOriginal = null;
             }
 
+            // STARTUP GATE: Skip reflection + occlusion during loading
+            if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
+
             try
             {
                 if (__result == null) return;
@@ -900,6 +909,9 @@ namespace soundphysicsadapted
         {
             try
             {
+                // STARTUP GATE: Skip position tracking during loading
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
+
                 if (position.X == 0 && position.Y == 0 && position.Z == 0) return;
 
                 var loadedSound = __instance as ILoadedSound;
@@ -928,6 +940,9 @@ namespace soundphysicsadapted
         {
             try
             {
+                // STARTUP GATE: Skip position tracking during loading
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
+
                 if (x == 0 && y == 0 && z == 0) return;
 
                 var loadedSound = __instance as ILoadedSound;
@@ -956,6 +971,12 @@ namespace soundphysicsadapted
         {
             try
             {
+                // STARTUP GATE: Skip ALL processing until warmup completes.
+                // During chunk loading, hundreds of sounds fire Start() simultaneously.
+                // Without this gate, reflection calls + DDA raycasts + OpenAL ops
+                // block the main thread for 86+ seconds (zero FPS freeze).
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
+
                 // Cast to ILoadedSound interface
                 var loadedSound = __instance as ILoadedSound;
                 if (loadedSound == null) return;
@@ -1023,19 +1044,8 @@ namespace soundphysicsadapted
                 // with recycled sourceIds that might still be playing other sounds
                 AudioRenderer.DetachGlobalFilter(sourceId);
 
-                // After LevelFinalize, block accessor is available — apply cheap direct
-                // occlusion immediately so sounds don't play at full volume during warmup.
-                // IsWorldDataLoaded = LevelFinalize fired (block data ready).
-                // IsWorldReady = also warmup complete (gates heavy ACOUSTICS tick only).
-                if (!SoundPhysicsAdaptedModSystem.IsWorldDataLoaded)
-                {
-                    ApplyLowPassFilter(loadedSound, 1.0f, null, soundName);
-                }
-                else
-                {
-                    // World is ready — apply immediate occlusion for this sound
-                    ApplyOcclusion(loadedSound, position, soundName);
-                }
+                // World is ready (gated at top of method) — apply immediate occlusion
+                ApplyOcclusion(loadedSound, position, soundName);
             }
             catch (Exception ex)
             {
@@ -1051,6 +1061,9 @@ namespace soundphysicsadapted
         {
             try
             {
+                // STARTUP GATE: Skip until warmup completes — no filter/reverb work during loading
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
+
                 var loadedSound = __instance as ILoadedSound;
                 if (loadedSound == null) return;
 
@@ -1116,6 +1129,9 @@ namespace soundphysicsadapted
         {
             try
             {
+                // STARTUP GATE: Skip reflection + filter reattachment during loading
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
+
                 if (loadedSound == null) return;
 
                 var config = SoundPhysicsAdaptedModSystem.Config;
@@ -1151,6 +1167,9 @@ namespace soundphysicsadapted
         {
             try
             {
+                // STARTUP GATE: Skip reflection + OpenAL calls during loading
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
+
                 var config = SoundPhysicsAdaptedModSystem.Config;
                 if (config == null || !config.Enabled) return;
 
@@ -1530,6 +1549,10 @@ namespace soundphysicsadapted
         {
             try
             {
+                // STARTUP GATE: Skip lock + reflection + tracking during loading.
+                // AL.SourcePlay fires on EVERY sound including UI/menu — hundreds during chunk load.
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
+
                 // FREEZE DIAGNOSTIC: Count every call
                 System.Threading.Interlocked.Increment(ref _diagHookCallCount);
 
