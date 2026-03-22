@@ -645,23 +645,23 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Maximum number of sounds that can run full raycasting per tick.
-        /// VS runs at 20 ticks/second — default 25 = up to 500 sounds/sec max throughput.
-        /// Protects against spikes when many sounds become eligible at once
-        /// (teleport, block break cache invalidation, entering dense areas).
+        /// VS runs at 20 ticks/second — default 10 = up to 200 sounds/sec max throughput.
+        /// The time budget (MaxTickBudgetMs) is the primary spike guard; this count cap
+        /// is a secondary safety net that limits worst-case work even if each sound is cheap.
         /// Sounds exceeding the budget are deferred to the next tick.
         /// Close sounds are prioritized. Overdue sounds (>2s stale) get priority but are still capped.
-        /// 0 = unlimited (no budget cap).
+        /// 0 = unlimited (no count cap, time budget only).
         /// </summary>
-        public int MaxSoundsPerTick { get; set; } = 25;
+        public int MaxSoundsPerTick { get; set; } = 10;
 
         /// <summary>
         /// Additional overdue sounds that can process on top of MaxSoundsPerTick each tick.
         /// Overdue = new sounds or sounds not updated in >2s.
-        /// Real max per tick = MaxSoundsPerTick + MaxOverdueSoundsPerTick (default 25+6=31).
+        /// Real max per tick = MaxSoundsPerTick + MaxOverdueSoundsPerTick (default 10+3=13).
         /// Prevents spikes when many sounds appear simultaneously (approaching a farm).
-        /// 0 = overdue sounds obey normal budget (strictest). Default 6.
+        /// 0 = overdue sounds obey normal budget (strictest). Default 3.
         /// </summary>
-        public int MaxOverdueSoundsPerTick { get; set; } = 6;
+        public int MaxOverdueSoundsPerTick { get; set; } = 3;
 
         /// <summary>
         /// Maximum milliseconds to spend processing sounds per tick.
