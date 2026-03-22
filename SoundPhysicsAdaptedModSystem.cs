@@ -6,6 +6,7 @@ using System;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using HarmonyLib;
 using Vintagestory.GameContent;
 using soundphysicsadapted.Patches;
@@ -181,6 +182,89 @@ namespace soundphysicsadapted
                         materialConfig.Occlusion.Materials["glass"] = 0.8f;
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated config: updated glass occlusion to 0.8");
                     }
+
+                    // Version 2 migration: structural plant block overrides for thatch/sod roofing
+                    if (materialConfig.Version < 2)
+                    {
+                        var overrides = materialConfig.Occlusion.BlockOverrides;
+                        if (overrides != null)
+                        {
+                            // All thatch/sod roofing variants (Plant material = 0.02 is far too low)
+                            var thatchOverrides = new System.Collections.Generic.Dictionary<string, float>
+                            {
+                                { "game:slantedroofing-thatch*", 0.55f },
+                                { "game:slantedroofing-sod*", 0.55f },
+                                { "game:slantedroofingbottom-thatch*", 0.55f },
+                                { "game:slantedroofingbottom-sod*", 0.55f },
+                                { "game:slantedroofingcornerinner-thatch*", 0.55f },
+                                { "game:slantedroofingcornerinner-sod*", 0.55f },
+                                { "game:slantedroofingcornerouter-thatch*", 0.55f },
+                                { "game:slantedroofingcornerouter-sod*", 0.55f },
+                                { "game:slantedroofingridge-thatch*", 0.55f },
+                                { "game:slantedroofingridge-sod*", 0.55f },
+                                { "game:slantedroofingridgeend-thatch*", 0.55f },
+                                { "game:slantedroofingridgeend-sod*", 0.55f },
+                                { "game:slantedroofingtip-thatch*", 0.55f },
+                                { "game:slantedroofingtip-sod*", 0.55f },
+                                { "game:slantedroofinghalfleft-*", 0.45f },
+                                { "game:slantedroofinghalfright-*", 0.45f },
+                                { "game:hay-*", 0.4f }
+                            };
+                            foreach (var kvp in thatchOverrides)
+                            {
+                                if (!overrides.ContainsKey(kvp.Key))
+                                    overrides[kvp.Key] = kvp.Value;
+                            }
+                        }
+
+                        // Broaden TreatAsFullCube: all slanted roofing has geometry that rays miss
+                        if (materialConfig.Occlusion.TreatAsFullCube != null)
+                        {
+                            materialConfig.Occlusion.TreatAsFullCube.RemoveAll(p => p.StartsWith("game:slantedroofing"));
+                            if (!materialConfig.Occlusion.TreatAsFullCube.Contains("game:slantedroofing*"))
+                                materialConfig.Occlusion.TreatAsFullCube.Add("game:slantedroofing*");
+                        }
+
+                        materialConfig.Version = 2;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v2: added thatch/sod roofing overrides + broadened TreatAsFullCube");
+                    }
+
+                    // Version 3 migration: decorative block overrides
+                    // Toolracks, torchhholders, lanterns, anvils etc. were missing from
+                    // saved configs, causing their material occlusion (wood=0.6, metal=0.95)
+                    // to apply. These items should be acoustically transparent.
+                    if (materialConfig.Version < 3)
+                    {
+                        var overrides = materialConfig.Occlusion.BlockOverrides;
+                        if (overrides != null)
+                        {
+                            var decorativeOverrides = new System.Collections.Generic.Dictionary<string, float>
+                            {
+                                { "game:firepit-*", 0.0f },
+                                { "game:toolrack-*", 0.0f },
+                                { "game:torchholder-*", 0.0f },
+                                { "game:lantern-*", 0.0f },
+                                { "game:candle-*", 0.0f },
+                                { "game:sign-*", 0.0f },
+                                { "game:anvil-*", 0.0f },
+                                { "game:ingotpile-*", 0.0f },
+                                { "game:platepile-*", 0.0f },
+                                { "game:supportbeam-*", 0.0f },
+                                { "game:stationarybasket-*", 0.0f },
+                                { "game:groundstorage*", 0.0f },
+                                { "game:placeddrygrass-*", 0.0f },
+                                { "game:drygrass-*", 0.0f }
+                            };
+                            foreach (var kvp in decorativeOverrides)
+                            {
+                                if (!overrides.ContainsKey(kvp.Key))
+                                    overrides[kvp.Key] = kvp.Value;
+                            }
+                        }
+
+                        materialConfig.Version = 3;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v3: added decorative block overrides (toolrack, torchholder, lantern, anvil, etc.)");
+                    }
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");
@@ -189,7 +273,15 @@ namespace soundphysicsadapted
             catch (Exception ex)
             {
                 api.Logger.Error($"[SoundPhysicsAdapted] Failed to load material config: {ex.Message}");
-                materialConfig = MaterialSoundConfig.CreateDefault();
+                try
+                {
+                    materialConfig = MaterialSoundConfig.CreateDefault();
+                }
+                catch (Exception ex2)
+                {
+                    api.Logger.Error($"[SoundPhysicsAdapted] CreateDefault also failed: {ex2.Message}");
+                    materialConfig = new MaterialSoundConfig();
+                }
             }
 
             // Initialize sound override manager (logs active overrides)
@@ -1141,6 +1233,25 @@ namespace soundphysicsadapted
         {
             if (config?.DebugMode != true || config?.DebugOcclusion != true || config?.DebugVerbose != true || clientApi == null) return;
             RateLimitedLog(message);
+        }
+
+        /// <summary>
+        /// Fast check for whether verbose DDA logging is active.
+        /// Use to gate StringBuilder accumulation and avoid f-string allocations.
+        /// </summary>
+        public static bool IsVerboseDebugEnabled =>
+            config?.DebugMode == true && config?.DebugOcclusion == true && config?.DebugVerbose == true && clientApi != null;
+
+        /// <summary>
+        /// Flush a batched verbose debug log (e.g. entire DDA ray trace).
+        /// Logs the full StringBuilder content as a single Logger.Debug() call,
+        /// reducing synchronous I/O from ~10 calls per ray to 1.
+        /// </summary>
+        public static void VerboseDebugBatch(StringBuilder sb)
+        {
+            if (sb == null || sb.Length == 0) return;
+            if (config?.DebugMode != true || config?.DebugOcclusion != true || config?.DebugVerbose != true || clientApi == null) return;
+            RateLimitedLog(sb.ToString());
         }
 
         /// <summary>

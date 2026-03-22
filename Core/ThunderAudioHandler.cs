@@ -515,6 +515,9 @@ namespace soundphysicsadapted
 
             if (volume <= 0f) return;
 
+            // Pitch variety for rumble sounds — small random offset per event
+            float rumblePitch = GetRumblePitchVariety();
+
             // Use LoadSound instead of PlaySoundAt so we can set rolloff factor = 0.
             // This disables OpenAL's distance attenuation entirely — our volume curve
             // is the SOLE source of distance falloff. No double-attenuation.
@@ -531,6 +534,7 @@ namespace soundphysicsadapted
                     Position = new Vec3f((float)x, (float)y, (float)z),
                     DisposeOnFinish = true,
                     Volume = volume,
+                    Pitch = rumblePitch,
                     SoundType = EnumSoundType.Weather,
                     Range = range
                 };
@@ -551,7 +555,7 @@ namespace soundphysicsadapted
                     // Track for debug display (thunder sounds ~8s)
                     outdoorBoltExpiry.Add(capi.World.ElapsedMilliseconds + 8000);
 
-                    ThunderDebugLog($"  OUTDOOR bolt: dist={distance:F0} placeDist={placeDist:F0} range={range:F0} asset={asset.Path} vol={volume:F2} rng={rngFactor:F2} rolloff=0 srcId={sourceId} dir=({dir.X:F2},{dir.Y:F2},{dir.Z:F2})");
+                    ThunderDebugLog($"  OUTDOOR bolt: dist={distance:F0} placeDist={placeDist:F0} range={range:F0} asset={asset.Path} vol={volume:F2} pitch={rumblePitch:F2} rng={rngFactor:F2} rolloff=0 srcId={sourceId} dir=({dir.X:F2},{dir.Y:F2},{dir.Z:F2})");
                 }
             }
             catch (Exception ex)
@@ -1012,6 +1016,9 @@ namespace soundphysicsadapted
                 // No placement-distance falloff — rolloff=0 means OpenAL won't attenuate.
                 float finalVol = volume;
 
+                // Distance-based pitch: deeper/bassier at longer range
+                float crackPitch = CalculateCrackPitch(crack.Distance);
+
                 try
                 {
                     var soundParams = new SoundParams()
@@ -1022,6 +1029,7 @@ namespace soundphysicsadapted
                         Position = new Vec3f((float)x, (float)y, (float)z),
                         DisposeOnFinish = true,
                         Volume = finalVol,
+                        Pitch = crackPitch,
                         SoundType = EnumSoundType.Weather,
                         Range = range
                     };
@@ -1045,7 +1053,7 @@ namespace soundphysicsadapted
                 // Track for debug display (crack sounds ~2s)
                 outdoorCrackExpiry.Add(gameTimeMs + 2000);
 
-                ThunderDebugLog($"  DELAYED CRACK (outdoor): asset={NODISTANCE.Path} vol={finalVol:F2} dist={crack.Distance:F0} placeDist={crackPlaceDist:F0} rolloff=0");
+                ThunderDebugLog($"  DELAYED CRACK (outdoor): asset={NODISTANCE.Path} vol={finalVol:F2} pitch={crackPitch:F2} dist={crack.Distance:F0} placeDist={crackPlaceDist:F0} rolloff=0");
             }
             else
             {
@@ -1066,6 +1074,9 @@ namespace soundphysicsadapted
                 float crackGainHF = 1f - crackT * (1f - crackMinGainHF);
                 crackGainHF = GameMath.Clamp(crackGainHF, crackMinGainHF, 1f);
 
+                // Distance-based pitch: deeper/bassier at longer range (same curve as outdoor)
+                float crackPitch = CalculateCrackPitch(crack.Distance);
+
                 try
                 {
                     var soundParams = new SoundParams()
@@ -1076,7 +1087,7 @@ namespace soundphysicsadapted
                         Position = new Vec3f(0, 0, 0),
                         DisposeOnFinish = true,
                         Volume = crackL1Vol,
-                        Pitch = 1f,
+                        Pitch = crackPitch,
                         Range = 32f,
                         SoundType = EnumSoundType.Weather
                     };
@@ -1112,7 +1123,7 @@ namespace soundphysicsadapted
                     ThunderDebugLog($"  DELAYED CRACK (indoor) FAILED: {ex.Message}");
                 }
 
-                ThunderDebugLog($"  DELAYED CRACK (indoor): asset={NODISTANCE.Path} baseVol={crackVol:F2} vol={crackL1Vol:F2} gainHF={crackGainHF:F3} occl={crackOccl:F2} encl={crack.CombinedEnclosure:F2}");
+                ThunderDebugLog($"  DELAYED CRACK (indoor): asset={NODISTANCE.Path} baseVol={crackVol:F2} vol={crackL1Vol:F2} pitch={crackPitch:F2} gainHF={crackGainHF:F3} occl={crackOccl:F2} encl={crack.CombinedEnclosure:F2}");
             }
         }
 
@@ -1425,6 +1436,58 @@ namespace soundphysicsadapted
             if (distance < 1000f)
                 return 0.8f - ((distance - 100f) / 900f) * 0.3f;
             return 0f;
+        }
+
+        /// <summary>
+        /// Calculate pitch for nodistance.ogg crack based on bolt distance.
+        /// Close cracks are bright/sharp (pitch ~1.0), distant cracks are deeper/bassier
+        /// (pitch drops toward config minimum). Simulates high-frequency atmospheric attenuation.
+        /// Adds small random variation per event for natural variety.
+        /// </summary>
+        private float CalculateCrackPitch(float distance)
+        {
+            var config = SoundPhysicsAdaptedModSystem.Config;
+            float minPitch = config?.ThunderCrackPitchMin ?? 0.72f;
+            float randomness = config?.ThunderPitchRandomness ?? 0.06f;
+
+            // Smooth pitch curve: full brightness at close range, deepening with distance
+            // 0-30: 1.0 (no change — close crack is sharp)
+            // 30-300: 1.0 → lerp toward minPitch (most audible range)
+            // 300-1000: continue toward minPitch (distant rumble territory)
+            float pitchFactor;
+            if (distance <= 30f)
+            {
+                pitchFactor = 1.0f;
+            }
+            else if (distance <= 300f)
+            {
+                // Smooth ease-in: sqrt curve so initial drop is gentle
+                float t = (distance - 30f) / 270f;
+                pitchFactor = 1.0f - (float)Math.Sqrt(t) * (1.0f - minPitch) * 0.7f;
+            }
+            else
+            {
+                // 300-1000: linear tail to minPitch
+                float t = Math.Min((distance - 300f) / 700f, 1.0f);
+                float at300 = 1.0f - (float)Math.Sqrt(1.0f) * (1.0f - minPitch) * 0.7f;
+                pitchFactor = at300 - t * (at300 - minPitch);
+            }
+
+            // Add random variation per event
+            float rngOffset = ((float)rand.NextDouble() * 2f - 1f) * randomness;
+            return GameMath.Clamp(pitchFactor + rngOffset, minPitch * 0.9f, 1.1f);
+        }
+
+        /// <summary>
+        /// Get small random pitch variation for rumble sounds (verynear/near/distant.ogg).
+        /// These are already different assets per distance tier, so only variety is needed.
+        /// </summary>
+        private float GetRumblePitchVariety()
+        {
+            var config = SoundPhysicsAdaptedModSystem.Config;
+            float randomness = config?.ThunderPitchRandomness ?? 0.06f;
+            float rngOffset = ((float)rand.NextDouble() * 2f - 1f) * randomness;
+            return 1.0f + rngOffset;
         }
 
         /// <summary>Select thunder asset by distance — matches vanilla thresholds for near tiers,

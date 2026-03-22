@@ -177,7 +177,7 @@ namespace soundphysicsadapted
         {
             return new MaterialSoundConfig
             {
-                Version = 1,
+                Version = 2,
                 Occlusion = new OcclusionSection
                 {
                     Materials = new Dictionary<string, float>
@@ -222,15 +222,35 @@ namespace soundphysicsadapted
                         { "game:barrel-*", 0.5f },
                         // Furniture
                         { "game:bed-*", 0.3f },
-                        // Vegetation - walkable but slightly muffles sound
+                        // Vegetation — walkable, slight muffling from dense foliage
                         { "game:tallgrass-*", 0.01f },
                         { "game:flower-*", 0.01f },
                         { "game:fern-*", 0.02f },
                         { "game:waterlily-*", 0.01f },
                         { "game:mushroom-*", 0.01f },
-                        // Leaves - denser foliage, more muffling
+                        // Leaves — dense canopy muffles sound
                         { "game:leaves-*", 0.08f },
                         { "game:leavesbranchy-*", 0.12f },
+                        // Berry bushes — thick foliage muffles sound
+                        // Vanilla VS
+                        { "game:bigberrybush-*", 0.06f },
+                        { "game:smallberrybush-*", 0.04f },
+                        // Wildcraft Fruit & Nuts mod (wildcraftfruit)
+                        { "wildcraftfruit:berrybush-*", 0.06f },
+                        { "wildcraftfruit:shortberrybush-*", 0.04f },
+                        { "wildcraftfruit:shrubberrybush-*", 0.06f },
+                        { "wildcraftfruit:pricklyberrybush-*", 0.06f },
+                        { "wildcraftfruit:pricklyshortbush-*", 0.04f },
+                        { "wildcraftfruit:topberrybush-*", 0.06f },
+                        { "wildcraftfruit:bottomberrybush-*", 0.06f },
+                        { "wildcraftfruit:toppricklybush-*", 0.06f },
+                        { "wildcraftfruit:bottompricklybush-*", 0.06f },
+                        { "wildcraftfruit:bottomtreebush-*", 0.06f },
+                        { "wildcraftfruit:groundberryplant-*", 0.02f },
+                        // Paintings — thin flat decorative panel on wall, no sound blocking
+                        { "game:painting-*", 0.0f },
+                        // Clutter — small decorative items (bottles, plates on shelves)
+                        { "game:clutter*", 0.0f },
                         // Snow layers - ignored for occlusion (too thin)
                         { "game:snowlayer-*", 0.0f },
                         // Path blocks - flat ground surface, solid bottom face but shouldn't occlude
@@ -243,16 +263,65 @@ namespace soundphysicsadapted
                         { "game:firepit-*", 0.0f },
                         // Tool racks
                         { "game:toolrack-*", 0.0f },
+                        // Torch holders, lanterns, candles — wall decorations
+                        { "game:torchholder-*", 0.0f },
+                        { "game:lantern-*", 0.0f },
+                        { "game:candle-*", 0.0f },
+                        // Signs — thin flat panels
+                        { "game:sign-*", 0.0f },
+                        // Anvils — override for testing, unsure if to keep?
+                        { "game:anvil-*", 0.0f },
+                        // Ingot piles, plate piles — flat ground stacks
+                        { "game:ingotpile-*", 0.0f },
+                        { "game:platepile-*", 0.0f },
+                        // Support beams — narrow wooden frames
+                        { "game:supportbeam-*", 0.0f },
+                        // Stationary baskets
+                        { "game:stationarybasket-*", 0.0f },
                         // Ground storage (flat piles)
                         { "game:groundstorage*", 0.0f },
                         // Placed grass
                         { "game:placeddrygrass-*", 0.0f },
-                        { "game:drygrass-*", 0.0f }
+                        { "game:drygrass-*", 0.0f },
+                        // Wildgrass mod — mod sets SideSolid on grass blocks,
+                        // causing them to take the solid fast path with occ=1.0.
+                        // Override to near-zero so they behave like normal foliage.
+                        { "wildgrass:*", 0.02f },
+                        // Stone paths — flat ground surface like wooden paths
+                        { "game:stonepath*", 0.0f },
+                        // Mechanical power — multiblock placeholder blocks
+                        { "game:mpmultiblockwood*", 0.0f },
+                        // Structural plant blocks — thatch/sod roofing and hay bales
+                        // VS classifies these as BlockMaterial.Plant (0.02) but they're
+                        // dense packed building materials that should block sound/rain.
+                        { "game:slantedroofing-thatch*", 0.55f },
+                        { "game:slantedroofing-sod*", 0.55f },
+                        { "game:slantedroofingbottom-thatch*", 0.55f },
+                        { "game:slantedroofingbottom-sod*", 0.55f },
+                        { "game:slantedroofingcornerinner-thatch*", 0.55f },
+                        { "game:slantedroofingcornerinner-sod*", 0.55f },
+                        { "game:slantedroofingcornerouter-thatch*", 0.55f },
+                        { "game:slantedroofingcornerouter-sod*", 0.55f },
+                        { "game:slantedroofingridge-thatch*", 0.55f },
+                        { "game:slantedroofingridge-sod*", 0.55f },
+                        { "game:slantedroofingridgeend-thatch*", 0.55f },
+                        { "game:slantedroofingridgeend-sod*", 0.55f },
+                        { "game:slantedroofingtip-thatch*", 0.55f },
+                        { "game:slantedroofingtip-sod*", 0.55f },
+                        // Half-roof edge caps — thinner but still structural
+                        { "game:slantedroofinghalfleft-*", 0.45f },
+                        { "game:slantedroofinghalfright-*", 0.45f },
+                        // Hay bales — packed dry grass blocks
+                        { "game:hay-*", 0.4f }
                     },
                     TreatAsFullCube = new List<string>
                     {
                         // Leaded glass panes fill most of the block - skip expensive AABB testing
-                        "game:glasspane-leaded-*"
+                        "game:glasspane-leaded-*",
+                        // ALL slanted roofing: collision boxes are sloped geometry that
+                        // diagonal DDA rays frequently miss. Treat as full cube so the
+                        // block's occlusion value (override or material) is always applied.
+                        "game:slantedroofing*"
                     }
                 },
                 Reflectivity = new ReflectivitySection

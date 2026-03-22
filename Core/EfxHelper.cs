@@ -358,7 +358,6 @@ namespace soundphysicsadapted
 
         // Cached reflection for reverb methods
         private static Type _efxType;
-        private static Type _alcType;
         private static MethodInfo _genAuxSlotMethod;
         private static MethodInfo _deleteAuxSlotMethod;
         private static MethodInfo _auxSlotIntMethod;
@@ -367,7 +366,6 @@ namespace soundphysicsadapted
         private static MethodInfo _effectIntMethod;
         private static MethodInfo _effectFloatMethod;
         private static MethodInfo _source3iMethod;
-        private static MethodInfo _alcGetIntegerMethod;
         private static Type _effectIntegerType;
         private static Type _effectFloatType;
         private static Type _alSource3iType;  // For aux send connections

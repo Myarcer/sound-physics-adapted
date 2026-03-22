@@ -603,6 +603,20 @@ namespace soundphysicsadapted
         /// </summary>
         public int MaxThunderSources { get; set; } = 20;
 
+        /// <summary>
+        /// Minimum pitch for nodistance.ogg crack at maximum distance (1000 blocks).
+        /// At close range pitch=1.0 (bright crack), at max distance pitch drops to this value
+        /// (deeper, bassier rumble). Simulates high-frequency atmospheric attenuation.
+        /// </summary>
+        public float ThunderCrackPitchMin { get; set; } = 0.72f;
+
+        /// <summary>
+        /// Random pitch variation applied to each thunder event (±this value).
+        /// Adds natural variety so consecutive thunders don't sound identical.
+        /// Applied to both crack (nodistance.ogg) and rumble (verynear/near/distant.ogg) sounds.
+        /// </summary>
+        public float ThunderPitchRandomness { get; set; } = 0.06f;
+
         // ============================================================
         // PERFORMANCE
         // Per-tick processing budget to prevent frame drops during

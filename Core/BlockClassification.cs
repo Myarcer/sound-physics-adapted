@@ -40,6 +40,10 @@ namespace soundphysicsadapted
         // 0 = not cached, 1 = is open interactable, 2 = is NOT
         private static readonly byte[] isOpenInteractableCache = new byte[BLOCK_CACHE_SIZE];
 
+        // Cache for IsChiseledBlock (custom voxel geometry — needs AABB path)
+        // 0 = not cached, 1 = is chiseled, 2 = is NOT chiseled
+        private static readonly byte[] isChiseledBlockCache = new byte[BLOCK_CACHE_SIZE];
+
         /// <summary>
         /// Clear all block caches. Call when config reloads or materials change.
         /// </summary>
@@ -50,6 +54,7 @@ namespace soundphysicsadapted
             Array.Clear(hasMultipleSolidFacesCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isWeatherInteractableCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isOpenInteractableCache, 0, BLOCK_CACHE_SIZE);
+            Array.Clear(isChiseledBlockCache, 0, BLOCK_CACHE_SIZE);
             cachedOcclusionPerSolidBlock = -1f;
         }
 
@@ -59,7 +64,6 @@ namespace soundphysicsadapted
         /// </summary>
         public static bool IsFullCube(Block block)
         {
-            if (block.SideSolid == null) return false;
             return block.SideSolid[BlockFacing.indexUP] &&
                    block.SideSolid[BlockFacing.indexDOWN] &&
                    block.SideSolid[BlockFacing.indexNORTH] &&
@@ -78,7 +82,7 @@ namespace soundphysicsadapted
         /// </summary>
         public static bool HasMultipleSolidFaces(Block block)
         {
-            if (block == null || block.SideSolid == null) return false;
+            if (block == null) return false;
 
             int blockId = block.Id;
             if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
@@ -145,11 +149,39 @@ namespace soundphysicsadapted
         /// <summary>
         /// Check if a block is "solid enough" to occlude sound/weather.
         /// Combines all three checks: full cube, any solid face, or config override.
+        /// Excludes chiseled blocks — they report SideSolid based on the shared Block type,
+        /// not the per-instance voxel shape. Must use AABB collision path instead.
         /// This is the standard check used by both sound and weather DDA systems.
         /// </summary>
         public static bool IsSolidForOcclusion(Block block)
         {
+            if (IsChiseledBlock(block)) return false;
             return IsFullCube(block) || HasMultipleSolidFaces(block) || ShouldTreatAsFullCube(block);
+        }
+
+        /// <summary>
+        /// Check if a block is a chiseled block (custom voxel geometry).
+        /// Chiseled blocks share a single Block type but each instance has unique geometry
+        /// stored in the BlockEntity. SideSolid is unreliable — always route through AABB.
+        /// Cached per block ID.
+        /// </summary>
+        public static bool IsChiseledBlock(Block block)
+        {
+            if (block == null) return false;
+
+            int blockId = block.Id;
+            if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
+            {
+                byte cached = isChiseledBlockCache[blockId];
+                if (cached != 0)
+                    return cached == 1;
+
+                bool result = block.Code?.Path?.StartsWith("chiseledblock") == true;
+                isChiseledBlockCache[blockId] = result ? (byte)1 : (byte)2;
+                return result;
+            }
+
+            return block.Code?.Path?.StartsWith("chiseledblock") == true;
         }
 
         /// <summary>
@@ -337,6 +369,57 @@ namespace soundphysicsadapted
             if (path == null) return false;
             // VS door/gate variants encode state: "door-oak-opened-north", "gate3x3-spacer-oak-opened-north"
             return path.Contains("opened") || path.Contains("-open-");
+        }
+
+        /// <summary>
+        /// Check if a block is a multiblock spacer belonging to a door/gate controller.
+        /// Vanilla 2x3 gates and similar multi-block doors use BlockMultiblock placeholders
+        /// ("multiblock-monolithic-*") for their upper blocks. These spacers have no collision
+        /// geometry of their own but still have a non-Air material, causing phantom occlusion
+        /// in the DDA. Resolving to the controller lets us skip the spacer entirely — the
+        /// actual door panel collision lives on the controller block position.
+        /// NOT cached — requires blockAccessor + position context per call.
+        /// </summary>
+        public static bool IsMultiblockDoorSpacer(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
+        {
+            string path = block.Code?.Path;
+            if (path == null || !path.StartsWith("multiblock-")) return false;
+
+            // Parse variant offsets to find the controller block position
+            var variant = block.Variant;
+            if (variant == null) return false;
+
+            string dxStr, dyStr, dzStr;
+            if (!variant.TryGetValue("dx", out dxStr) ||
+                !variant.TryGetValue("dy", out dyStr) ||
+                !variant.TryGetValue("dz", out dzStr))
+                return false;
+
+            int cdx = ParseVariantOffset(dxStr);
+            int cdy = ParseVariantOffset(dyStr);
+            int cdz = ParseVariantOffset(dzStr);
+
+            // Controller = spacer position - offset
+            Block controller = blockAccessor.GetBlock(
+                new BlockPos(x - cdx, y - cdy, z - cdz, 0));
+
+            if (controller == null || controller.Id == 0) return false;
+            if (controller.Code?.Path?.StartsWith("multiblock-") == true) return false;
+
+            return IsWeatherInteractable(controller);
+        }
+
+        /// <summary>
+        /// Parse a VS multiblock variant offset string.
+        /// "0" -> 0, "p1" -> +1, "n1" -> -1, "p2" -> +2, etc.
+        /// </summary>
+        private static int ParseVariantOffset(string s)
+        {
+            if (string.IsNullOrEmpty(s) || s == "0") return 0;
+            if (s.StartsWith("n") && int.TryParse(s.Substring(1), out int nv)) return -nv;
+            if (s.StartsWith("p") && int.TryParse(s.Substring(1), out int pv)) return pv;
+            if (int.TryParse(s, out int v)) return v;
+            return 0;
         }
 
         /// <summary>

@@ -178,6 +178,13 @@ namespace soundphysicsadapted.Patches
         // Store animation frame when pausing
         private static System.Collections.Generic.Dictionary<string, float> savedAnimFramesByPos = 
             new System.Collections.Generic.Dictionary<string, float>();
+
+        // Track resonators that have had active audio playback (for natural completion detection)
+        // When a track is playing, we mark it here. When the sound stops but IsPlaying is still
+        // true, we know the track finished naturally and need to clean up.
+        private static System.Runtime.CompilerServices.ConditionalWeakTable<BlockEntityResonator, object> trackHasPlayed = 
+            new System.Runtime.CompilerServices.ConditionalWeakTable<BlockEntityResonator, object>();
+        private static readonly object TrackPlayedMarker = new object();
         
         /// <summary>
         /// Flag to swap next StartTrack sound type from MusicGlitchunaffected to AmbientGlitchunaffected.
@@ -769,6 +776,9 @@ namespace soundphysicsadapted.Patches
         {
             if (__instance.Api?.Side != EnumAppSide.Client) return;
 
+            // Always clean up track-has-played tracking when music stops (any reason)
+            trackHasPlayed.Remove(__instance);
+
             if (__state)
             {
                 var animUtil = ResonatorReflection.GetAnimUtil(__instance);
@@ -1093,6 +1103,10 @@ namespace soundphysicsadapted.Patches
             ILoadedSound sound = ResonatorReflection.GetSound(__instance);
             if (sound != null && sound.IsPlaying)
             {
+                // Mark that this resonator has active audio (for natural completion detection)
+                if (!trackHasPlayed.TryGetValue(__instance, out _))
+                    trackHasPlayed.Add(__instance, TrackPlayedMarker);
+
                 if (__instance.Api.World.ElapsedMilliseconds % 2000 < 50)
                 {
                     savedPositions.Remove(__instance);
@@ -1109,6 +1123,35 @@ namespace soundphysicsadapted.Patches
                         });
                     }
                 }
+                return;
+            }
+
+            // Detect natural track completion:
+            // The resonator still thinks it's playing (IsPlaying=true) but the actual
+            // audio has stopped or been disposed. This happens because we swap the sound
+            // type to AmbientGlitchunaffected (bypassing the Music engine's completion
+            // callback), or on vanilla servers where track completion state is stale.
+            if (__instance.IsPlaying && trackHasPlayed.TryGetValue(__instance, out _))
+            {
+                __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] OnClientTick: Track finished naturally at {__instance.Pos}, resetting state");
+
+                // Clean up our tracking
+                trackHasPlayed.Remove(__instance);
+
+                // Call vanilla StopMusic to properly reset IsPlaying=false and stop disc animation
+                try
+                {
+                    AccessTools.Method(typeof(BlockEntityResonator), "StopMusic")?.Invoke(__instance, null);
+                }
+                catch (Exception ex)
+                {
+                    __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] OnClientTick: StopMusic exception: {ex.Message}");
+                }
+
+                // Clear SPA saved state — playback is finished, reset to beginning
+                savedPositions.Remove(__instance);
+                pausedStates.Remove(__instance);
+                ResonatorRendererPatch.ClearSavedRotation(__instance.Pos);
             }
         }
 
@@ -1124,7 +1167,24 @@ namespace soundphysicsadapted.Patches
 
             if (__instance.Inventory[0] == null || __instance.Inventory[0].Empty) return;
 
-            api.Logger.Debug($"[SoundPhysicsAdapted] Initialize: IsPlaying=true track=null, scheduling deferred StartMusic");
+            // When the server does NOT have SPA, IsPlaying=true is unreliable.
+            // Vanilla servers never reset IsPlaying when a track finishes (the Music
+            // engine callback only fires client-side). So a stale IsPlaying=true with
+            // track=null means "track finished long ago" — do NOT restart it.
+            // Only force-restart when the server has SPA (which properly persists state)
+            // or in singleplayer.
+            if (!ServerHasMod)
+            {
+                api.Logger.Debug($"[SoundPhysicsAdapted] Initialize: IsPlaying=true track=null at {__instance.Pos}, but server lacks SPA — NOT restarting (stale state)");
+                return;
+            }
+
+            // Server has SPA — check if this was a paused resonator (saved position exists)
+            // or a legitimately playing one that needs restart after chunk reload.
+            bool hasSavedPos = savedPositions.TryGetValue(__instance, out PlaybackPosition savedPos) && savedPos != null;
+            bool isPaused = pausedStates.TryGetValue(__instance, out PausedState paused) && paused != null && paused.IsPaused;
+
+            api.Logger.Debug($"[SoundPhysicsAdapted] Initialize: IsPlaying=true track=null, hasSavedPos={hasSavedPos}, isPaused={isPaused}, scheduling deferred StartMusic");
 
             // Use TryEnqueue which is safer during pause and won't crash
             try

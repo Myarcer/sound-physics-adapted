@@ -4,6 +4,30 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.8] - 2026-03-19
+
+### Added
+- Volume-scaled occlusion for chiseled & partial blocks — carved blocks occlude sound proportional to their actual remaining volume instead of being treated as fully solid
+- Thatch/sod roofing occlusion — thatch roofs, sod roofs, and hay bales now properly block rain and sound (previously near-transparent due to Plant material classification)
+- Decorative block transparency — toolracks, torchholders, lanterns, candles, signs, firepits, anvils, paintings, clutter, ground storage, and similar non-structural blocks no longer block sound
+- Berry bush & Wildcraftfruit mod support — proper foliage-level occlusion for all vanilla and Wildcraftfruit berry bush variants
+- Wildgrass mod compatibility — wildgrass blocks no longer treated as solid walls
+- Thunder pitch variety — distant thunder cracks pitch-shift lower based on distance; all thunder gets random pitch variation per strike
+- Config auto-migration — saved material configs automatically pick up new block overrides on version upgrade
+
+### Fixed
+- Sound flickering near walls — coherence check prevents sound repositioning from flip-flopping direction at wall edges
+- Permeated sound jumping — when no open paths exist, sound stays at original position instead of jumping wildly between offsets
+- Distant sound muffling too slow — EMA smoothing now compensates for update interval differences so far sounds transition at the same perceived rate as close sounds
+- Reverb cache oscillation at range boundary — dead-zone prevents cache key flip-flopping for sounds at ~45 blocks distance
+- Volume wobble at budget cutoff — throttle fade now freezes when it detects rapid oscillation, unfreezes after stabilizing
+- Chiseled blocks over-muffling — routed through collision-box path instead of solid fast path, so carved shapes reflect actual geometry
+- Rain wobble under porches/overhangs — decorative blocks on walls no longer cause intermittent occlusion spikes as player moves
+- Weather DDA start-position detection — proper step-back test instead of always skipping first block
+- Fences/glass rain occlusion — thin geometry now applies correct material occlusion instead of near-zero AABB estimate
+- Config initialization crash — duplicate key in defaults crashed material config loading
+- Multiblock door spacers causing phantom occlusion — upper blocks of vanilla 2×3 gates (and similar multi-block doors) no longer register as solid wood in DDA raycasts
+
 ## [0.1.7] - 2026-03-05
 
 ### Added
