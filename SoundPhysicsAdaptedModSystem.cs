@@ -6,6 +6,7 @@ using System;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using HarmonyLib;
 using Vintagestory.GameContent;
 using soundphysicsadapted.Patches;
@@ -1232,6 +1233,25 @@ namespace soundphysicsadapted
         {
             if (config?.DebugMode != true || config?.DebugOcclusion != true || config?.DebugVerbose != true || clientApi == null) return;
             RateLimitedLog(message);
+        }
+
+        /// <summary>
+        /// Fast check for whether verbose DDA logging is active.
+        /// Use to gate StringBuilder accumulation and avoid f-string allocations.
+        /// </summary>
+        public static bool IsVerboseDebugEnabled =>
+            config?.DebugMode == true && config?.DebugOcclusion == true && config?.DebugVerbose == true && clientApi != null;
+
+        /// <summary>
+        /// Flush a batched verbose debug log (e.g. entire DDA ray trace).
+        /// Logs the full StringBuilder content as a single Logger.Debug() call,
+        /// reducing synchronous I/O from ~10 calls per ray to 1.
+        /// </summary>
+        public static void VerboseDebugBatch(StringBuilder sb)
+        {
+            if (sb == null || sb.Length == 0) return;
+            if (config?.DebugMode != true || config?.DebugOcclusion != true || config?.DebugVerbose != true || clientApi == null) return;
+            RateLimitedLog(sb.ToString());
         }
 
         /// <summary>
