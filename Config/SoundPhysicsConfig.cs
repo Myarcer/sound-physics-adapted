@@ -111,10 +111,15 @@ namespace soundphysicsadapted
         public string _OcclusionSystem { get; set; } = "--- Raycast occlusion through blocks. Muffles sounds behind walls based on material. ---";
 
         /// <summary>
-        /// Maximum occlusion value (caps total block count)
-        /// Higher = more muffling possible
+        /// Maximum occlusion value (caps total block count).
+        /// The DDA ray stops early once this threshold is reached.
+        /// With BlockAbsorption=1.0, filter = exp(-MaxOcclusion):
+        ///   4.0 = 1.8% volume (functionally inaudible)
+        ///   6.0 = 0.25% volume (hits MinLowPassFilter)
+        ///  10.0 = 0.005% (wastes DDA steps for zero perceptual benefit)
+        /// Default 4.0 provides full muffling while halving DDA cost vs old default of 10.
         /// </summary>
-        public float MaxOcclusion { get; set; } = 10.0f;
+        public float MaxOcclusion { get; set; } = 4.0f;
 
         /// <summary>
         /// Occlusion value per solid block
@@ -137,10 +142,19 @@ namespace soundphysicsadapted
         public float MaxSoundDistance { get; set; } = 64.0f;
 
         /// <summary>
-        /// Maximum raycast iterations to find blocks
-        /// Higher = more accurate but slower
+        /// [DEPRECATED] Unused. Kept for config backward compatibility.
+        /// DDA step limit is now controlled by MaxDDASteps.
         /// </summary>
         public int MaxOcclusionRays { get; set; } = 16;
+
+        /// <summary>
+        /// Maximum DDA traversal steps per occlusion ray.
+        /// Hard cap on how many blocks the ray walks regardless of sound distance.
+        /// Prevents long-distance rays through open air from walking 60+ blocks.
+        /// Default 32 covers ~20 blocks in any diagonal direction.
+        /// 0 = unlimited (Manhattan distance bound only).
+        /// </summary>
+        public int MaxDDASteps { get; set; } = 32;
 
         /// <summary>
         /// Minimum lowpass filter value (0 = silent, 1 = no filter)

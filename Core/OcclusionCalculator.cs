@@ -300,6 +300,7 @@ namespace soundphysicsadapted
             bool verboseLog = SoundPhysicsAdaptedModSystem.IsVerboseDebugEnabled;
             StringBuilder ddaTrace = verboseLog ? new StringBuilder(512) : null;
 
+            int maxDDASteps = config.MaxDDASteps;
             bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
@@ -389,7 +390,7 @@ namespace soundphysicsadapted
                 }
 
                 return false; // Continue
-            }, skipFirst: skipFirstBlock);
+            }, skipFirst: skipFirstBlock, maxSteps: maxDDASteps);
 
             // Flush entire DDA trace as single log entry
             SoundPhysicsAdaptedModSystem.VerboseDebugBatch(ddaTrace);
@@ -409,6 +410,7 @@ namespace soundphysicsadapted
             int entryX = 0, entryY = 0, entryZ = 0;
             bool hasEntryPoint = false;
 
+            int maxDDASteps = config.MaxDDASteps;
             bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
@@ -435,7 +437,7 @@ namespace soundphysicsadapted
                 }
 
                 return false; // Continue
-            }, skipFirst: true);
+            }, skipFirst: true, maxSteps: maxDDASteps);
 
             entryPoint = hasEntryPoint ? new Vec3d(entryX + 0.5, entryY + 0.5, entryZ + 0.5) : null;
             return stopped ? config.MaxOcclusion : occlusionAccumulation;
@@ -499,6 +501,7 @@ namespace soundphysicsadapted
             int steppedZ = (int)Math.Floor(from.Z - ndz * 0.1);
             bool skipFirstBlock = (startX == steppedX && startY == steppedY && startZ == steppedZ);
 
+            int maxDDASteps = config.MaxDDASteps;
             bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
@@ -612,7 +615,7 @@ namespace soundphysicsadapted
                 }
 
                 return false; // Continue
-            }, skipFirst: skipFirstBlock);
+            }, skipFirst: skipFirstBlock, maxSteps: maxDDASteps);
 
             entryPoint = hasEntryPoint ? new Vec3d(entryX + 0.5, entryY + 0.5, entryZ + 0.5) : null;
             interactableOcclusion = interactableAccum;
