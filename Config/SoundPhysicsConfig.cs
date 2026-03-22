@@ -650,6 +650,15 @@ namespace soundphysicsadapted
         public int MaxOverdueSoundsPerTick { get; set; } = 6;
 
         /// <summary>
+        /// Maximum milliseconds to spend processing sounds per tick.
+        /// When exceeded, remaining sounds are deferred to the next tick.
+        /// This prevents lagspikes from complex environments where a single sound
+        /// can take 50-100ms+ due to DDA traversals through dense geometry.
+        /// 0 = unlimited (no time budget). Default 8ms (~half a 60fps frame).
+        /// </summary>
+        public float MaxTickBudgetMs { get; set; } = 8f;
+
+        /// <summary>
         /// Enable spatial reverb cell caching.
         /// Sounds in the same 4x4x4 block area share reverb calculations.
         /// Dramatically reduces CPU usage when many entities are clustered.
