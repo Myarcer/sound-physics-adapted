@@ -250,7 +250,7 @@ namespace soundphysicsadapted
                 }
 
                 // Try with music/ prefix
-                if (!path.StartsWith("sounds") && !path.StartsWith("music/"))
+                if (!path.StartsWith("sounds", StringComparison.Ordinal) && !path.StartsWith("music/", StringComparison.Ordinal))
                 {
                     string musicPath = "music/" + path;
                     if (pendingMonoAssets.Remove(musicPath)) return true;

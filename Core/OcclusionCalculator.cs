@@ -747,7 +747,7 @@ namespace soundphysicsadapted
                 code.Contains("zincblock") || code.Contains("bismuthblock") ||
                 code.Contains("titaniumblock") || code.Contains("chromiumblock") ||
                 code.Contains("platinumblock") || code.Contains("electrumblock") ||
-                code.StartsWith("metalplate") || code.StartsWith("sheetmetal") ||
+                code.StartsWith("metalplate", StringComparison.Ordinal) || code.StartsWith("sheetmetal", StringComparison.Ordinal) ||
                 code.Contains("anvil") || code.Contains("metalladder"))
                 return 1.0f;
 

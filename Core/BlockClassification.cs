@@ -50,6 +50,12 @@ namespace soundphysicsadapted
         // lookup for the 99%+ of blocks that are NOT multiblock spacers.
         private static readonly byte[] isMultiblockPrefixCache = new byte[BLOCK_CACHE_SIZE];
 
+        // Cache for IsSolidForOcclusion (composite: !chiseled && (fullCube || multipleSolid || treatAsFull))
+        // 0 = not cached, 1 = is solid, 2 = is NOT solid
+        // This is the hottest check in the DDA — caching the composite result avoids
+        // calling IsChiseledBlock + IsFullCube + HasMultipleSolidFaces + ShouldTreatAsFullCube every time.
+        private static readonly byte[] isSolidForOcclusionCache = new byte[BLOCK_CACHE_SIZE];
+
         // Pooled BlockPos for IsMultiblockDoorSpacer controller lookup (avoids alloc per call)
         private static readonly BlockPos _multiblockControllerPos = new BlockPos(0, 0, 0, 0);
 
@@ -65,6 +71,7 @@ namespace soundphysicsadapted
             Array.Clear(isOpenInteractableCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isChiseledBlockCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isMultiblockPrefixCache, 0, BLOCK_CACHE_SIZE);
+            Array.Clear(isSolidForOcclusionCache, 0, BLOCK_CACHE_SIZE);
             cachedOcclusionPerSolidBlock = -1f;
         }
 
@@ -165,6 +172,23 @@ namespace soundphysicsadapted
         /// </summary>
         public static bool IsSolidForOcclusion(Block block)
         {
+            if (block == null) return false;
+
+            int blockId = block.Id;
+            if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
+            {
+                byte cached = isSolidForOcclusionCache[blockId];
+                if (cached != 0)
+                    return cached == 1;
+
+                // Cache miss — compute composite result once
+                bool result = !IsChiseledBlock(block)
+                    && (IsFullCube(block) || HasMultipleSolidFaces(block) || ShouldTreatAsFullCube(block));
+                isSolidForOcclusionCache[blockId] = result ? (byte)1 : (byte)2;
+                return result;
+            }
+
+            // Fallback for out-of-range block IDs
             if (IsChiseledBlock(block)) return false;
             return IsFullCube(block) || HasMultipleSolidFaces(block) || ShouldTreatAsFullCube(block);
         }
@@ -188,13 +212,13 @@ namespace soundphysicsadapted
 
                 // Cache miss — do the string check once, cache result forever
                 string path = block.Code?.Path;
-                bool result = path != null && path.StartsWith("chiseledblock");
+                bool result = path != null && path.StartsWith("chiseledblock", StringComparison.Ordinal);
                 isChiseledBlockCache[blockId] = result ? (byte)1 : (byte)2;
                 return result;
             }
 
             string fallbackPath = block.Code?.Path;
-            return fallbackPath != null && fallbackPath.StartsWith("chiseledblock");
+            return fallbackPath != null && fallbackPath.StartsWith("chiseledblock", StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -410,7 +434,7 @@ namespace soundphysicsadapted
                 {
                     // Cache miss — check prefix once, cache forever
                     string path = block.Code?.Path;
-                    bool isMultiblock = path != null && path.StartsWith("multiblock-");
+                    bool isMultiblock = path != null && path.StartsWith("multiblock-", StringComparison.Ordinal);
                     isMultiblockPrefixCache[blockId] = isMultiblock ? (byte)1 : (byte)2;
                     if (!isMultiblock) return false;
                 }
@@ -420,7 +444,7 @@ namespace soundphysicsadapted
             {
                 // Block ID out of cache range — direct check
                 string path = block.Code?.Path;
-                if (path == null || !path.StartsWith("multiblock-")) return false;
+                if (path == null || !path.StartsWith("multiblock-", StringComparison.Ordinal)) return false;
             }
 
             // Only multiblock- prefixed blocks reach here (~1% of DDA-visited blocks)
@@ -446,7 +470,7 @@ namespace soundphysicsadapted
             if (controller == null || controller.Id == 0) return false;
 
             string controllerPath = controller.Code?.Path;
-            if (controllerPath != null && controllerPath.StartsWith("multiblock-")) return false;
+            if (controllerPath != null && controllerPath.StartsWith("multiblock-", StringComparison.Ordinal)) return false;
 
             return IsWeatherInteractable(controller);
         }
@@ -458,8 +482,8 @@ namespace soundphysicsadapted
         private static int ParseVariantOffset(string s)
         {
             if (string.IsNullOrEmpty(s) || s == "0") return 0;
-            if (s.StartsWith("n") && int.TryParse(s.Substring(1), out int nv)) return -nv;
-            if (s.StartsWith("p") && int.TryParse(s.Substring(1), out int pv)) return pv;
+            if (s.StartsWith("n", StringComparison.Ordinal) && int.TryParse(s.Substring(1), out int nv)) return -nv;
+            if (s.StartsWith("p", StringComparison.Ordinal) && int.TryParse(s.Substring(1), out int pv)) return pv;
             if (int.TryParse(s, out int v)) return v;
             return 0;
         }
