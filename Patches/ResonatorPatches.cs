@@ -1167,7 +1167,24 @@ namespace soundphysicsadapted.Patches
 
             if (__instance.Inventory[0] == null || __instance.Inventory[0].Empty) return;
 
-            api.Logger.Debug($"[SoundPhysicsAdapted] Initialize: IsPlaying=true track=null, scheduling deferred StartMusic");
+            // When the server does NOT have SPA, IsPlaying=true is unreliable.
+            // Vanilla servers never reset IsPlaying when a track finishes (the Music
+            // engine callback only fires client-side). So a stale IsPlaying=true with
+            // track=null means "track finished long ago" — do NOT restart it.
+            // Only force-restart when the server has SPA (which properly persists state)
+            // or in singleplayer.
+            if (!ServerHasMod)
+            {
+                api.Logger.Debug($"[SoundPhysicsAdapted] Initialize: IsPlaying=true track=null at {__instance.Pos}, but server lacks SPA — NOT restarting (stale state)");
+                return;
+            }
+
+            // Server has SPA — check if this was a paused resonator (saved position exists)
+            // or a legitimately playing one that needs restart after chunk reload.
+            bool hasSavedPos = savedPositions.TryGetValue(__instance, out PlaybackPosition savedPos) && savedPos != null;
+            bool isPaused = pausedStates.TryGetValue(__instance, out PausedState paused) && paused != null && paused.IsPaused;
+
+            api.Logger.Debug($"[SoundPhysicsAdapted] Initialize: IsPlaying=true track=null, hasSavedPos={hasSavedPos}, isPaused={isPaused}, scheduling deferred StartMusic");
 
             // Use TryEnqueue which is safer during pause and won't crash
             try
