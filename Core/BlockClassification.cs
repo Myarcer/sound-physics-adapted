@@ -17,7 +17,7 @@ namespace soundphysicsadapted
     {
         // === Block caches by block ID ===
         // VS typically has <8192 unique block IDs.
-        private const int BLOCK_CACHE_SIZE = 8192;
+        private const int BLOCK_CACHE_SIZE = 16384;
 
         // Block occlusion value cache (avoids repeated MaterialConfig lookups)
         private static readonly float[] blockOcclusionCache = new float[BLOCK_CACHE_SIZE];
