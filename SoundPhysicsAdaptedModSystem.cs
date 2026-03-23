@@ -265,6 +265,34 @@ namespace soundphysicsadapted
                         materialConfig.Version = 3;
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v3: added decorative block overrides (toolrack, torchholder, lantern, anvil, etc.)");
                     }
+
+                    // Version 4 migration: knapping/clayforming surfaces + loose ground items
+                    // These thin interactive surfaces have block-wide collision boxes that rays
+                    // easily hit, applying stone material occlusion (~0.95) despite being acoustically
+                    // transparent. Loose stones/flints/ores are tiny ground scatter.
+                    if (materialConfig.Version < 4)
+                    {
+                        var overrides = materialConfig.Occlusion.BlockOverrides;
+                        if (overrides != null)
+                        {
+                            var craftSurfaceOverrides = new System.Collections.Generic.Dictionary<string, float>
+                            {
+                                { "game:knappingsurface*", 0.0f },
+                                { "game:clayforming*", 0.0f },
+                                { "game:loosestones-*", 0.0f },
+                                { "game:looseflints-*", 0.0f },
+                                { "game:looseores-*", 0.0f }
+                            };
+                            foreach (var kvp in craftSurfaceOverrides)
+                            {
+                                if (!overrides.ContainsKey(kvp.Key))
+                                    overrides[kvp.Key] = kvp.Value;
+                            }
+                        }
+
+                        materialConfig.Version = 4;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v4: added knapping/clayforming surface + loose ground item overrides");
+                    }
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");
