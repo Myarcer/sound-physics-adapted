@@ -4,6 +4,27 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.9.0] - 2026-03-22
+
+### Added
+- Per-tick time budget (8ms default) — prevents lagspikes from complex raycasts in dense geometry; remaining sounds deferred to next tick
+- DDA step hard cap (MaxDDASteps=32) — long-distance rays through open air no longer walk 60+ blocks wastefully
+- Block occlusion cache — caches GetOcclusion result per block ID, eliminates redundant lookups (cache size 16384)
+- IsSolidForOcclusion composite cache — single lookup replaces repeated FirstCodePart + material + property checks
+- IsMultiblockDoorSpacer prefix cache — avoids repeated string operations in DDA hot path
+
+### Changed
+- MaxOcclusion default lowered from 10.0 to 4.0 — 4.0 already produces functionally inaudible results (1.8% volume); the extra 6 units wasted DDA steps for zero perceptual benefit
+- MaxSoundsPerTick lowered from 25 to 10 — time budget is now the primary spike guard; count cap is a secondary safety net
+- MaxOverdueSoundsPerTick lowered from 6 to 3 — combined with time budget prevents burst processing spikes
+- StringComparison.Ordinal used everywhere instead of default culture-sensitive comparisons
+- DDA visitor hot path reordered for early exits on most common block types
+- Existing user configs auto-migrated to new performance defaults (only if values match old defaults)
+
+### Fixed
+- Sound repositioning at >25m behind walls — bounce-based offset skipped when too far to prevent nonsensical placement
+- Sound repositioning offset exceeding player-to-sound distance — rejected to prevent sounds jumping behind the listener
+
 ## [0.1.8] - 2026-03-19
 
 ### Added

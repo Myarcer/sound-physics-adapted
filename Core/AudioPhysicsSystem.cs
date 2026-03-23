@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
@@ -131,6 +132,10 @@ namespace soundphysicsadapted
         // === Sound throttle: collects all positional sound distances per tick ===
         private Dictionary<ILoadedSound, float> _soundDistances = new Dictionary<ILoadedSound, float>();
 
+        // Time budget: stops processing sounds when tick exceeds budget to prevent lagspikes
+        private readonly Stopwatch _tickStopwatch = new Stopwatch();
+        private int budgetExceededThisTick = 0;
+
         // Stats
         private int updatedThisTick = 0;
         private int cachedThisTick = 0;
@@ -210,6 +215,9 @@ namespace soundphysicsadapted
 
         private void UpdateAllSounds(Vec3d playerPos, IBlockAccessor blockAccessor, long currentTimeMs)
         {
+            _tickStopwatch.Restart();
+            budgetExceededThisTick = 0;
+
             var activeSounds = AudioRenderer.GetActiveSounds();
             int count = 0;
             _candidates.Clear();
@@ -328,11 +336,26 @@ namespace soundphysicsadapted
             int processed = 0;
             int overdueProcessed = 0;
             int maxOverdue = Math.Max(4, (config?.MaxOverdueSoundsPerTick ?? 6));
+            float timeBudgetMs = config?.MaxTickBudgetMs ?? 8f;
             for (int i = 0; i < _candidates.Count; i++)
             {
                 var candidate = _candidates[i];
 
-                // Budget check: overdue sounds get priority but are still capped
+                // TIME BUDGET: stop processing when tick exceeds budget.
+                // Always allow at least 1 sound per tick (prevents complete starvation).
+                // Overdue sounds (new/stale) bypass the time budget to prevent indefinite deferral.
+                if (timeBudgetMs > 0 && processed > 0 && !candidate.IsOverdue)
+                {
+                    float elapsedMs = (float)_tickStopwatch.Elapsed.TotalMilliseconds;
+                    if (elapsedMs >= timeBudgetMs)
+                    {
+                        budgetExceededThisTick++;
+                        deferredThisTick++;
+                        continue;
+                    }
+                }
+
+                // COUNT BUDGET: overdue sounds get priority but are still capped
                 if (maxPerTick > 0 && processed >= maxPerTick)
                 {
                     // Over normal budget — only allow overdue, up to maxOverdue extra
@@ -349,6 +372,7 @@ namespace soundphysicsadapted
                     candidate.Distance, playerPos, blockAccessor, currentTimeMs);
                 processed++;
             }
+            _tickStopwatch.Stop();
 
             updatedThisTick = processed;
             totalActive = count;
@@ -358,10 +382,11 @@ namespace soundphysicsadapted
             {
                 string cellCacheInfo = reverbCellCache != null ? $" cellHits={cellCacheHitsThisTick} cells={reverbCellCache.CellCount}" : "";
                 string throttleInfo = throttle != null ? $" throttle={throttle.ThrottledCount}" : "";
+                string budgetInfo = budgetExceededThisTick > 0 ? $" budgetDeferred={budgetExceededThisTick} tickMs={_tickStopwatch.Elapsed.TotalMilliseconds:F1}" : "";
                 SoundPhysicsAdaptedModSystem.DebugLog(
                     $"ACOUSTICS: updated={updatedThisTick} cached={cachedThisTick} " +
                     $"skipped={skippedThisTick} deferred={deferredThisTick} playerPos={playerPosThisTick} " +
-                    $"total={totalActive} outdoor={isOutdoors}{cellCacheInfo}{throttleInfo}");
+                    $"total={totalActive} outdoor={isOutdoors}{cellCacheInfo}{throttleInfo}{budgetInfo}");
             }
         }
 

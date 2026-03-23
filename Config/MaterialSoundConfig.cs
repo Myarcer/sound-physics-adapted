@@ -24,14 +24,59 @@ namespace soundphysicsadapted
         private List<(Regex pattern, float value)> _compiledOcclusionOverrides;
         private List<Regex> _compiledTreatAsFullCube;
 
+        // Per-block-ID result cache for GetOcclusion (avoids repeated regex matching).
+        // Regex is expensive (~1.8ms per block type with 60+ patterns). This cache ensures
+        // each unique block type only runs regex ONCE, then all subsequent calls are O(1).
+        private const int OCCLUSION_RESULT_CACHE_SIZE = 16384;
+        private readonly float[] _occlusionResultCache = new float[OCCLUSION_RESULT_CACHE_SIZE];
+        private readonly bool[] _occlusionResultCached = new bool[OCCLUSION_RESULT_CACHE_SIZE];
+
+        // Pre-cached material name lookups (avoids ToString().ToLowerInvariant() per call)
+        private Dictionary<EnumBlockMaterial, float> _materialOcclusionLookup;
+
+        /// <summary>
+        /// Clear the per-block-ID result cache. Called when overrides change.
+        /// </summary>
+        private void ClearOcclusionResultCache()
+        {
+            Array.Clear(_occlusionResultCached, 0, OCCLUSION_RESULT_CACHE_SIZE);
+        }
+
         /// <summary>
         /// Get occlusion multiplier for a block.
         /// Checks block code overrides first, then falls back to material.
+        /// Results are cached per block ID to avoid repeated regex evaluation.
         /// </summary>
         public float GetOcclusion(Block block)
         {
             if (block == null) return 0.5f;
 
+            // Fast path: check per-block-ID cache first
+            int blockId = block.Id;
+            if (blockId >= 0 && blockId < OCCLUSION_RESULT_CACHE_SIZE && _occlusionResultCached[blockId])
+            {
+                return _occlusionResultCache[blockId];
+            }
+
+            // Cache miss — compute via regex overrides + material lookup
+            float result = ComputeOcclusion(block);
+
+            // Store in cache
+            if (blockId >= 0 && blockId < OCCLUSION_RESULT_CACHE_SIZE)
+            {
+                _occlusionResultCache[blockId] = result;
+                _occlusionResultCached[blockId] = true;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Compute occlusion multiplier (expensive — runs regex patterns).
+        /// Only called on cache miss per block type.
+        /// </summary>
+        private float ComputeOcclusion(Block block)
+        {
             // Check block code overrides first
             string blockCode = block.Code?.ToString() ?? "";
             if (!string.IsNullOrEmpty(blockCode) && Occlusion.BlockOverrides != null)
@@ -55,9 +100,19 @@ namespace soundphysicsadapted
                 }
             }
 
-            // Fall back to material lookup
-            string materialName = block.BlockMaterial.ToString().ToLowerInvariant();
-            if (Occlusion.Materials.TryGetValue(materialName, out float occlusion))
+            // Fall back to pre-cached material lookup (avoids ToString + ToLower per call)
+            if (_materialOcclusionLookup == null && Occlusion.Materials != null)
+            {
+                _materialOcclusionLookup = new Dictionary<EnumBlockMaterial, float>();
+                foreach (EnumBlockMaterial mat in Enum.GetValues(typeof(EnumBlockMaterial)))
+                {
+                    string matName = mat.ToString().ToLowerInvariant();
+                    if (Occlusion.Materials.TryGetValue(matName, out float val))
+                        _materialOcclusionLookup[mat] = val;
+                }
+            }
+
+            if (_materialOcclusionLookup != null && _materialOcclusionLookup.TryGetValue(block.BlockMaterial, out float occlusion))
                 return occlusion;
 
             return 0.5f; // Default for unknown materials
@@ -125,6 +180,7 @@ namespace soundphysicsadapted
             Occlusion.BlockOverrides ??= new Dictionary<string, float>();
             Occlusion.BlockOverrides[blockPattern] = occlusionValue;
             _compiledOcclusionOverrides = null; // Force recompile
+            ClearOcclusionResultCache();         // Invalidate per-block-ID cache
             BlockClassification.ClearCache();    // Cached values may be stale
         }
 
@@ -138,6 +194,8 @@ namespace soundphysicsadapted
         {
             Occlusion.Materials ??= new Dictionary<string, float>();
             Occlusion.Materials[materialName] = occlusionValue;
+            _materialOcclusionLookup = null;     // Force rebuild enum lookup
+            ClearOcclusionResultCache();         // Invalidate per-block-ID cache
             BlockClassification.ClearCache();
         }
 
@@ -166,6 +224,7 @@ namespace soundphysicsadapted
             {
                 Occlusion.TreatAsFullCube.Add(blockPattern);
                 _compiledTreatAsFullCube = null; // Force recompile
+                ClearOcclusionResultCache();      // TreatAsFullCube affects solid classification → occlusion
                 BlockClassification.ClearCache();
             }
         }

@@ -111,10 +111,15 @@ namespace soundphysicsadapted
         public string _OcclusionSystem { get; set; } = "--- Raycast occlusion through blocks. Muffles sounds behind walls based on material. ---";
 
         /// <summary>
-        /// Maximum occlusion value (caps total block count)
-        /// Higher = more muffling possible
+        /// Maximum occlusion value (caps total block count).
+        /// The DDA ray stops early once this threshold is reached.
+        /// With BlockAbsorption=1.0, filter = exp(-MaxOcclusion):
+        ///   4.0 = 1.8% volume (functionally inaudible)
+        ///   6.0 = 0.25% volume (hits MinLowPassFilter)
+        ///  10.0 = 0.005% (wastes DDA steps for zero perceptual benefit)
+        /// Default 4.0 provides full muffling while halving DDA cost vs old default of 10.
         /// </summary>
-        public float MaxOcclusion { get; set; } = 10.0f;
+        public float MaxOcclusion { get; set; } = 4.0f;
 
         /// <summary>
         /// Occlusion value per solid block
@@ -137,10 +142,19 @@ namespace soundphysicsadapted
         public float MaxSoundDistance { get; set; } = 64.0f;
 
         /// <summary>
-        /// Maximum raycast iterations to find blocks
-        /// Higher = more accurate but slower
+        /// [DEPRECATED] Unused. Kept for config backward compatibility.
+        /// DDA step limit is now controlled by MaxDDASteps.
         /// </summary>
         public int MaxOcclusionRays { get; set; } = 16;
+
+        /// <summary>
+        /// Maximum DDA traversal steps per occlusion ray.
+        /// Hard cap on how many blocks the ray walks regardless of sound distance.
+        /// Prevents long-distance rays through open air from walking 60+ blocks.
+        /// Default 32 covers ~20 blocks in any diagonal direction.
+        /// 0 = unlimited (Manhattan distance bound only).
+        /// </summary>
+        public int MaxDDASteps { get; set; } = 32;
 
         /// <summary>
         /// Minimum lowpass filter value (0 = silent, 1 = no filter)
@@ -631,23 +645,32 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Maximum number of sounds that can run full raycasting per tick.
-        /// VS runs at 20 ticks/second — default 25 = up to 500 sounds/sec max throughput.
-        /// Protects against spikes when many sounds become eligible at once
-        /// (teleport, block break cache invalidation, entering dense areas).
+        /// VS runs at 20 ticks/second — default 10 = up to 200 sounds/sec max throughput.
+        /// The time budget (MaxTickBudgetMs) is the primary spike guard; this count cap
+        /// is a secondary safety net that limits worst-case work even if each sound is cheap.
         /// Sounds exceeding the budget are deferred to the next tick.
         /// Close sounds are prioritized. Overdue sounds (>2s stale) get priority but are still capped.
-        /// 0 = unlimited (no budget cap).
+        /// 0 = unlimited (no count cap, time budget only).
         /// </summary>
-        public int MaxSoundsPerTick { get; set; } = 25;
+        public int MaxSoundsPerTick { get; set; } = 10;
 
         /// <summary>
         /// Additional overdue sounds that can process on top of MaxSoundsPerTick each tick.
         /// Overdue = new sounds or sounds not updated in >2s.
-        /// Real max per tick = MaxSoundsPerTick + MaxOverdueSoundsPerTick (default 25+6=31).
+        /// Real max per tick = MaxSoundsPerTick + MaxOverdueSoundsPerTick (default 10+3=13).
         /// Prevents spikes when many sounds appear simultaneously (approaching a farm).
-        /// 0 = overdue sounds obey normal budget (strictest). Default 6.
+        /// 0 = overdue sounds obey normal budget (strictest). Default 3.
         /// </summary>
-        public int MaxOverdueSoundsPerTick { get; set; } = 6;
+        public int MaxOverdueSoundsPerTick { get; set; } = 3;
+
+        /// <summary>
+        /// Maximum milliseconds to spend processing sounds per tick.
+        /// When exceeded, remaining sounds are deferred to the next tick.
+        /// This prevents lagspikes from complex environments where a single sound
+        /// can take 50-100ms+ due to DDA traversals through dense geometry.
+        /// 0 = unlimited (no time budget). Default 8ms (~half a 60fps frame).
+        /// </summary>
+        public float MaxTickBudgetMs { get; set; } = 8f;
 
         /// <summary>
         /// Enable spatial reverb cell caching.

@@ -17,7 +17,7 @@ namespace soundphysicsadapted
     {
         // === Block caches by block ID ===
         // VS typically has <8192 unique block IDs.
-        private const int BLOCK_CACHE_SIZE = 8192;
+        private const int BLOCK_CACHE_SIZE = 16384;
 
         // Block occlusion value cache (avoids repeated MaterialConfig lookups)
         private static readonly float[] blockOcclusionCache = new float[BLOCK_CACHE_SIZE];
@@ -44,6 +44,21 @@ namespace soundphysicsadapted
         // 0 = not cached, 1 = is chiseled, 2 = is NOT chiseled
         private static readonly byte[] isChiseledBlockCache = new byte[BLOCK_CACHE_SIZE];
 
+        // Cache for IsMultiblockPrefix (block code starts with "multiblock-")
+        // 0 = not cached, 1 = is multiblock prefix, 2 = is NOT
+        // This eliminates the expensive string check + blockAccessor.GetBlock controller
+        // lookup for the 99%+ of blocks that are NOT multiblock spacers.
+        private static readonly byte[] isMultiblockPrefixCache = new byte[BLOCK_CACHE_SIZE];
+
+        // Cache for IsSolidForOcclusion (composite: !chiseled && (fullCube || multipleSolid || treatAsFull))
+        // 0 = not cached, 1 = is solid, 2 = is NOT solid
+        // This is the hottest check in the DDA — caching the composite result avoids
+        // calling IsChiseledBlock + IsFullCube + HasMultipleSolidFaces + ShouldTreatAsFullCube every time.
+        private static readonly byte[] isSolidForOcclusionCache = new byte[BLOCK_CACHE_SIZE];
+
+        // Pooled BlockPos for IsMultiblockDoorSpacer controller lookup (avoids alloc per call)
+        private static readonly BlockPos _multiblockControllerPos = new BlockPos(0, 0, 0, 0);
+
         /// <summary>
         /// Clear all block caches. Call when config reloads or materials change.
         /// </summary>
@@ -55,6 +70,8 @@ namespace soundphysicsadapted
             Array.Clear(isWeatherInteractableCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isOpenInteractableCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isChiseledBlockCache, 0, BLOCK_CACHE_SIZE);
+            Array.Clear(isMultiblockPrefixCache, 0, BLOCK_CACHE_SIZE);
+            Array.Clear(isSolidForOcclusionCache, 0, BLOCK_CACHE_SIZE);
             cachedOcclusionPerSolidBlock = -1f;
         }
 
@@ -155,6 +172,23 @@ namespace soundphysicsadapted
         /// </summary>
         public static bool IsSolidForOcclusion(Block block)
         {
+            if (block == null) return false;
+
+            int blockId = block.Id;
+            if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
+            {
+                byte cached = isSolidForOcclusionCache[blockId];
+                if (cached != 0)
+                    return cached == 1;
+
+                // Cache miss — compute composite result once
+                bool result = !IsChiseledBlock(block)
+                    && (IsFullCube(block) || HasMultipleSolidFaces(block) || ShouldTreatAsFullCube(block));
+                isSolidForOcclusionCache[blockId] = result ? (byte)1 : (byte)2;
+                return result;
+            }
+
+            // Fallback for out-of-range block IDs
             if (IsChiseledBlock(block)) return false;
             return IsFullCube(block) || HasMultipleSolidFaces(block) || ShouldTreatAsFullCube(block);
         }
@@ -176,12 +210,15 @@ namespace soundphysicsadapted
                 if (cached != 0)
                     return cached == 1;
 
-                bool result = block.Code?.Path?.StartsWith("chiseledblock") == true;
+                // Cache miss — do the string check once, cache result forever
+                string path = block.Code?.Path;
+                bool result = path != null && path.StartsWith("chiseledblock", StringComparison.Ordinal);
                 isChiseledBlockCache[blockId] = result ? (byte)1 : (byte)2;
                 return result;
             }
 
-            return block.Code?.Path?.StartsWith("chiseledblock") == true;
+            string fallbackPath = block.Code?.Path;
+            return fallbackPath != null && fallbackPath.StartsWith("chiseledblock", StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -378,13 +415,39 @@ namespace soundphysicsadapted
         /// geometry of their own but still have a non-Air material, causing phantom occlusion
         /// in the DDA. Resolving to the controller lets us skip the spacer entirely — the
         /// actual door panel collision lives on the controller block position.
-        /// NOT cached — requires blockAccessor + position context per call.
+        ///
+        /// PERF: The "multiblock-" prefix check is cached per block ID. Only blocks that
+        /// pass this fast prefix gate do the expensive blockAccessor.GetBlock controller lookup.
+        /// This eliminates ~99% of calls at the cache check level (2.6ms avg → ~0ms for non-multiblocks).
+        /// Controller lookup is safe even if the door block is replaced/deleted — GetBlock returns
+        /// air (Id==0) which fails the null/Id check and returns false.
         /// </summary>
         public static bool IsMultiblockDoorSpacer(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
         {
-            string path = block.Code?.Path;
-            if (path == null || !path.StartsWith("multiblock-")) return false;
+            // FAST PATH: Cached prefix check eliminates 99%+ of blocks immediately
+            int blockId = block.Id;
+            if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
+            {
+                byte cached = isMultiblockPrefixCache[blockId];
+                if (cached == 2) return false; // Cached: NOT a multiblock prefix
+                if (cached == 0)
+                {
+                    // Cache miss — check prefix once, cache forever
+                    string path = block.Code?.Path;
+                    bool isMultiblock = path != null && path.StartsWith("multiblock-", StringComparison.Ordinal);
+                    isMultiblockPrefixCache[blockId] = isMultiblock ? (byte)1 : (byte)2;
+                    if (!isMultiblock) return false;
+                }
+                // cached == 1: IS a multiblock prefix, fall through to controller check
+            }
+            else
+            {
+                // Block ID out of cache range — direct check
+                string path = block.Code?.Path;
+                if (path == null || !path.StartsWith("multiblock-", StringComparison.Ordinal)) return false;
+            }
 
+            // Only multiblock- prefixed blocks reach here (~1% of DDA-visited blocks)
             // Parse variant offsets to find the controller block position
             var variant = block.Variant;
             if (variant == null) return false;
@@ -400,11 +463,14 @@ namespace soundphysicsadapted
             int cdz = ParseVariantOffset(dzStr);
 
             // Controller = spacer position - offset
-            Block controller = blockAccessor.GetBlock(
-                new BlockPos(x - cdx, y - cdy, z - cdz, 0));
+            // Safe if door was destroyed: GetBlock returns air (Id==0), caught below
+            _multiblockControllerPos.Set(x - cdx, y - cdy, z - cdz);
+            Block controller = blockAccessor.GetBlock(_multiblockControllerPos);
 
             if (controller == null || controller.Id == 0) return false;
-            if (controller.Code?.Path?.StartsWith("multiblock-") == true) return false;
+
+            string controllerPath = controller.Code?.Path;
+            if (controllerPath != null && controllerPath.StartsWith("multiblock-", StringComparison.Ordinal)) return false;
 
             return IsWeatherInteractable(controller);
         }
@@ -416,8 +482,8 @@ namespace soundphysicsadapted
         private static int ParseVariantOffset(string s)
         {
             if (string.IsNullOrEmpty(s) || s == "0") return 0;
-            if (s.StartsWith("n") && int.TryParse(s.Substring(1), out int nv)) return -nv;
-            if (s.StartsWith("p") && int.TryParse(s.Substring(1), out int pv)) return pv;
+            if (s.StartsWith("n", StringComparison.Ordinal) && int.TryParse(s.Substring(1), out int nv)) return -nv;
+            if (s.StartsWith("p", StringComparison.Ordinal) && int.TryParse(s.Substring(1), out int pv)) return pv;
             if (int.TryParse(s, out int v)) return v;
             return 0;
         }

@@ -178,7 +178,7 @@ namespace soundphysicsadapted
         /// <param name="visitor">Callback for each block. Return true to stop.</param>
         /// <param name="skipFirst">If true, skip the starting block (common for sound source position).</param>
         /// <returns>True if visitor stopped traversal, false if ray completed without stopping.</returns>
-        public static bool Traverse(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, BlockVisitor visitor, bool skipFirst = true)
+        public static bool Traverse(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, BlockVisitor visitor, bool skipFirst = true, int maxSteps = 0)
         {
             double dx = to.X - from.X;
             double dy = to.Y - from.Y;
@@ -193,7 +193,7 @@ namespace soundphysicsadapted
             dz /= length;
 
             return TraverseCore(from, dx, dy, dz, blockAccessor, visitor, skipFirst,
-                (int)Math.Floor(to.X), (int)Math.Floor(to.Y), (int)Math.Floor(to.Z));
+                (int)Math.Floor(to.X), (int)Math.Floor(to.Y), (int)Math.Floor(to.Z), maxSteps);
         }
 
         /// <summary>
@@ -238,9 +238,10 @@ namespace soundphysicsadapted
         /// <summary>
         /// Core DDA implementation. All public methods delegate here.
         /// </summary>
+        /// <param name="maxSteps">Hard cap on DDA steps. 0 = unlimited (Manhattan distance bound only).</param>
         private static bool TraverseCore(Vec3d from, double dx, double dy, double dz,
             IBlockAccessor blockAccessor, BlockVisitor visitor, bool skipFirst,
-            int endX, int endY, int endZ)
+            int endX, int endY, int endZ, int maxSteps = 0)
         {
             // Current block position (start)
             int x = (int)Math.Floor(from.X);
@@ -264,6 +265,8 @@ namespace soundphysicsadapted
 
             // DDA steps one axis at a time → Manhattan distance bound
             int maxBlocks = Math.Abs(endX - x) + Math.Abs(endY - y) + Math.Abs(endZ - z) + 2;
+            if (maxSteps > 0 && maxBlocks > maxSteps)
+                maxBlocks = maxSteps;
             int blocksTraversed = 0;
 
             // Track which axis we stepped on (for exact normal computation)

@@ -46,7 +46,7 @@ namespace soundphysicsadapted
             bool wasMultiblock = false;
             string originalCode = code;
 
-            if (code.StartsWith("multiblock-"))
+            if (code.StartsWith("multiblock-", StringComparison.Ordinal))
             {
                 Block controllerBlock = ResolveMultiblockController(block, blockAccessor);
                 if (controllerBlock != null && controllerBlock.Id != 0)
@@ -143,7 +143,7 @@ namespace soundphysicsadapted
             Block controller = blockAccessor.GetBlock(_controllerPos);
 
             // Safety: if controller is itself a multiblock, don't recurse (corrupted world)
-            if (controller != null && controller.Code?.Path?.StartsWith("multiblock-") == true)
+            if (controller != null && controller.Code?.Path?.StartsWith("multiblock-", StringComparison.Ordinal) == true)
             {
                 return null;
             }
@@ -160,12 +160,12 @@ namespace soundphysicsadapted
             if (string.IsNullOrEmpty(s)) return 0;
             if (s == "0") return 0;
 
-            if (s.StartsWith("n"))
+            if (s.StartsWith("n", StringComparison.Ordinal))
             {
                 if (int.TryParse(s.Substring(1), out int val))
                     return -val;
             }
-            else if (s.StartsWith("p"))
+            else if (s.StartsWith("p", StringComparison.Ordinal))
             {
                 if (int.TryParse(s.Substring(1), out int val))
                     return val;

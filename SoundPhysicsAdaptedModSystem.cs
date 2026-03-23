@@ -41,7 +41,7 @@ namespace soundphysicsadapted
         /// Bump this when adding new migration blocks in MigrateConfig().
         /// Pre-migration configs (ConfigVersion == 0) are always wiped to fresh defaults.
         /// </summary>
-        private const int CurrentConfigVersion = 1;
+        private const int CurrentConfigVersion = 2;
         private static MaterialSoundConfig materialConfig;
         private static ICoreClientAPI clientApi;
         private static AudioPhysicsSystem acousticsManager;
@@ -1102,15 +1102,14 @@ namespace soundphysicsadapted
         /// </summary>
         private static void MigrateConfig(SoundPhysicsConfig cfg)
         {
-            // No migrations yet — first managed version.
-            // Example for future use:
-            // if (cfg.ConfigVersion < 2)
-            // {
-            //     // v1→v2: WeatherVolumeLossMax default changed from 0.5 to 0.6
-            //     // Only reset if the user still has the old default (0.5), not if they customized it
-            //     if (cfg.WeatherVolumeLossMax <= 0.5f) cfg.WeatherVolumeLossMax = 0.6f;
-            //     cfg.ConfigVersion = 2;
-            // }
+            if (cfg.ConfigVersion < 2)
+            {
+                // v1→v2: Performance tuning — lower caps, add time budget, add DDA step limit
+                if (cfg.MaxOcclusion >= 10.0f) cfg.MaxOcclusion = 4.0f;
+                if (cfg.MaxSoundsPerTick >= 25) cfg.MaxSoundsPerTick = 10;
+                if (cfg.MaxOverdueSoundsPerTick >= 6) cfg.MaxOverdueSoundsPerTick = 3;
+                cfg.ConfigVersion = 2;
+            }
             cfg.ConfigVersion = CurrentConfigVersion;
         }
 
