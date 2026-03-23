@@ -328,6 +328,8 @@ namespace soundphysicsadapted
                         { "game:candle-*", 0.0f },
                         // Signs — thin flat panels
                         { "game:sign-*", 0.0f },
+                        // Knapping surface — flat stone on ground, not a real block
+                        { "game:knappingsurface*", 0.0f },
                         // Anvils — override for testing, unsure if to keep?
                         { "game:anvil-*", 0.0f },
                         // Ingot piles, plate piles — flat ground stacks
