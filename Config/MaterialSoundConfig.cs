@@ -236,7 +236,7 @@ namespace soundphysicsadapted
         {
             return new MaterialSoundConfig
             {
-                Version = 2,
+                Version = 4,
                 Occlusion = new OcclusionSection
                 {
                     Materials = new Dictionary<string, float>
