@@ -211,6 +211,18 @@ namespace soundphysicsadapted
             hailPool?.StopAll();
         }
 
+        /// <summary>
+        /// Fast-tick interpolation for volume and position (called at 25ms / 40Hz).
+        /// Smooths the 100ms weather tick targets to prevent audible stepping/jitter.
+        /// </summary>
+        public void SmoothTick()
+        {
+            if (!initialized || disposed) return;
+            rainPool?.SmoothTick();
+            windPool?.SmoothTick();
+            hailPool?.SmoothTick();
+        }
+
         // ════════════════════════════════════════════════════════════════
         // Multi-pool audibility (for OpeningTracker persistence)
         // ════════════════════════════════════════════════════════════════

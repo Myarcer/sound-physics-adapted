@@ -718,6 +718,9 @@ namespace soundphysicsadapted
             _diagSmoothTotalMs += smoothMs;
             if (smoothMs > _diagSmoothMaxMs) _diagSmoothMaxMs = smoothMs;
 
+            // Fast-tick weather positional source smoothing (volume + position at 25ms)
+            weatherManager?.SmoothPositionalSources();
+
             // Heartbeat: log stats every 5s (always, bypass DebugMode)
             EmitDiagnosticHeartbeat();
         }

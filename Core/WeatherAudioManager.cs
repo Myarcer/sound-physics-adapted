@@ -530,6 +530,16 @@ namespace soundphysicsadapted
                    $"  Thunder: {thunderStr} — {thunderDebug}";
         }
 
+        /// <summary>
+        /// Fast-tick smoothing for positional weather sources (called at 25ms / 40Hz).
+        /// Interpolates volume and position between the 100ms weather tick updates.
+        /// </summary>
+        public void SmoothPositionalSources()
+        {
+            if (!initialized || disposed) return;
+            positionalHandler?.SmoothTick();
+        }
+
         public void Dispose()
         {
             if (disposed) return;
