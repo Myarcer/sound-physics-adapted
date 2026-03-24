@@ -353,13 +353,16 @@ namespace soundphysicsadapted
                     {
                         // No collision geometry — foliage path.
                         // Blocks you walk through: leaves, flowers, grass, paintings, etc.
-                        // Still looks up material/override occlusion so dense foliage
-                        // (leaves, berry bushes) provides some muffling while thin
-                        // decorative items (paintings, signs) can be overridden to 0.
+                        // Material/override occlusion scaled by selection box volume so
+                        // small decorative items auto-reduce without needing overrides.
                         blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                        if (blockOcclusion > 0 && verboseLog)
+                        if (blockOcclusion > 0)
                         {
-                            ddaTrace.Append($"  DDA foliage: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2}\n");
+                            blockOcclusion *= GetFoliageVolumeScale(block);
+                            if (verboseLog)
+                            {
+                                ddaTrace.Append($"  DDA foliage: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F3}\n");
+                            }
                         }
                     }
                     else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
@@ -579,9 +582,12 @@ namespace soundphysicsadapted
                     else
                     {
                         // No collision geometry — foliage, decorative items.
-                        // Still look up material/override so dense foliage (leaves)
-                        // provides muffling while decorative items (paintings) are 0.
+                        // Scale by selection box volume so small items auto-reduce.
                         blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                        if (blockOcclusion > 0)
+                        {
+                            blockOcclusion *= GetFoliageVolumeScale(block);
+                        }
                     }
                 }
 
@@ -620,6 +626,27 @@ namespace soundphysicsadapted
             entryPoint = hasEntryPoint ? new Vec3d(entryX + 0.5, entryY + 0.5, entryZ + 0.5) : null;
             interactableOcclusion = interactableAccum;
             return stopped ? config.MaxOcclusion : structuralAccum;
+        }
+
+        /// <summary>
+        /// Get a volume-based occlusion scale for no-collision (foliage) blocks.
+        /// Uses selection box volume as a proxy for physical presence.
+        /// Returns fillRatio directly (not sqrt) — walkthrough blocks occlude
+        /// proportional to their fill, not structural presence.
+        /// </summary>
+        private static float GetFoliageVolumeScale(Block block)
+        {
+            var selBoxes = block.SelectionBoxes;
+            if (selBoxes == null || selBoxes.Length == 0)
+                return 0f; // No geometry at all — fully transparent
+
+            float totalVol = 0f;
+            for (int i = 0; i < selBoxes.Length; i++)
+            {
+                var b = selBoxes[i];
+                totalVol += (b.X2 - b.X1) * (b.Y2 - b.Y1) * (b.Z2 - b.Z1);
+            }
+            return Math.Min(totalVol, 1f);
         }
 
         /// <summary>

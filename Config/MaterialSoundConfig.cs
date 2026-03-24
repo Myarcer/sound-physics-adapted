@@ -281,13 +281,7 @@ namespace soundphysicsadapted
                         { "game:barrel-*", 0.5f },
                         // Furniture
                         { "game:bed-*", 0.3f },
-                        // Vegetation — walkable, slight muffling from dense foliage
-                        { "game:tallgrass-*", 0.01f },
-                        { "game:flower-*", 0.01f },
-                        { "game:fern-*", 0.02f },
-                        { "game:waterlily-*", 0.01f },
-                        { "game:mushroom-*", 0.01f },
-                        // Leaves — dense canopy muffles sound
+                        // Leaves — dense canopy muffles sound (higher than Plant default)
                         { "game:leaves-*", 0.08f },
                         { "game:leavesbranchy-*", 0.12f },
                         // Berry bushes — thick foliage muffles sound
@@ -306,12 +300,7 @@ namespace soundphysicsadapted
                         { "wildcraftfruit:bottompricklybush-*", 0.06f },
                         { "wildcraftfruit:bottomtreebush-*", 0.06f },
                         { "wildcraftfruit:groundberryplant-*", 0.02f },
-                        // Paintings — thin flat decorative panel on wall, no sound blocking
-                        { "game:painting-*", 0.0f },
-                        // Clutter — small decorative items (bottles, plates on shelves)
-                        { "game:clutter*", 0.0f },
-                        // Snow layers - ignored for occlusion (too thin)
-                        { "game:snowlayer-*", 0.0f },
+
                         // Path blocks - flat ground surface, solid bottom face but shouldn't occlude
                         { "game:woodenpath-*", 0.0f },
                         // Baskets and traps - small open containers on the ground
@@ -322,19 +311,7 @@ namespace soundphysicsadapted
                         { "game:firepit-*", 0.0f },
                         // Tool racks
                         { "game:toolrack-*", 0.0f },
-                        // Torch holders, lanterns, candles — wall decorations
-                        { "game:torchholder-*", 0.0f },
-                        { "game:lantern-*", 0.0f },
-                        { "game:candle-*", 0.0f },
-                        // Signs — thin flat panels
-                        { "game:sign-*", 0.0f },
-                        // Knapping/clayforming surfaces — flat interactive craft surfaces
-                        { "game:knappingsurface*", 0.0f },
-                        { "game:clayforming*", 0.0f },
-                        // Loose ground items — tiny pebbles/nuggets scattered on terrain
-                        { "game:loosestones-*", 0.0f },
-                        { "game:looseflints-*", 0.0f },
-                        { "game:looseores-*", 0.0f },
+
                         // Anvils — override for testing, unsure if to keep?
                         { "game:anvil-*", 0.0f },
                         // Ingot piles, plate piles — flat ground stacks
@@ -344,19 +321,14 @@ namespace soundphysicsadapted
                         { "game:supportbeam-*", 0.0f },
                         // Stationary baskets
                         { "game:stationarybasket-*", 0.0f },
-                        // Ground storage (flat piles)
-                        { "game:groundstorage*", 0.0f },
-                        // Placed grass
-                        { "game:placeddrygrass-*", 0.0f },
-                        { "game:drygrass-*", 0.0f },
+
                         // Wildgrass mod — mod sets SideSolid on grass blocks,
                         // causing them to take the solid fast path with occ=1.0.
                         // Override to near-zero so they behave like normal foliage.
                         { "wildgrass:*", 0.02f },
                         // Stone paths — flat ground surface like wooden paths
                         { "game:stonepath*", 0.0f },
-                        // Mechanical power — multiblock placeholder blocks
-                        { "game:mpmultiblockwood*", 0.0f },
+
                         // Structural plant blocks — thatch/sod roofing and hay bales
                         // VS classifies these as BlockMaterial.Plant (0.02) but they're
                         // dense packed building materials that should block sound/rain.
