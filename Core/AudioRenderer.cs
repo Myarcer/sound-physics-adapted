@@ -32,6 +32,7 @@ namespace soundphysicsadapted
             public Vec3d TargetRepositionedPos;   // null = no active repositioning target
             public Vec3d CurrentRepositionedPos;   // null = not yet smoothing; the interpolated value
             public Vec3d OriginalSoundPos;         // actual source pos, for reset lerp
+            public Vec3d SmoothedTargetPos;         // EMA-smoothed target to damp oscillation
 
             // Resonator fix: MusicGlitchunaffected sounds that are actually positional world sounds
             // When true, RecalculateAllUnderwater treats as non-music (applies underwater filter)
@@ -71,6 +72,10 @@ namespace soundphysicsadapted
         private const float POS_SNAP_THRESHOLD = 15.0f;
         // Position converge epsilon: stop updating when within this distance (meters)
         private const float POS_CONVERGE_EPSILON = 0.02f;
+        // Target EMA factor: smooths the TARGET position itself to damp oscillation
+        // when two diffraction paths alternate dominance each raycast tick.
+        // 0.15 per raycast interval → ~5 ticks to converge, damps 7m flips to ~1m drift.
+        private const float TARGET_EMA_FACTOR = 0.15f;
 
         // Track filters by sound instance
         private static ConcurrentDictionary<ILoadedSound, FilterEntry> activeFilters
@@ -380,6 +385,7 @@ namespace soundphysicsadapted
                         oldEntry.CurrentRepositionedPos = null;
                         oldEntry.TargetRepositionedPos = null;
                         oldEntry.OriginalSoundPos = null;
+                        oldEntry.SmoothedTargetPos = null;
                     }
                 }
 
@@ -805,8 +811,25 @@ namespace soundphysicsadapted
             {
                 // SPR-STYLE SMOOTHING: Set the TARGET position, SmoothAll() will interpolate.
                 Vec3d newPos = pathResult.ApparentPosition;
-                entry.TargetRepositionedPos = newPos;
                 entry.OriginalSoundPos = originalPos;
+
+                // TARGET EMA: Smooth the target itself to damp dual-path oscillation.
+                // When two diffraction paths alternate dominance (e.g. around opposite
+                // sides of a wall), the raw target teleports ~7m each tick. EMA prevents
+                // this from reaching SmoothAll(), keeping the audible position stable.
+                if (entry.SmoothedTargetPos != null)
+                {
+                    entry.SmoothedTargetPos = new Vec3d(
+                        entry.SmoothedTargetPos.X + (newPos.X - entry.SmoothedTargetPos.X) * TARGET_EMA_FACTOR,
+                        entry.SmoothedTargetPos.Y + (newPos.Y - entry.SmoothedTargetPos.Y) * TARGET_EMA_FACTOR,
+                        entry.SmoothedTargetPos.Z + (newPos.Z - entry.SmoothedTargetPos.Z) * TARGET_EMA_FACTOR
+                    );
+                }
+                else
+                {
+                    entry.SmoothedTargetPos = newPos.Clone();
+                }
+                entry.TargetRepositionedPos = entry.SmoothedTargetPos;
 
                 // CRITICAL: On first repositioning, seed current at ORIGINAL position (not target).
                 // SmoothAll() then lerps from original → target over ~250ms.
@@ -861,6 +884,7 @@ namespace soundphysicsadapted
             if (entry.CurrentRepositionedPos != null)
             {
                 entry.TargetRepositionedPos = originalPos.Clone();
+                entry.SmoothedTargetPos = null; // Clear EMA so next reposition starts fresh
                 entry.OriginalSoundPos = originalPos;
 
                 return true;
@@ -1161,6 +1185,7 @@ namespace soundphysicsadapted
                         entry.CurrentRepositionedPos = null;
                         entry.TargetRepositionedPos = null;
                         entry.OriginalSoundPos = null;
+                        entry.SmoothedTargetPos = null;
                     }
                 }
 
@@ -1183,6 +1208,7 @@ namespace soundphysicsadapted
                                 entry.TargetRepositionedPos = null;
                                 entry.CurrentRepositionedPos = null;
                                 entry.OriginalSoundPos = null;
+                                entry.SmoothedTargetPos = null;
                                 // Apply original pos one last time
                                 SetALSourcePosition(entry.SourceId, entry.TargetRepositionedPos ?? entry.OriginalSoundPos);
                                 continue;
