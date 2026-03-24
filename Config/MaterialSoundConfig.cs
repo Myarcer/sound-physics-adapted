@@ -301,34 +301,10 @@ namespace soundphysicsadapted
                         { "wildcraftfruit:bottomtreebush-*", 0.06f },
                         { "wildcraftfruit:groundberryplant-*", 0.02f },
 
-                        // Path blocks - flat ground surface, solid bottom face but shouldn't occlude
-                        { "game:woodenpath-*", 0.0f },
-                        // Baskets and traps - small open containers on the ground
-                        { "game:basket*", 0.0f },
-                        // Shelves - open furniture (not bookshelves which are denser)
-                        { "game:shelf-*", 0.0f },
-                        // Firepits
-                        { "game:firepit-*", 0.0f },
-                        // Tool racks
-                        { "game:toolrack-*", 0.0f },
-
-                        // Anvils — override for testing, unsure if to keep?
-                        { "game:anvil-*", 0.0f },
-                        // Ingot piles, plate piles — flat ground stacks
-                        { "game:ingotpile-*", 0.0f },
-                        { "game:platepile-*", 0.0f },
-                        // Support beams — narrow wooden frames
-                        { "game:supportbeam-*", 0.0f },
-                        // Stationary baskets
-                        { "game:stationarybasket-*", 0.0f },
-
                         // Wildgrass mod — mod sets SideSolid on grass blocks,
                         // causing them to take the solid fast path with occ=1.0.
                         // Override to near-zero so they behave like normal foliage.
                         { "wildgrass:*", 0.02f },
-                        // Stone paths — flat ground surface like wooden paths
-                        { "game:stonepath*", 0.0f },
-
                         // Structural plant blocks — thatch/sod roofing and hay bales
                         // VS classifies these as BlockMaterial.Plant (0.02) but they're
                         // dense packed building materials that should block sound/rain.
