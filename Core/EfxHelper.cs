@@ -373,6 +373,7 @@ namespace soundphysicsadapted
         private static object _auxSendFilterValue;  // ALSource3i.AuxiliarySendFilter enum value
         private static object _effectSlotEffectValue;  // EffectSlotInteger.Effect enum value (0x0001)
         private static bool _reverbInitialized = false;
+        private static int _auxSendErrorCount = 0;
 
         // ============================================================
         // PHASE 4B STAGE 2: AL Source Management (for permeated sources)
@@ -778,16 +779,75 @@ namespace soundphysicsadapted
         {
             if (!InitializeReverbReflection()) return 0;
 
+            // Probe actual max sends by trying a test connection on a temp source.
+            // OpenAL Soft on Linux typically supports 2, Windows 4.
             try
             {
-                // ALC_MAX_AUXILIARY_SENDS = 0x20003
-                // Need to get current device first
-                // For simplicity, return a reasonable default
-                // VS typically supports 4 aux sends
-                return 4;
+                // Create a temporary source to probe with
+                var alType = _source3iMethod?.DeclaringType;
+                if (alType == null || _source3iMethod == null)
+                {
+                    SoundPhysicsAdaptedModSystem.Log("[EfxHelper] Cannot probe aux sends (no AL.Source3i) - assuming 2");
+                    return 2;
+                }
+
+                var genSourceMethod = alType.GetMethod("GenSource",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                    null, Type.EmptyTypes, null);
+                if (genSourceMethod == null)
+                {
+                    SoundPhysicsAdaptedModSystem.Log("[EfxHelper] Cannot probe aux sends (no AL.GenSource) - assuming 2");
+                    return 2;
+                }
+
+                int testSource = (int)genSourceMethod.Invoke(null, null);
+                if (testSource <= 0)
+                {
+                    SoundPhysicsAdaptedModSystem.Log("[EfxHelper] Cannot probe aux sends (GenSource failed) - assuming 2");
+                    return 2;
+                }
+
+                object paramValue = _auxSendFilterValue ?? (object)0x20006;
+                int maxSends = 0;
+
+                for (int send = 0; send < 4; send++)
+                {
+                    GetALError(); // clear
+                    // Try connecting send index to null slot (0) with no filter (0)
+                    _source3iMethod.Invoke(null, new object[] { testSource, paramValue, 0, send, 0 });
+                    int err = GetALError();
+                    if (err == 0)
+                        maxSends = send + 1;
+                    else
+                        break; // sends are contiguous, first failure = limit
+                }
+
+                // Delete temp source
+                var deleteSourceMethod = alType.GetMethod("DeleteSource",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                    null, new Type[] { typeof(int) }, null);
+                if (deleteSourceMethod != null)
+                    deleteSourceMethod.Invoke(null, new object[] { testSource });
+                else
+                {
+                    // Try ref int signature
+                    var deleteRefMethod = alType.GetMethod("DeleteSource",
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    if (deleteRefMethod != null)
+                    {
+                        var parms = deleteRefMethod.GetParameters();
+                        if (parms.Length == 1 && parms[0].ParameterType.IsByRef)
+                            deleteRefMethod.Invoke(null, new object[] { testSource });
+                    }
+                }
+
+                if (maxSends < 1) maxSends = 1; // at least 1 if EFX init succeeded
+                SoundPhysicsAdaptedModSystem.Log($"[EfxHelper] Probed max auxiliary sends: {maxSends}");
+                return maxSends;
             }
-            catch
+            catch (Exception ex)
             {
+                SoundPhysicsAdaptedModSystem.Log($"[EfxHelper] Aux send probe failed ({ex.Message}) - assuming 2");
                 return 2; // Safe fallback
             }
         }
@@ -1142,7 +1202,13 @@ namespace soundphysicsadapted
                 int err = GetALError();
                 if (err != 0)
                 {
-                    SoundPhysicsAdaptedModSystem.Log($"[EfxHelper] ConnectSourceToAuxSlot OpenAL ERROR {err}: src={source}, slot={slot}, send={sendIndex}, filter={filter}");
+                    // Rate-limit error logging to avoid log spam (e.g. 4000+ lines on Linux with 2 sends)
+                    _auxSendErrorCount++;
+                    if (_auxSendErrorCount <= 5 || (_auxSendErrorCount % 500 == 0))
+                    {
+                        SoundPhysicsAdaptedModSystem.Log($"[EfxHelper] ConnectSourceToAuxSlot OpenAL ERROR {err}: src={source}, slot={slot}, send={sendIndex}, filter={filter}" +
+                            (_auxSendErrorCount > 5 ? $" (repeated {_auxSendErrorCount} times total)" : ""));
+                    }
                 }
                 // Success - no log needed (fires every reverb connection)
             }
