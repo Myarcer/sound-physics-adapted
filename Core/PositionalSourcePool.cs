@@ -45,8 +45,6 @@ namespace soundphysicsadapted
             public float TargetVolume;       // What we're fading toward
             public float CurrentVolume;      // What's currently set (for smooth fading)
             public Vec3f LastAppliedPos;     // Last position sent to OpenAL (dead zone filter)
-            public Vec3f TargetPos;          // Target position set by UpdateSources (100ms tick)
-            public Vec3f SmoothedPos;        // Interpolated position applied by SmoothTick (25ms tick)
         }
 
         private readonly ICoreClientAPI capi;
@@ -100,24 +98,6 @@ namespace soundphysicsadapted
         /// 0.25 = 0.5 blocks minimum movement.
         /// </summary>
         private const float POSITION_UPDATE_MIN_DIST_SQ = 0.25f;
-
-        /// <summary>
-        /// Position interpolation factor per SmoothTick (25ms).
-        /// 0.25 per 25ms tick = ~90% convergence in ~200ms (smooth panning).
-        /// </summary>
-        private const float POS_SMOOTH_FACTOR = 0.25f;
-
-        /// <summary>
-        /// Volume interpolation factor per SmoothTick (25ms) for fade-in.
-        /// Runs 4x faster than weather tick, so use 1/4 of FadeInRate equivalent.
-        /// 0.04 per 25ms = ~0.16 per 100ms, similar to original 0.12 but smoother.
-        /// </summary>
-        private const float SMOOTH_VOLUME_IN = 0.04f;
-
-        /// <summary>
-        /// Volume interpolation factor per SmoothTick (25ms) for fade-out.
-        /// </summary>
-        private const float SMOOTH_VOLUME_OUT = 0.035f;
 
         /// <summary>
         /// Direct DDA occlusion above this = sound is inaudible.
@@ -243,13 +223,16 @@ namespace soundphysicsadapted
                         float baseVol = CalculateVolume(opening, intensity, volumeMultiplier);
                         slot.TargetVolume = baseVol * ProximityFadeFactor(opening, earPos);
 
-                        // Set target position for SmoothTick interpolation.
-                        // Don't apply directly — SmoothTick at 25ms handles smooth panning.
-                        slot.TargetPos = new Vec3f((float)pos.X, (float)pos.Y, (float)pos.Z);
-                        if (slot.SmoothedPos == null)
+                        if (slot.Sound != null && slot.Sound.IsPlaying)
                         {
-                            // First assignment: snap to target immediately
-                            slot.SmoothedPos = new Vec3f(slot.TargetPos.X, slot.TargetPos.Y, slot.TargetPos.Z);
+                            // Dead zone: only update OpenAL position if moved significantly.
+                            // Prevents panning jitter from sub-block centroid micro-shifts.
+                            var newPos3f = new Vec3f((float)pos.X, (float)pos.Y, (float)pos.Z);
+                            if (slot.LastAppliedPos == null || PositionDistSq(newPos3f, slot.LastAppliedPos) > POSITION_UPDATE_MIN_DIST_SQ)
+                            {
+                                slot.Sound.SetPosition(newPos3f);
+                                slot.LastAppliedPos = newPos3f;
+                            }
                         }
 
                         openingAssigned[o] = true;
@@ -309,11 +292,6 @@ namespace soundphysicsadapted
                 float baseVol2 = CalculateVolume(newOpening, intensity, volumeMultiplier);
                 targetSlot.TargetVolume = baseVol2 * ProximityFadeFactor(newOpening, earPos);
 
-                // Snap position immediately for new assignments (no lerp from stale positions)
-                var initPos = new Vec3f((float)newPos.X, (float)newPos.Y, (float)newPos.Z);
-                targetSlot.TargetPos = initPos;
-                targetSlot.SmoothedPos = new Vec3f(initPos.X, initPos.Y, initPos.Z);
-
                 EnsureSourcePlaying(targetSlot);
 
                 if (debug)
@@ -325,12 +303,30 @@ namespace soundphysicsadapted
                 }
             }
 
-            // Pass 3: Volume/position smoothing is now handled by SmoothTick() at 25ms.
-            // Only check for fully-faded sources that need stopping.
+            // Pass 3: Apply volume smoothing to all active slots
             for (int s = 0; s < maxSlots; s++)
             {
                 var slot = sources[s];
                 if (!slot.Active) continue;
+
+                float diff = slot.TargetVolume - slot.CurrentVolume;
+                if (MathF.Abs(diff) < MinVolume)
+                {
+                    slot.CurrentVolume = slot.TargetVolume;
+                }
+                else if (diff > 0)
+                {
+                    slot.CurrentVolume += diff * FadeInRate;
+                }
+                else
+                {
+                    slot.CurrentVolume += diff * FadeOutRate;
+                }
+
+                if (slot.Sound != null && slot.Sound.IsPlaying)
+                {
+                    slot.Sound.SetVolume(Math.Max(0f, slot.CurrentVolume));
+                }
 
                 if (slot.TargetVolume <= 0f && slot.CurrentVolume <= MinVolume)
                 {
@@ -345,64 +341,6 @@ namespace soundphysicsadapted
             }
 
             UpdateContribution();
-        }
-
-        /// <summary>
-        /// Fast-tick interpolation for volume and position (called at 25ms / 40Hz).
-        /// UpdateSources() at 100ms sets TargetVolume and TargetPos.
-        /// SmoothTick() interpolates CurrentVolume and SmoothedPos toward those
-        /// targets at 4x the rate, producing smooth panning and fade transitions
-        /// instead of discrete 100ms steps.
-        /// </summary>
-        public void SmoothTick()
-        {
-            if (!initialized || sources == null || mode != PoolMode.Looping) return;
-
-            for (int s = 0; s < sources.Length; s++)
-            {
-                var slot = sources[s];
-                if (!slot.Active || slot.Sound == null || !slot.Sound.IsPlaying) continue;
-
-                // ── Volume interpolation ──
-                float vDiff = slot.TargetVolume - slot.CurrentVolume;
-                if (MathF.Abs(vDiff) < MinVolume)
-                {
-                    slot.CurrentVolume = slot.TargetVolume;
-                }
-                else if (vDiff > 0)
-                {
-                    slot.CurrentVolume += vDiff * SMOOTH_VOLUME_IN;
-                }
-                else
-                {
-                    slot.CurrentVolume += vDiff * SMOOTH_VOLUME_OUT;
-                }
-                slot.Sound.SetVolume(Math.Max(0f, slot.CurrentVolume));
-
-                // ── Position interpolation ──
-                if (slot.TargetPos != null && slot.SmoothedPos != null)
-                {
-                    float dx = slot.TargetPos.X - slot.SmoothedPos.X;
-                    float dy = slot.TargetPos.Y - slot.SmoothedPos.Y;
-                    float dz = slot.TargetPos.Z - slot.SmoothedPos.Z;
-                    float distSq = dx * dx + dy * dy + dz * dz;
-
-                    if (distSq > 0.0001f) // > ~1cm movement
-                    {
-                        slot.SmoothedPos = new Vec3f(
-                            slot.SmoothedPos.X + dx * POS_SMOOTH_FACTOR,
-                            slot.SmoothedPos.Y + dy * POS_SMOOTH_FACTOR,
-                            slot.SmoothedPos.Z + dz * POS_SMOOTH_FACTOR);
-
-                        // Dead zone: only push to OpenAL if moved enough to matter for panning
-                        if (slot.LastAppliedPos == null || PositionDistSq(slot.SmoothedPos, slot.LastAppliedPos) > POSITION_UPDATE_MIN_DIST_SQ)
-                        {
-                            slot.Sound.SetPosition(slot.SmoothedPos);
-                            slot.LastAppliedPos = new Vec3f(slot.SmoothedPos.X, slot.SmoothedPos.Y, slot.SmoothedPos.Z);
-                        }
-                    }
-                }
-            }
         }
 
         // ════════════════════════════════════════════════════════════════
@@ -732,8 +670,6 @@ namespace soundphysicsadapted
             slot.CurrentVolume = 0f;
             slot.TargetVolume = 0f;
             slot.LastAppliedPos = null;
-            slot.TargetPos = null;
-            slot.SmoothedPos = null;
         }
 
         /// <summary>Set all active sources to fade out gracefully.</summary>
