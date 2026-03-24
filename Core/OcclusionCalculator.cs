@@ -564,27 +564,18 @@ namespace soundphysicsadapted
                         return false;
                     }
 
-                    // SIMPLIFIED PARTIAL BLOCK PATH for weather:
-                    // Skip AABB ray intersection and volume scaling entirely.
-                    // Rain doesn't pass through fences/glass — apply material occlusion
-                    // directly if the block has any collision geometry.
+                    // PARTIAL BLOCK PATH for weather:
+                    // Uses ray-AABB intersection + volume scaling (same as RunOcclusion).
+                    // Blocks with tiny collision volumes (beams, chiseled pillars) get
+                    // proportionally reduced occlusion instead of full material value.
                     // Doors/trapdoors still get interactable treatment (separate accumulator).
-                    // Blocks with no collision (foliage, decorative) use material/override
-                    // occlusion which is typically 0.0 via block overrides.
                     collisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
                     var collisionBoxes = block.GetCollisionBoxes(blockAccessor, collisionCheckPos);
 
-                    if (collisionBoxes != null && collisionBoxes.Length > 0)
-                    {
-                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                        isInteractable = BlockClassification.IsWeatherInteractable(block);
-                    }
-                    else
+                    if (collisionBoxes == null || collisionBoxes.Length == 0)
                     {
                         // No collision geometry — foliage, decorative items (toolracks, paintings, flowers).
                         // Weather-transparent: rain doesn't enter rooms through these.
-                        // They still contribute sound occlusion via RunOcclusion's foliage path,
-                        // but for weather entry point tracking they're treated as air.
                         if (previousBlockWasOccluding)
                         {
                             entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
@@ -592,6 +583,23 @@ namespace soundphysicsadapted
                         }
                         previousBlockWasOccluding = false;
                         return false;
+                    }
+                    else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
+                    {
+                        // Ray misses collision geometry — treat as air for weather
+                        if (previousBlockWasOccluding)
+                        {
+                            entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                            hasEntryPoint = true;
+                        }
+                        previousBlockWasOccluding = false;
+                        return false;
+                    }
+                    else
+                    {
+                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                        blockOcclusion *= GetPartialBlockVolumeScale(block, blockAccessor, ctx.X, ctx.Y, ctx.Z, collisionBoxes);
+                        isInteractable = BlockClassification.IsWeatherInteractable(block);
                     }
                 }
 
