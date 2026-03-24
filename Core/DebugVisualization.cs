@@ -81,9 +81,10 @@ namespace soundphysicsadapted
         private const long REBUILD_INTERVAL_MS = 250; // 4 Hz mesh rebuild
 
         // Pre-allocated mesh arrays (worst case: all modes on)
-        // bounces: 64*24=1536v, rays: 256*2=512v, occlusion: 64*2=128v, reposition: 50v, openings: 24*24=576v, reverb: reuses bounces
-        private const int MAX_VERTICES = 4096;
-        private const int MAX_INDICES = 8192;
+        // bounces: 256*8=2048v, rays: 256*2=512v, occlusion: 256*2=512v,
+        // reposition: 18v, openings: 24*8=192v, reverb: 256*8=2048v = ~5330 worst case
+        private const int MAX_VERTICES = 8192;
+        private const int MAX_INDICES = 24576;
 
         // Mesh building state
         private int vertexOffset;
@@ -312,11 +313,8 @@ namespace soundphysicsadapted
 
         private void AddVertex(MeshData mesh, float x, float y, float z, int color)
         {
-            if (mesh.VerticesCount >= mesh.XyzCount / 3)
-            {
-                mesh.GrowVertexBuffer();
-                mesh.GrowNormalsBuffer();
-            }
+            if (mesh.VerticesCount >= MAX_VERTICES)
+                return; // Skip — buffer full, don't attempt dynamic growth (VS GrowVertexBuffer crashes on Rgba mismatch)
 
             int vi = mesh.VerticesCount;
             mesh.xyz[vi * 3] = x;
@@ -332,10 +330,8 @@ namespace soundphysicsadapted
 
         private void AddLineIndices(MeshData mesh, int v1, int v2)
         {
-            if (mesh.IndicesCount + 2 > mesh.Indices.Length)
-            {
-                mesh.GrowIndexBuffer();
-            }
+            if (mesh.IndicesCount + 2 > MAX_INDICES)
+                return; // Skip — index buffer full
 
             mesh.Indices[mesh.IndicesCount] = v1;
             mesh.Indices[mesh.IndicesCount + 1] = v2;

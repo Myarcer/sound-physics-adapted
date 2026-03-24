@@ -778,6 +778,7 @@ namespace soundphysicsadapted
         private void RegisterCommands(ICoreClientAPI api)
         {
             api.ChatCommands.Create("soundphysics")
+                .WithRootAlias("sp")
                 .WithDescription("Sound Physics Adapted commands")
                 .BeginSubCommand("debug")
                     .WithDescription("Toggle master debug mode (gates all sub-debug flags)")
@@ -1017,18 +1018,6 @@ namespace soundphysicsadapted
                         api.StoreModConfig(config, "soundphysicsadapted.json");
                         string gate = config.DebugMode ? "" : " (DebugMode is OFF — enable with /soundphysics debug)";
                         return TextCommandResult.Success($"[SoundPhysicsAdapted] Weather debug: {(config.DebugWeather ? "ON" : "OFF")}{gate}");
-                    })
-                .EndSubCommand()
-                .BeginSubCommand("weather-viz")
-                    .WithDescription("Toggle weather DDA visualization (block highlights showing detection pipeline)")
-                    .HandleWith((args) =>
-                    {
-                        config.DebugWeatherVisualization = !config.DebugWeatherVisualization;
-                        api.StoreModConfig(config, "soundphysicsadapted.json");
-                        string legend = config.DebugWeatherVisualization
-                            ? "\nSky: Blue=covered Yellow=exposed | Paths: White=confirmed DimOrange=over-budget Red=blocked Orange=partial Cyan=neighbor | Audio: Magenta=source"
-                            : "";
-                        return TextCommandResult.Success($"[SoundPhysicsAdapted] Weather visualization: {(config.DebugWeatherVisualization ? "ON" : "OFF")}{legend}");
                     })
                 .EndSubCommand()
                 .BeginSubCommand("viz")
