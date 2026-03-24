@@ -344,21 +344,20 @@ namespace soundphysicsadapted
                     // When player walks back into cave, DDA can't reach overhead
                     // columns anymore → members drop to 1. Without peak hold,
                     // volume would crash instantly. Peak decays slowly instead.
-                    // Asymmetric smoothing: fast attack, slow linear decay.
-                    // Snap up immediately when more members found.
-                    // Decay slowly (1.5 members/sec) to prevent abrupt volume drops
-                    // when DDA finds fewer columns (player moving away from overhead openings).
+                    // Asymmetric EMA smoothing: fast attack, slow decay.
+                    // Both directions use exponential smoothing to absorb member
+                    // flicker from DDA verification noise (small objects, angle changes).
+                    // Snap-up would cause sawtooth volume when members oscillate 4→3→4→3.
                     if (cluster.MemberCount >= tracked.SmoothedClusterWeight)
                     {
-                        // Fast attack: snap to new higher value
-                        tracked.SmoothedClusterWeight = cluster.MemberCount;
+                        // Fast attack: 50% per tick → 90% convergence in ~200ms
+                        tracked.SmoothedClusterWeight += (cluster.MemberCount - tracked.SmoothedClusterWeight) * 0.5f;
                     }
                     else
                     {
-                        // Slow linear decay: 0.15/tick at ~10Hz = 1.5 members/sec
-                        tracked.SmoothedClusterWeight = Math.Max(
-                            tracked.SmoothedClusterWeight - 0.15f,
-                            (float)cluster.MemberCount);
+                        // Slow decay: 6% per tick at ~10Hz → ~4s to converge
+                        // Absorbs transient member drops from DDA angle changes / small objects
+                        tracked.SmoothedClusterWeight += (cluster.MemberCount - tracked.SmoothedClusterWeight) * 0.06f;
                     }
                     tracked.LastKnownOcclusion = cluster.AverageOcclusion;
                     tracked.LastVerifiedTimeMs = gameTimeMs;
