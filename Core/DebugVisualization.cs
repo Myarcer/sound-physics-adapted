@@ -27,6 +27,16 @@ namespace soundphysicsadapted
     }
 
     /// <summary>
+    /// Per-sound occlusion data for visualization.
+    /// Draws a line from the sound source to the player, colored by occlusion severity.
+    /// </summary>
+    public struct SoundOcclusionViz
+    {
+        public float PosX, PosY, PosZ;
+        public float Occlusion;
+    }
+
+    /// <summary>
     /// IRenderer-based debug visualization for acoustic raytracing data.
     /// Renders wireframe boxes and lines at sub-block precision using the VS wireframe shader.
     /// 
@@ -71,6 +81,8 @@ namespace soundphysicsadapted
         private int pendingOpeningCount;
         private RepositionPair[] pendingRepositions = new RepositionPair[32];
         private int pendingRepositionCount;
+        private SoundOcclusionViz[] pendingOccViz = new SoundOcclusionViz[64];
+        private int pendingOccVizCount;
         // Track whether ANY sound captured viz data this tick
         private bool capturedThisTick = false;
 
@@ -83,6 +95,8 @@ namespace soundphysicsadapted
         private int activeOpeningCount;
         private RepositionPair[] activeRepositions = new RepositionPair[32];
         private int activeRepositionCount;
+        private SoundOcclusionViz[] activeOccViz = new SoundOcclusionViz[64];
+        private int activeOccVizCount;
 
         private volatile bool meshDirty = false;
         private readonly object _swapLock = new object();
@@ -156,7 +170,7 @@ namespace soundphysicsadapted
         public void CaptureFromRaytracer(
             BouncePoint[] bouncePoints, int bounceCount,
             OpeningData[] openings, int openingCount,
-            SoundPathResult? pathResult, Vec3d soundPos)
+            SoundPathResult? pathResult, Vec3d soundPos, float occlusion)
         {
             lock (_swapLock)
             {
@@ -188,6 +202,17 @@ namespace soundphysicsadapted
                         AppZ = (float)pathResult.Value.ApparentPosition.Z
                     };
                     pendingRepositionCount++;
+                }
+
+                // Append per-sound occlusion viz
+                if (pendingOccVizCount < pendingOccViz.Length)
+                {
+                    pendingOccViz[pendingOccVizCount] = new SoundOcclusionViz
+                    {
+                        PosX = (float)soundPos.X, PosY = (float)soundPos.Y, PosZ = (float)soundPos.Z,
+                        Occlusion = occlusion
+                    };
+                    pendingOccVizCount++;
                 }
 
                 meshDirty = true;
@@ -381,6 +406,12 @@ namespace soundphysicsadapted
             pendingRepositions = tmpRepos;
             activeRepositionCount = pendingRepositionCount;
 
+            // Swap occlusion viz data
+            var tmpOcc = activeOccViz;
+            activeOccViz = pendingOccViz;
+            pendingOccViz = tmpOcc;
+            activeOccVizCount = pendingOccVizCount;
+
             debugSoundsThisSwap = debugCaptureCount;
 
             // Clear the new pending buffers (old active arrays) for next accumulation window
@@ -388,6 +419,7 @@ namespace soundphysicsadapted
             pendingRayCount = 0;
             pendingOpeningCount = 0;
             pendingRepositionCount = 0;
+            pendingOccVizCount = 0;
         }
 
         private void RebuildMesh()
@@ -578,36 +610,28 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Occlusion: lines from sound source to each of its bounce points.
-        /// Multi-sound: each bounce stores the source pos in its fields, so we
-        /// need to track which bounces belong to which sound.
-        /// For simplicity, draw from each bounce's source position, using the
-        /// nearest sound position as approximation. Since bounce points are accumulated
-        /// from multiple sounds, we draw from the origin point (0,0,0) of the ray
-        /// that created each bounce — but that info isn't in BouncePoint.
-        /// Instead, just draw to player camera as visual indicator of occlusion severity.
+        /// Occlusion: line from each sound source to the player, colored by
+        /// occlusion severity (green=clear, yellow=partial, red=heavy).
         /// </summary>
         private void AppendOcclusionLines(MeshData mesh, Vec3d cam)
         {
-            // With multi-sound, we no longer have a single activeSoundPos.
-            // Draw short ticks from each bounce outward along its normal,
-            // colored by occlusion severity. Still useful and doesn't require source pos.
-            for (int i = 0; i < activeBounceCount; i++)
-            {
-                ref BouncePoint bp = ref activeBounces[i];
-                int color;
-                if (bp.PathOcclusion < 0.3f)
-                    color = (180 << 24) | (0 << 16) | (255 << 8) | 0;    // Green
-                else if (bp.PathOcclusion < 1.0f)
-                    color = (180 << 24) | (0 << 16) | (128 << 8) | 255;  // Orange
-                else
-                    color = (180 << 24) | (0 << 16) | (0 << 8) | 255;    // Red
+            Vec3d playerPos = capi.World.Player.Entity.Pos.XYZ.Add(0, capi.World.Player.Entity.LocalEyePos.Y, 0);
 
-                // Draw 0.3-block tick along the surface normal from the bounce point
-                double endX = bp.PosX + bp.NormalX * 0.3;
-                double endY = bp.PosY + bp.NormalY * 0.3;
-                double endZ = bp.PosZ + bp.NormalZ * 0.3;
-                AppendLine(mesh, bp.PosX, bp.PosY, bp.PosZ, endX, endY, endZ, color, cam);
+            for (int i = 0; i < activeOccVizCount; i++)
+            {
+                ref SoundOcclusionViz ov = ref activeOccViz[i];
+                int color;
+                if (ov.Occlusion < 0.3f)
+                    color = (200 << 24) | (0 << 16) | (255 << 8) | 0;      // Green
+                else if (ov.Occlusion < 1.0f)
+                    color = (200 << 24) | (0 << 16) | (255 << 8) | 255;    // Yellow
+                else if (ov.Occlusion < 2.0f)
+                    color = (200 << 24) | (0 << 16) | (128 << 8) | 255;    // Orange
+                else
+                    color = (200 << 24) | (0 << 16) | (0 << 8) | 255;     // Red
+
+                AppendLine(mesh, ov.PosX, ov.PosY, ov.PosZ,
+                    playerPos.X, playerPos.Y, playerPos.Z, color, cam);
             }
         }
 
