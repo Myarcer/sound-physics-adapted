@@ -581,13 +581,17 @@ namespace soundphysicsadapted
                     }
                     else
                     {
-                        // No collision geometry — foliage, decorative items.
-                        // Scale by selection box volume so small items auto-reduce.
-                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                        if (blockOcclusion > 0)
+                        // No collision geometry — foliage, decorative items (toolracks, paintings, flowers).
+                        // Weather-transparent: rain doesn't enter rooms through these.
+                        // They still contribute sound occlusion via RunOcclusion's foliage path,
+                        // but for weather entry point tracking they're treated as air.
+                        if (previousBlockWasOccluding)
                         {
-                            blockOcclusion *= GetFoliageVolumeScale(block);
+                            entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                            hasEntryPoint = true;
                         }
+                        previousBlockWasOccluding = false;
+                        return false;
                     }
                 }
 

@@ -823,14 +823,22 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Check if a block is structurally solid (not air, plant, or leaves).
+        /// Check if a block is structurally solid (not air, plant, or leaves,
+        /// and has collision geometry). Blocks without collision boxes (wooden paths,
+        /// decorative items, toolracks) can't physically block rain columns.
         /// Used by structural integrity checks to determine if an opening column is blocked.
         /// </summary>
         private static bool IsBlockSolid(Block block)
         {
-            return block.BlockMaterial != EnumBlockMaterial.Air
-                && block.BlockMaterial != EnumBlockMaterial.Plant
-                && block.BlockMaterial != EnumBlockMaterial.Leaves;
+            if (block.BlockMaterial == EnumBlockMaterial.Air
+                || block.BlockMaterial == EnumBlockMaterial.Plant
+                || block.BlockMaterial == EnumBlockMaterial.Leaves)
+                return false;
+
+            // No collision geometry = walkthrough block (paths, decorative items).
+            // These don't physically block rain.
+            var collBoxes = block.CollisionBoxes;
+            return collBoxes != null && collBoxes.Length > 0;
         }
 
         /// <summary>
