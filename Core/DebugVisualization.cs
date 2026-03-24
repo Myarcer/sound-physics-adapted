@@ -17,12 +17,22 @@ namespace soundphysicsadapted
     }
 
     /// <summary>
+    /// Reposition pair: original sound position + apparent (redirected) position.
+    /// One per repositioned sound.
+    /// </summary>
+    public struct RepositionPair
+    {
+        public float SrcX, SrcY, SrcZ;
+        public float AppX, AppY, AppZ;
+    }
+
+    /// <summary>
     /// IRenderer-based debug visualization for acoustic raytracing data.
     /// Renders wireframe boxes and lines at sub-block precision using the VS wireframe shader.
     /// 
-    /// All active viz modes combine into one MeshData with per-vertex colors = one draw call.
-    /// Data is double-buffered: raytracer writes to pending buffers, renderer swaps to active.
-    /// Mesh rebuilds at 4 Hz to balance responsiveness vs GPU upload cost.
+    /// MULTI-SOUND: Accumulates data from ALL sounds that raytrace each tick.
+    /// Data is double-buffered: game tick thread appends to pending, renderer swaps to active.
+    /// Mesh rebuilds every render frame with current camera position.
     /// </summary>
     public class DebugVisualization : IRenderer, IDisposable
     {
@@ -52,29 +62,27 @@ namespace soundphysicsadapted
         private MeshRef currentMeshRef;
         private Matrixf mvMat = new Matrixf();
 
-        // === Pending data buffers (written by raytracer on game tick thread) ===
-        private BouncePoint[] pendingBounces = new BouncePoint[256];
+        // === Pending data buffers (accumulated across all sounds in one tick) ===
+        private BouncePoint[] pendingBounces = new BouncePoint[2048];
         private int pendingBounceCount;
-        private RaySegment[] pendingRays = new RaySegment[256];
+        private RaySegment[] pendingRays = new RaySegment[2048];
         private int pendingRayCount;
-        private OpeningData[] pendingOpenings = new OpeningData[24];
+        private OpeningData[] pendingOpenings = new OpeningData[96];
         private int pendingOpeningCount;
-        private double pendingSoundPosX, pendingSoundPosY, pendingSoundPosZ;
-        private double pendingApparentPosX, pendingApparentPosY, pendingApparentPosZ;
-        private bool pendingHasReposition;
-        // Track whether we've captured viz data this tick (first full-raytrace sound wins)
+        private RepositionPair[] pendingRepositions = new RepositionPair[32];
+        private int pendingRepositionCount;
+        // Track whether ANY sound captured viz data this tick
         private bool capturedThisTick = false;
 
         // === Active data (snapshot for rendering) ===
-        private BouncePoint[] activeBounces = new BouncePoint[256];
+        private BouncePoint[] activeBounces = new BouncePoint[2048];
         private int activeBounceCount;
-        private RaySegment[] activeRays = new RaySegment[256];
+        private RaySegment[] activeRays = new RaySegment[2048];
         private int activeRayCount;
-        private OpeningData[] activeOpenings = new OpeningData[24];
+        private OpeningData[] activeOpenings = new OpeningData[96];
         private int activeOpeningCount;
-        private double activeSoundPosX, activeSoundPosY, activeSoundPosZ;
-        private double activeApparentPosX, activeApparentPosY, activeApparentPosZ;
-        private bool activeHasReposition;
+        private RepositionPair[] activeRepositions = new RepositionPair[32];
+        private int activeRepositionCount;
 
         private volatile bool meshDirty = false;
         private readonly object _swapLock = new object();
@@ -89,13 +97,15 @@ namespace soundphysicsadapted
         private float debugLogTimer = 0f;
         private int debugFramesSinceCapture = 0;
         private int debugSwapCount = 0;
-        private int debugCaptureCount = 0;
+        private int debugCaptureCount = 0;  // number of CaptureFromRaytracer calls per log interval
+        private int debugSoundsThisSwap = 0; // how many sounds contributed in the last swap
 
-        // Pre-allocated mesh arrays (worst case: all modes on)
-        // bounces: 256*8=2048v, rays: 256*2=512v, occlusion: 256*2=512v,
-        // reposition: 18v, openings: 24*8=192v, reverb: 256*8=2048v = ~5330 worst case
-        private const int MAX_VERTICES = 8192;
-        private const int MAX_INDICES = 24576;
+        // Multi-sound: worst case with all viz on:
+        // 2048 bounces * 8 verts = 16K (capped), 2048 rays * 2 verts = 4K,
+        // 96 openings * 8 = 768, 32 repos * 18 = 576
+        // Cap at reasonable GPU upload
+        private const int MAX_VERTICES = 16384;
+        private const int MAX_INDICES = 49152;
 
         // Mesh building state
         private int vertexOffset;
@@ -114,24 +124,28 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Called by AudioPhysicsSystem at start of each update tick to reset capture tracking.
-        /// Clears pendingRayCount so CaptureRaySegment writes fresh data.
-        /// Does NOT clear pending bounces/openings (those are overwritten atomically in CaptureFromRaytracer).
+        /// Clears ALL pending counters so this tick accumulates fresh data from all sounds.
         /// </summary>
         public void ResetTickCapture()
         {
             capturedThisTick = false;
             pendingRayCount = 0;
+            pendingBounceCount = 0;
+            pendingOpeningCount = 0;
+            pendingRepositionCount = 0;
         }
 
         /// <summary>
-        /// Whether we've already captured viz data this tick.
-        /// Sounds are sorted closest-first, so the first full-raytrace sound is the nearest.
+        /// Whether any sound has captured viz data this tick.
+        /// Used by AcousticRaytracer to know whether to capture rays.
+        /// NOTE: Unlike before, this doesn't GATE capture — it just tracks whether any happened.
         /// </summary>
         public bool HasCapturedThisTick => capturedThisTick;
 
         /// <summary>
-        /// Capture bounce and opening data from the raytracer for the nearest sound.
-        /// Called from AudioPhysicsSystem after a full raytrace completes.
+        /// Capture bounce and opening data from the raytracer for ONE sound.
+        /// Called from AudioPhysicsSystem after each full raytrace.
+        /// APPENDS to pending buffers (multi-sound accumulation).
         /// </summary>
         public void CaptureFromRaytracer(
             BouncePoint[] bouncePoints, int bounceCount,
@@ -140,43 +154,39 @@ namespace soundphysicsadapted
         {
             lock (_swapLock)
             {
-                // Copy bounce data
-                int copyBounces = Math.Min(bounceCount, pendingBounces.Length);
-                Array.Copy(bouncePoints, pendingBounces, copyBounces);
-                pendingBounceCount = copyBounces;
-
-                // Copy opening data
-                int copyOpenings = Math.Min(openingCount, pendingOpenings.Length);
-                Array.Copy(openings, pendingOpenings, copyOpenings);
-                pendingOpeningCount = copyOpenings;
-
-                // Capture reposition data
-                pendingSoundPosX = soundPos.X;
-                pendingSoundPosY = soundPos.Y;
-                pendingSoundPosZ = soundPos.Z;
-
-                if (pathResult.HasValue && pathResult.Value.RepositionOffset > 0.01)
+                // Append bounce data
+                int copyBounces = Math.Min(bounceCount, pendingBounces.Length - pendingBounceCount);
+                if (copyBounces > 0)
                 {
-                    pendingApparentPosX = pathResult.Value.ApparentPosition.X;
-                    pendingApparentPosY = pathResult.Value.ApparentPosition.Y;
-                    pendingApparentPosZ = pathResult.Value.ApparentPosition.Z;
-                    pendingHasReposition = true;
+                    Array.Copy(bouncePoints, 0, pendingBounces, pendingBounceCount, copyBounces);
+                    pendingBounceCount += copyBounces;
                 }
-                else
+
+                // Append opening data
+                int copyOpenings = Math.Min(openingCount, pendingOpenings.Length - pendingOpeningCount);
+                if (copyOpenings > 0)
                 {
-                    pendingHasReposition = false;
+                    Array.Copy(openings, 0, pendingOpenings, pendingOpeningCount, copyOpenings);
+                    pendingOpeningCount += copyOpenings;
+                }
+
+                // Append reposition pair if this sound has one
+                if (pathResult.HasValue && pathResult.Value.RepositionOffset > 0.01
+                    && pendingRepositionCount < pendingRepositions.Length)
+                {
+                    pendingRepositions[pendingRepositionCount] = new RepositionPair
+                    {
+                        SrcX = (float)soundPos.X, SrcY = (float)soundPos.Y, SrcZ = (float)soundPos.Z,
+                        AppX = (float)pathResult.Value.ApparentPosition.X,
+                        AppY = (float)pathResult.Value.ApparentPosition.Y,
+                        AppZ = (float)pathResult.Value.ApparentPosition.Z
+                    };
+                    pendingRepositionCount++;
                 }
 
                 meshDirty = true;
                 capturedThisTick = true;
                 debugCaptureCount++;
-            }
-
-            var config = SoundPhysicsAdaptedModSystem.Config;
-            if (config != null && config.DebugMode)
-            {
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"[VIZ-CAPTURE] {pendingBounceCount} bounces, {pendingRayCount} rays, {pendingOpeningCount} openings, repos={pendingHasReposition}");
             }
         }
 
@@ -223,7 +233,7 @@ namespace soundphysicsadapted
             activeBounceCount = 0;
             activeRayCount = 0;
             activeOpeningCount = 0;
-            activeHasReposition = false;
+            activeRepositionCount = 0;
 
             currentMeshRef?.Dispose();
             currentMeshRef = null;
@@ -266,12 +276,13 @@ namespace soundphysicsadapted
                 if (debugLogTimer >= 1f)
                 {
                     SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[VIZ-RENDER] rays={activeRayCount} bounces={activeBounceCount} openings={activeOpeningCount} " +
+                        $"[VIZ-RENDER] rays={activeRayCount} bounces={activeBounceCount} openings={activeOpeningCount} repos={activeRepositionCount} " +
                         $"fade={currentFadeAlpha:F2} age={timeSinceCapture:F1}s framesStale={debugFramesSinceCapture} " +
-                        $"swaps={debugSwapCount} captures={debugCaptureCount}");
+                        $"swaps={debugSwapCount} captures={debugCaptureCount} sounds={debugSoundsThisSwap}");
                     debugLogTimer = 0f;
                     debugSwapCount = 0;
                     debugCaptureCount = 0;
+                    debugSoundsThisSwap = 0;
                 }
             }
 
@@ -337,14 +348,13 @@ namespace soundphysicsadapted
             pendingOpenings = tmpOpenings;
             activeOpeningCount = pendingOpeningCount;
 
-            // Copy reposition data
-            activeSoundPosX = pendingSoundPosX;
-            activeSoundPosY = pendingSoundPosY;
-            activeSoundPosZ = pendingSoundPosZ;
-            activeApparentPosX = pendingApparentPosX;
-            activeApparentPosY = pendingApparentPosY;
-            activeApparentPosZ = pendingApparentPosZ;
-            activeHasReposition = pendingHasReposition;
+            // Swap reposition data
+            var tmpRepos = activeRepositions;
+            activeRepositions = pendingRepositions;
+            pendingRepositions = tmpRepos;
+            activeRepositionCount = pendingRepositionCount;
+
+            debugSoundsThisSwap = debugCaptureCount;
         }
 
         private void RebuildMesh()
@@ -359,7 +369,7 @@ namespace soundphysicsadapted
             if (BounceColorMode > 0) AppendBounceBoxes(mesh, cam);
             if (ShowRays) AppendRayLines(mesh, cam);
             if (ShowOcclusion) AppendOcclusionLines(mesh, cam);
-            if (ShowReposition && activeHasReposition) AppendRepositionLine(mesh, cam);
+            if (ShowReposition && activeRepositionCount > 0) AppendRepositionLines(mesh, cam);
             if (ShowOpenings) AppendOpeningBoxes(mesh, cam);
 
             if (vertexOffset == 0)
@@ -535,15 +545,20 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Occlusion: lines from player eye to each bounce point, colored by occlusion severity.
-        /// Green=clear(&lt;0.3), Orange=partial(0.3-1.0), Red=heavy(&gt;1.0).
-        /// Uses the sound source position as the anchor, not the player/camera.
+        /// Occlusion: lines from sound source to each of its bounce points.
+        /// Multi-sound: each bounce stores the source pos in its fields, so we
+        /// need to track which bounces belong to which sound.
+        /// For simplicity, draw from each bounce's source position, using the
+        /// nearest sound position as approximation. Since bounce points are accumulated
+        /// from multiple sounds, we draw from the origin point (0,0,0) of the ray
+        /// that created each bounce — but that info isn't in BouncePoint.
+        /// Instead, just draw to player camera as visual indicator of occlusion severity.
         /// </summary>
         private void AppendOcclusionLines(MeshData mesh, Vec3d cam)
         {
-            // Draw lines from the sound source to each bounce point,
-            // colored by path occlusion. This shows which bounce paths
-            // are clear vs blocked between source and bounce surface.
+            // With multi-sound, we no longer have a single activeSoundPos.
+            // Draw short ticks from each bounce outward along its normal,
+            // colored by occlusion severity. Still useful and doesn't require source pos.
             for (int i = 0; i < activeBounceCount; i++)
             {
                 ref BouncePoint bp = ref activeBounces[i];
@@ -555,27 +570,32 @@ namespace soundphysicsadapted
                 else
                     color = (180 << 24) | (0 << 16) | (0 << 8) | 255;    // Red
 
-                AppendLine(mesh, activeSoundPosX, activeSoundPosY, activeSoundPosZ,
-                    bp.PosX, bp.PosY, bp.PosZ, color, cam);
+                // Draw 0.3-block tick along the surface normal from the bounce point
+                double endX = bp.PosX + bp.NormalX * 0.3;
+                double endY = bp.PosY + bp.NormalY * 0.3;
+                double endZ = bp.PosZ + bp.NormalZ * 0.3;
+                AppendLine(mesh, bp.PosX, bp.PosY, bp.PosZ, endX, endY, endZ, color, cam);
             }
         }
 
         /// <summary>
-        /// Reposition: green box at original sound pos, orange box at apparent pos,
-        /// yellow line connecting them.
+        /// Reposition: for each repositioned sound, green box at original sound pos,
+        /// orange box at apparent pos, yellow line connecting them.
         /// </summary>
-        private void AppendRepositionLine(MeshData mesh, Vec3d cam)
+        private void AppendRepositionLines(MeshData mesh, Vec3d cam)
         {
             int greenColor = (200 << 24) | (0 << 16) | (255 << 8) | 0;     // Green
             int orangeColor = (200 << 24) | (0 << 16) | (165 << 8) | 255;  // Orange
             int yellowColor = (200 << 24) | (0 << 16) | (255 << 8) | 255;  // Yellow
 
-            AppendWireframeBox(mesh, activeSoundPosX, activeSoundPosY, activeSoundPosZ,
-                0.08f, greenColor, cam);
-            AppendWireframeBox(mesh, activeApparentPosX, activeApparentPosY, activeApparentPosZ,
-                0.08f, orangeColor, cam);
-            AppendLine(mesh, activeSoundPosX, activeSoundPosY, activeSoundPosZ,
-                activeApparentPosX, activeApparentPosY, activeApparentPosZ, yellowColor, cam);
+            for (int i = 0; i < activeRepositionCount; i++)
+            {
+                ref RepositionPair rp = ref activeRepositions[i];
+                AppendWireframeBox(mesh, rp.SrcX, rp.SrcY, rp.SrcZ, 0.08f, greenColor, cam);
+                AppendWireframeBox(mesh, rp.AppX, rp.AppY, rp.AppZ, 0.08f, orangeColor, cam);
+                AppendLine(mesh, rp.SrcX, rp.SrcY, rp.SrcZ,
+                    rp.AppX, rp.AppY, rp.AppZ, yellowColor, cam);
+            }
         }
 
         /// <summary>

@@ -628,9 +628,9 @@ namespace soundphysicsadapted
                 // When sound A finishes and sound B takes its sourceId, stale entries
                 // could apply sound A's reverb to sound B.
 
-                // === VIZ CAPTURE: first sound with a full raytrace this tick (nearest, since sorted by distance) ===
+                // === VIZ CAPTURE: accumulate all raytraced sounds this tick ===
                 var viz = DebugVisualization.Instance;
-                if (viz != null && viz.AnyAcousticVizActive && !viz.HasCapturedThisTick && didFullRaytrace)
+                if (viz != null && viz.AnyAcousticVizActive && didFullRaytrace)
                 {
                     viz.CaptureFromRaytracer(
                         AcousticRaytracer.CacheableBouncePoints, AcousticRaytracer.CacheableBounceCount,

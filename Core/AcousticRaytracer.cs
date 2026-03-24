@@ -194,9 +194,9 @@ namespace soundphysicsadapted
                 Vec3d lastRayDir = rayDir;
                 BlockPos lastHitBlock = hit.Value.blockPos;
 
-                // Viz: capture first ray segment (source → first hit)
+                // Viz: capture ray segment (source → first hit) for all raytraced sounds
                 var vizInst = DebugVisualization.Instance;
-                bool vizCaptureRays = vizInst != null && vizInst.ShowRays && !vizInst.HasCapturedThisTick;
+                bool vizCaptureRays = vizInst != null && vizInst.ShowRays;
                 if (vizCaptureRays)
                 {
                     vizInst.CaptureRaySegment(
