@@ -565,17 +565,35 @@ namespace soundphysicsadapted
                     }
 
                     // SIMPLIFIED PARTIAL BLOCK PATH for weather:
-                    // Skip AABB ray intersection and volume scaling entirely.
-                    // Rain doesn't pass through fences/glass — apply material occlusion
-                    // directly if the block has any collision geometry.
+                    // Apply material occlusion for blocks with substantial collision geometry.
+                    // Tiny-volume blocks (beams, chiseled pillars, rails) are weather-transparent
+                    // — rain passes right through them, same as foliage/decorative items.
                     // Doors/trapdoors still get interactable treatment (separate accumulator).
-                    // Blocks with no collision (foliage, decorative) use material/override
-                    // occlusion which is typically 0.0 via block overrides.
                     collisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
                     var collisionBoxes = block.GetCollisionBoxes(blockAccessor, collisionCheckPos);
 
                     if (collisionBoxes != null && collisionBoxes.Length > 0)
                     {
+                        // Check total collision volume — skip tiny blocks (beams, rails, etc.)
+                        float totalVol = 0f;
+                        for (int cb = 0; cb < collisionBoxes.Length; cb++)
+                        {
+                            var box = collisionBoxes[cb];
+                            totalVol += (box.X2 - box.X1) * (box.Y2 - box.Y1) * (box.Z2 - box.Z1);
+                        }
+
+                        if (totalVol < 0.15f)
+                        {
+                            // Tiny collision volume — weather-transparent (beams, pillars, rails)
+                            if (previousBlockWasOccluding)
+                            {
+                                entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                                hasEntryPoint = true;
+                            }
+                            previousBlockWasOccluding = false;
+                            return false;
+                        }
+
                         blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
                         isInteractable = BlockClassification.IsWeatherInteractable(block);
                     }
@@ -583,8 +601,6 @@ namespace soundphysicsadapted
                     {
                         // No collision geometry — foliage, decorative items (toolracks, paintings, flowers).
                         // Weather-transparent: rain doesn't enter rooms through these.
-                        // They still contribute sound occlusion via RunOcclusion's foliage path,
-                        // but for weather entry point tracking they're treated as air.
                         if (previousBlockWasOccluding)
                         {
                             entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
