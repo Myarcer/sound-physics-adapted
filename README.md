@@ -7,19 +7,19 @@ Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the 
 
 ---
 
-## Features?
+## Features
 
-**Occlusion** — Sounds behind walls get muffled. Different materials block different amounts: stone walls muffle heavily, wooden doors let more through. Open and close a door and hear the difference immediately.
+**Occlusion** — Sounds behind walls get muffled. Different materials block different amounts: stone walls muffle heavily, wooden doors let more through. Open and close a door and hear the difference immediately. Chiseled blocks occlude proportionally to their remaining volume.
 
 **Reverb** — Caves echo. Small rooms sound tight. Open fields sound dry. The mod traces rays from your position to detect surrounding geometry and applies matching reverb in real time.
 
 **Sound Repositioning** — When a sound source is behind a wall but there's a nearby doorway, the sound shifts to come from the opening instead of phasing through solid blocks.
 
-**Weather Audio** — Rain, wind, and hail are positioned at openings around you. Step inside a shelter and weather sounds fade based on how enclosed you are — not a binary cutoff.
+**Weather Audio** — Rain, wind, and hail are positioned at openings around you. Step inside a shelter and weather sounds fade based on how enclosed you are — not a binary cutoff. Decorative blocks (signs, lanterns, toolracks, etc.) no longer cause false occlusion.
 
-**Thunder** — Thunder cracks are placed directionally above the horizon with realistic distance falloff.
+**Thunder** — Thunder cracks are placed directionally above the horizon with realistic distance falloff and per-strike pitch variation.
 
-**Block Integration** — Resonators are fully supported with proper audio lifecycle management and optional CarryON Patch to make them behave like Boomboxes. (Mostly untested)
+**Block Integration** — Resonators are fully supported with proper audio lifecycle management and optional CarryOn patch to make them behave like Boomboxes.
 
 ---
 
@@ -27,7 +27,7 @@ Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the 
 
 | | |
 |---|---|
-| **Vintage Story** | 1.21.0+ NOT 1.22.x YET | 
+| **Vintage Story** | 1.21.0+ (1.22.x not yet supported) | 
 | **Required on server** | No |
 | **Required on client** | No (but only the client running it hears the effects) |
 | **CarryOn** | Compatible (dedicated patches) |
@@ -43,7 +43,7 @@ Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the 
 2. Drop it into your `VintagestoryData/Mods/` folder
 3. Launch the game
 
-Config generates automatically at `VintagestoryData/ModConfig/soundphysicsadapted.json`. Alot of tweaks for nerds. Will drop different performance config options in here later to drag n drop
+Config generates automatically at `VintagestoryData/ModConfig/soundphysicsadapted.json`. Lots of tweaks available — material occlusion values, reverb parameters, weather settings, and more.
 
 ---
 
@@ -122,12 +122,11 @@ Per-material occlusion values, JSON configuration, block-specific overrides.
 ### Phase 4: Shared Airspace & Sound Paths ✅
 Shared airspace detection, sound repositioning through doorways/openings.
 
-### Phase 5: Weather & Ambient - In Progress
-Positional weather audio, shelter detection, gradual attenuation, directional thunder.
-Currently Still in Development, i am not happy with the Positional Sources Detection and smoothing.
+### Phase 5: Weather & Ambient ✅
+Positional weather audio, shelter detection, gradual attenuation, directional thunder with distance-based pitch variation.
 
 ### Phase 6: Polish — In Progress
-Air absorption, performance optimization, debug visualization.
+Currently polishing weather audio — fixing blocks that shouldn't occlude but do (decorative blocks, partial geometry), smoothing audio transitions to eliminate flickering and wobble, and improving overall feel. Also includes performance optimization and debug visualization.
 
 </details>
 
