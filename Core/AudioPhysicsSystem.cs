@@ -391,6 +391,14 @@ namespace soundphysicsadapted
                     $"skipped={skippedThisTick} deferred={deferredThisTick} playerPos={playerPosThisTick} " +
                     $"total={totalActive} outdoor={isOutdoors}{cellCacheInfo}{throttleInfo}{budgetInfo}");
             }
+
+            // Per-tick viz diagnostic: log when viz wanted data but no raytrace fired
+            var vizTick = DebugVisualization.Instance;
+            if (vizTick != null && vizTick.AnyAcousticVizActive && config?.DebugMode == true && !vizTick.HasCapturedThisTick)
+            {
+                SoundPhysicsAdaptedModSystem.DebugLog(
+                    $"[VIZ-TICK] No capture this tick: updated={updatedThisTick} cached={cachedThisTick} skipped={skippedThisTick} total={totalActive}");
+            }
         }
 
         /// <summary>

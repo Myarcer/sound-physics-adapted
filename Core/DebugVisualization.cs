@@ -77,6 +77,19 @@ namespace soundphysicsadapted
         private bool activeHasReposition;
 
         private volatile bool meshDirty = false;
+        private readonly object _swapLock = new object();
+
+        // === Fade / persistence ===
+        private float timeSinceCapture = 0f;   // seconds since last SwapBuffers
+        private const float VIZ_HOLD_SECONDS = 1.5f;  // full-opacity hold after capture
+        private const float VIZ_FADE_SECONDS = 1.5f;  // linear fade-to-zero after hold
+        private float currentFadeAlpha = 1f;          // computed once per render frame
+
+        // === Debug logging ===
+        private float debugLogTimer = 0f;
+        private int debugFramesSinceCapture = 0;
+        private int debugSwapCount = 0;
+        private int debugCaptureCount = 0;
 
         // Pre-allocated mesh arrays (worst case: all modes on)
         // bounces: 256*8=2048v, rays: 256*2=512v, occlusion: 256*2=512v,
@@ -101,6 +114,8 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Called by AudioPhysicsSystem at start of each update tick to reset capture tracking.
+        /// Clears pendingRayCount so CaptureRaySegment writes fresh data.
+        /// Does NOT clear pending bounces/openings (those are overwritten atomically in CaptureFromRaytracer).
         /// </summary>
         public void ResetTickCapture()
         {
@@ -123,40 +138,54 @@ namespace soundphysicsadapted
             OpeningData[] openings, int openingCount,
             SoundPathResult? pathResult, Vec3d soundPos)
         {
-            // Copy bounce data
-            int copyBounces = Math.Min(bounceCount, pendingBounces.Length);
-            Array.Copy(bouncePoints, pendingBounces, copyBounces);
-            pendingBounceCount = copyBounces;
-
-            // Copy opening data
-            int copyOpenings = Math.Min(openingCount, pendingOpenings.Length);
-            Array.Copy(openings, pendingOpenings, copyOpenings);
-            pendingOpeningCount = copyOpenings;
-
-            // Capture reposition data
-            pendingSoundPosX = soundPos.X;
-            pendingSoundPosY = soundPos.Y;
-            pendingSoundPosZ = soundPos.Z;
-
-            if (pathResult.HasValue && pathResult.Value.RepositionOffset > 0.01)
+            lock (_swapLock)
             {
-                pendingApparentPosX = pathResult.Value.ApparentPosition.X;
-                pendingApparentPosY = pathResult.Value.ApparentPosition.Y;
-                pendingApparentPosZ = pathResult.Value.ApparentPosition.Z;
-                pendingHasReposition = true;
-            }
-            else
-            {
-                pendingHasReposition = false;
+                // Copy bounce data
+                int copyBounces = Math.Min(bounceCount, pendingBounces.Length);
+                Array.Copy(bouncePoints, pendingBounces, copyBounces);
+                pendingBounceCount = copyBounces;
+
+                // Copy opening data
+                int copyOpenings = Math.Min(openingCount, pendingOpenings.Length);
+                Array.Copy(openings, pendingOpenings, copyOpenings);
+                pendingOpeningCount = copyOpenings;
+
+                // Capture reposition data
+                pendingSoundPosX = soundPos.X;
+                pendingSoundPosY = soundPos.Y;
+                pendingSoundPosZ = soundPos.Z;
+
+                if (pathResult.HasValue && pathResult.Value.RepositionOffset > 0.01)
+                {
+                    pendingApparentPosX = pathResult.Value.ApparentPosition.X;
+                    pendingApparentPosY = pathResult.Value.ApparentPosition.Y;
+                    pendingApparentPosZ = pathResult.Value.ApparentPosition.Z;
+                    pendingHasReposition = true;
+                }
+                else
+                {
+                    pendingHasReposition = false;
+                }
+
+                meshDirty = true;
+                capturedThisTick = true;
+                debugCaptureCount++;
             }
 
-            meshDirty = true;
-            capturedThisTick = true;
+            var config = SoundPhysicsAdaptedModSystem.Config;
+            if (config != null && config.DebugMode)
+            {
+                SoundPhysicsAdaptedModSystem.DebugLog(
+                    $"[VIZ-CAPTURE] {pendingBounceCount} bounces, {pendingRayCount} rays, {pendingOpeningCount} openings, repos={pendingHasReposition}");
+            }
         }
 
         /// <summary>
         /// Capture a ray segment for visualization.
         /// Called from AcousticRaytracer during the ray loop.
+        /// Lock not needed: rays are written between ResetTickCapture and CaptureFromRaytracer
+        /// (which holds _swapLock), and SwapBuffers only runs when meshDirty is true
+        /// (set at end of CaptureFromRaytracer under lock).
         /// </summary>
         public void CaptureRaySegment(
             double startX, double startY, double startZ,
@@ -204,11 +233,54 @@ namespace soundphysicsadapted
         {
             if (!AnyActive || capi.World?.Player?.Entity == null) return;
 
-            // Swap pending→active immediately when new data arrives
+            timeSinceCapture += deltaTime;
+            debugFramesSinceCapture++;
+
+            // Swap pending->active under lock to prevent mid-capture race
             if (meshDirty)
             {
-                SwapBuffers();
-                meshDirty = false;
+                lock (_swapLock)
+                {
+                    if (meshDirty)
+                    {
+                        SwapBuffers();
+                        meshDirty = false;
+                        timeSinceCapture = 0f;
+                        debugFramesSinceCapture = 0;
+                        debugSwapCount++;
+                    }
+                }
+            }
+
+            // Compute fade alpha: hold at full opacity, then linear fade to zero
+            if (timeSinceCapture <= VIZ_HOLD_SECONDS)
+                currentFadeAlpha = 1f;
+            else
+                currentFadeAlpha = Math.Max(0f, 1f - (timeSinceCapture - VIZ_HOLD_SECONDS) / VIZ_FADE_SECONDS);
+
+            // Debug logging (1 Hz when debugMode + viz active)
+            var config = SoundPhysicsAdaptedModSystem.Config;
+            if (config != null && config.DebugMode)
+            {
+                debugLogTimer += deltaTime;
+                if (debugLogTimer >= 1f)
+                {
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"[VIZ-RENDER] rays={activeRayCount} bounces={activeBounceCount} openings={activeOpeningCount} " +
+                        $"fade={currentFadeAlpha:F2} age={timeSinceCapture:F1}s framesStale={debugFramesSinceCapture} " +
+                        $"swaps={debugSwapCount} captures={debugCaptureCount}");
+                    debugLogTimer = 0f;
+                    debugSwapCount = 0;
+                    debugCaptureCount = 0;
+                }
+            }
+
+            // Fully faded out - nothing to render
+            if (currentFadeAlpha <= 0f)
+            {
+                currentMeshRef?.Dispose();
+                currentMeshRef = null;
+                return;
             }
 
             // Rebuild mesh every frame with current camera position.
@@ -245,6 +317,8 @@ namespace soundphysicsadapted
 
         private void SwapBuffers()
         {
+            // Note: caller holds _swapLock
+
             // Swap bounce data
             var tmpBounces = activeBounces;
             activeBounces = pendingBounces;
@@ -310,6 +384,11 @@ namespace soundphysicsadapted
         {
             if (mesh.VerticesCount >= MAX_VERTICES)
                 return; // Skip — buffer full, don't attempt dynamic growth (VS GrowVertexBuffer crashes on Rgba mismatch)
+
+            // Apply fade alpha to vertex color
+            byte origAlpha = (byte)((color >> 24) & 0xFF);
+            byte fadedAlpha = (byte)(origAlpha * currentFadeAlpha);
+            color = (fadedAlpha << 24) | (color & 0x00FFFFFF);
 
             int vi = mesh.VerticesCount;
             mesh.xyz[vi * 3] = x;
