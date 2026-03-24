@@ -486,7 +486,7 @@ namespace soundphysicsadapted
                     // bounce rays has low effective occlusion even when direct
                     // DDA is very high (wall between player and source).
                     float occ = audioPhysics.GetEffectiveOcclusion(slot.Sound);
-                    if (occ < 0) return true; // Not yet in cache = just spawned, assume audible
+                    if (occ < 0) return false; // Sound not in cache — unregistered or stale, not audible
                     bool audible = occ <= AudibilityOccThreshold;
 
                     var cfg = SoundPhysicsAdaptedModSystem.Config;
@@ -593,7 +593,16 @@ namespace soundphysicsadapted
         /// </summary>
         private void EnsureSourcePlaying(PositionalSource slot)
         {
-            if (slot.Sound != null && slot.Sound.IsPlaying) return;
+            if (slot.Sound != null && slot.Sound.IsPlaying)
+            {
+                // Sound exists and playing — but check if it's actually registered
+                // for occlusion processing. Unregistered sounds have N/A occlusion,
+                // can't be tracked, and become immortal. Recreate them.
+                if (AudioRenderer.IsRegistered(slot.Sound)) return;
+
+                WeatherAudioManager.WeatherDebugLog(
+                    $"[5B-{debugTag}] Stale unregistered source trackId={slot.TrackingId}, recreating");
+            }
             if (AssetResolver == null) return;
 
             if (slot.Sound != null)
@@ -760,7 +769,8 @@ namespace soundphysicsadapted
 
                 float directOcc = audioPhysics?.GetSoundOcclusion(slot.Sound) ?? -1f;
                 float effectiveOcc = audioPhysics?.GetEffectiveOcclusion(slot.Sound) ?? -1f;
-                bool audible = effectiveOcc >= 0 ? effectiveOcc <= AudibilityOccThreshold : true;
+                bool registered = AudioRenderer.IsRegistered(slot.Sound);
+                bool audible = effectiveOcc >= 0 ? effectiveOcc <= AudibilityOccThreshold : false;
                 string directStr = directOcc >= 0 ? $"{directOcc:F2}" : "N/A";
                 string effectiveStr = effectiveOcc >= 0 ? $"{effectiveOcc:F2}" : "N/A";
 
@@ -768,7 +778,7 @@ namespace soundphysicsadapted
                     $"  [{debugTag}] Slot[{i}] id={slot.TrackingId} " +
                     $"pos=({slot.WorldPos?.X:F0},{slot.WorldPos?.Y:F0},{slot.WorldPos?.Z:F0}) " +
                     $"vol={slot.CurrentVolume:F3}/{slot.TargetVolume:F3} " +
-                    $"directOcc={directStr} effOcc={effectiveStr} audible={audible} " +
+                    $"directOcc={directStr} effOcc={effectiveStr} audible={audible} reg={registered} " +
                     $"playing={slot.Sound?.IsPlaying ?? false} " +
                     $"posMode={(PositionSelector != null ? "wind" : "default")}");
             }
