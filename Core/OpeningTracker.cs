@@ -187,9 +187,10 @@ namespace soundphysicsadapted
         private const float MERGE_RADIUS = 3.0f;
         private const float MERGE_RADIUS_SQ = MERGE_RADIUS * MERGE_RADIUS;
 
-        // Hysteresis for removal: opening must be this far beyond scan radius to be removed
-        // Prevents flicker at scan boundary
-        private const float REMOVAL_DISTANCE_PADDING = 4f;
+        // Hysteresis for removal: opening must be this far beyond scan radius to be removed.
+        // Must match or exceed WeatherEnclosureCalculator.MEMORY_RADIUS - SCAN_RADIUS
+        // so tracked openings survive as long as the cache feeds them clusters.
+        private const float REMOVAL_DISTANCE_PADDING = 8f;
 
         /// <summary>
         /// Maximum DDA occlusion for a member column to count as "still open" in the

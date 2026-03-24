@@ -75,7 +75,18 @@ namespace soundphysicsadapted
         // Columns that passed DDA are cached between cycles. On each cycle, re-verified
         // columns update their data; columns not found increment a fail counter.
         // Only removed after consecutive failures, not instantly.
-        private const int MAX_CONSECUTIVE_FAILS = 5;  // 5 cycles × 100ms = 500ms grace period
+        // NOTE: Only applies to columns INSIDE the scan diamond that failed DDA
+        // (genuinely occluded). Columns outside the diamond persist via memory radius.
+        private const int MAX_CONSECUTIVE_FAILS = 10; // 10 cycles × 100ms = 1s grace for occluded
+
+        // ── Verified Memory Radius ──
+        // Columns that passed DDA at least once persist in cache as long as they're
+        // within this radius of the player, even after leaving the scan diamond.
+        // Only evicted by: distance > MEMORY_RADIUS, or block-change invalidation.
+        // This prevents cluster centroid jumps when the player walks and columns
+        // exit the scan diamond — the remembered columns keep centroids stable.
+        private const int MEMORY_RADIUS = 20;
+        private const float MEMORY_RADIUS_SQ = MEMORY_RADIUS * MEMORY_RADIUS;
 
         // Step 3: Opening neighbor search — when no direct paths exist but nearby
         // blocked candidates suggest a thin wall, search neighboring columns to find
@@ -1053,17 +1064,31 @@ namespace soundphysicsadapted
                 }
             }
 
-            // Step B: Increment fail count for cached columns not re-verified this cycle
+            // Step B: Handle non-re-verified cached columns.
+            // Distinguish between columns INSIDE the scan diamond (genuinely failed DDA)
+            // and columns OUTSIDE the diamond (player walked away — memory persistence).
+            // Only increment fail count for inside-diamond failures.
             var keysToRemove = new List<(int, int)>();
             foreach (var kvp in openingCache)
             {
                 if (!kvp.Value.ReVerifiedThisCycle)
                 {
-                    kvp.Value.ConsecutiveFailCount++;
-                    if (kvp.Value.ConsecutiveFailCount > MAX_CONSECUTIVE_FAILS)
+                    // Check if this column is inside the current scan diamond
+                    int manhattanDist = Math.Abs(kvp.Key.x - ctx.PlayerX)
+                                      + Math.Abs(kvp.Key.z - ctx.PlayerZ);
+
+                    if (manhattanDist <= SCAN_RADIUS)
                     {
-                        keysToRemove.Add(kvp.Key);
+                        // Inside diamond but NOT re-verified → DDA failed (genuinely occluded)
+                        kvp.Value.ConsecutiveFailCount++;
+                        if (kvp.Value.ConsecutiveFailCount > MAX_CONSECUTIVE_FAILS)
+                        {
+                            keysToRemove.Add(kvp.Key);
+                        }
                     }
+                    // Outside diamond: memory persistence — don't increment fail count.
+                    // Column persists with last-known data until distance eviction
+                    // or block-change invalidation removes it.
                 }
             }
             for (int r = 0; r < keysToRemove.Count; r++)
@@ -1072,14 +1097,14 @@ namespace soundphysicsadapted
                 {
                     WeatherAudioManager.WeatherDebugLog(
                         $"  CACHE EVICT: column ({keysToRemove[r].Item1},{keysToRemove[r].Item2}) " +
-                        $"failed {MAX_CONSECUTIVE_FAILS} consecutive cycles");
+                        $"failed {MAX_CONSECUTIVE_FAILS} consecutive cycles (inside diamond)");
                 }
                 openingCache.Remove(keysToRemove[r]);
             }
 
             // Step C: Rebuild verifiedOpenings from the stable cache
+            // Distance eviction uses MEMORY_RADIUS (wider than scan diamond)
             verifiedOpenings.Clear();
-            float maxCacheDistSq = (SCAN_RADIUS + 4f) * (SCAN_RADIUS + 4f);
             var distanceKeysToRemove = new List<(int, int)>();
 
             foreach (var kvp in openingCache)
@@ -1087,7 +1112,7 @@ namespace soundphysicsadapted
                 var cached = kvp.Value;
                 double dx = cached.Data.WorldPos.X - ctx.PlayerEarPos.X;
                 double dz = cached.Data.WorldPos.Z - ctx.PlayerEarPos.Z;
-                if (dx * dx + dz * dz > maxCacheDistSq)
+                if (dx * dx + dz * dz > MEMORY_RADIUS_SQ)
                 {
                     distanceKeysToRemove.Add(kvp.Key);
                     continue;
