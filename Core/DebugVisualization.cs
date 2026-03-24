@@ -90,6 +90,9 @@ namespace soundphysicsadapted
         private int vertexOffset;
         private int indexOffset;
 
+        // Camera position at last mesh build (for per-frame drift compensation)
+        private double meshCamX, meshCamY, meshCamZ;
+
         // Reusable uniforms
         private Vec3f origin = new Vec3f(0, 0, 0);
         private Vec4f colorIn = new Vec4f(1, 1, 1, 1);
@@ -232,9 +235,15 @@ namespace soundphysicsadapted
             rpi.GLDepthMask(false);
             rpi.GlToggleBlend(true);
 
-            // Camera-relative model-view matrix
-            Vec3d camPos = capi.World.Player.Entity.CameraPos;
+            // Camera-relative model-view matrix with drift compensation:
+            // Vertices were built relative to meshCam*; translate by (meshCam - currentCam)
+            // so they stay anchored to world positions between 4 Hz rebuilds.
+            Vec3d camNow = capi.World.Player.Entity.CameraPos;
             mvMat.Set(rpi.CameraMatrixOriginf);
+            mvMat.Translate(
+                (float)(meshCamX - camNow.X),
+                (float)(meshCamY - camNow.Y),
+                (float)(meshCamZ - camNow.Z));
 
             prog.Uniform("origin", origin);
             prog.UniformMatrix("projectionMatrix", rpi.CurrentProjectionMatrix);
@@ -285,6 +294,10 @@ namespace soundphysicsadapted
             indexOffset = 0;
 
             Vec3d cam = capi.World.Player.Entity.CameraPos;
+            // Store build-time camera for per-frame drift compensation
+            meshCamX = cam.X;
+            meshCamY = cam.Y;
+            meshCamZ = cam.Z;
 
             if (ShowBounces) AppendBounceBoxes(mesh, cam);
             if (ShowRays) AppendRayLines(mesh, cam);
