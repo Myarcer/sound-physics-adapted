@@ -29,19 +29,19 @@ namespace soundphysicsadapted
         public static DebugVisualization Instance { get; private set; }
 
         // === Mode flags (runtime only, not persisted to config) ===
-        public bool ShowBounces { get; set; }
+        // BounceColorMode: 0=off, 1=reflectivity, 2=reverb slots
+        public int BounceColorMode { get; set; }
         public bool ShowRays { get; set; }
         public bool ShowOcclusion { get; set; }
         public bool ShowReposition { get; set; }
         public bool ShowOpenings { get; set; }
-        public bool ShowReverbSlots { get; set; }
 
-        public bool AnyActive => ShowBounces || ShowRays || ShowOcclusion
-            || ShowReposition || ShowOpenings || ShowReverbSlots;
+        public bool AnyActive => BounceColorMode > 0 || ShowRays || ShowOcclusion
+            || ShowReposition || ShowOpenings;
 
         // Subset that needs raytracer data capture
-        public bool AnyAcousticVizActive => ShowBounces || ShowRays || ShowOcclusion
-            || ShowReposition || ShowOpenings || ShowReverbSlots;
+        public bool AnyAcousticVizActive => BounceColorMode > 0 || ShowRays || ShowOcclusion
+            || ShowReposition || ShowOpenings;
 
         // === IRenderer ===
         public double RenderOrder => 0.99;
@@ -185,12 +185,11 @@ namespace soundphysicsadapted
 
         public void ClearAll()
         {
-            ShowBounces = false;
+            BounceColorMode = 0;
             ShowRays = false;
             ShowOcclusion = false;
             ShowReposition = false;
             ShowOpenings = false;
-            ShowReverbSlots = false;
 
             activeBounceCount = 0;
             activeRayCount = 0;
@@ -283,12 +282,11 @@ namespace soundphysicsadapted
 
             Vec3d cam = capi.World.Player.Entity.CameraPos;
 
-            if (ShowBounces) AppendBounceBoxes(mesh, cam);
+            if (BounceColorMode > 0) AppendBounceBoxes(mesh, cam);
             if (ShowRays) AppendRayLines(mesh, cam);
             if (ShowOcclusion) AppendOcclusionLines(mesh, cam);
             if (ShowReposition && activeHasReposition) AppendRepositionLine(mesh, cam);
             if (ShowOpenings) AppendOpeningBoxes(mesh, cam);
-            if (ShowReverbSlots) AppendReverbSlotBoxes(mesh, cam);
 
             if (vertexOffset == 0)
             {
@@ -388,23 +386,47 @@ namespace soundphysicsadapted
         // ===== VISUALIZATION MODES =====
 
         /// <summary>
-        /// Bounces: wireframe boxes at each bounce point, colored by reflectivity.
-        /// White=high(>0.7), Yellow=medium(0.3-0.7), DarkRed=low(<0.3).
-        /// Alpha modulated by permeation (bright=clear path, dim=behind wall).
+        /// Bounces: wireframe boxes at each bounce point.
+        /// BounceColorMode 1 = reflectivity: White/Yellow/DarkRed by surface reflectivity.
+        /// BounceColorMode 2 = reverb slots: Blue/Green/Yellow/Red by which reverb slot the bounce feeds.
         /// </summary>
         private void AppendBounceBoxes(MeshData mesh, Vec3d cam)
         {
             for (int i = 0; i < activeBounceCount; i++)
             {
                 ref BouncePoint bp = ref activeBounces[i];
-                byte alpha = (byte)Math.Clamp((int)(bp.Permeation * 200 + 55), 60, 255);
                 int color;
-                if (bp.Reflectivity > 0.7f)
-                    color = (alpha << 24) | (255 << 16) | (255 << 8) | 255; // White
-                else if (bp.Reflectivity > 0.3f)
-                    color = (alpha << 24) | (0 << 16) | (200 << 8) | 255;   // Yellow (RGBA)
+
+                if (BounceColorMode == 2)
+                {
+                    // Reverb slot coloring
+                    float reflectionDelay = bp.TotalDistance * 0.12f;
+                    float cross0 = 1f - Math.Clamp(Math.Abs(reflectionDelay - 0f), 0f, 1f);
+                    float cross1 = 1f - Math.Clamp(Math.Abs(reflectionDelay - 1f), 0f, 1f);
+                    float cross2 = 1f - Math.Clamp(Math.Abs(reflectionDelay - 2f), 0f, 1f);
+                    float cross3 = Math.Clamp(reflectionDelay - 2f, 0f, 1f);
+                    float maxCross = Math.Max(Math.Max(cross0, cross1), Math.Max(cross2, cross3));
+
+                    if (maxCross == cross0)
+                        color = (200 << 24) | (255 << 16) | (100 << 8) | 100;   // Blue
+                    else if (maxCross == cross1)
+                        color = (200 << 24) | (100 << 16) | (255 << 8) | 100;   // Green
+                    else if (maxCross == cross2)
+                        color = (200 << 24) | (100 << 16) | (255 << 8) | 255;   // Yellow
+                    else
+                        color = (200 << 24) | (100 << 16) | (100 << 8) | 255;   // Red
+                }
                 else
-                    color = (alpha << 24) | (0 << 16) | (50 << 8) | 180;    // Dark Red
+                {
+                    // Reflectivity coloring (default)
+                    byte alpha = (byte)Math.Clamp((int)(bp.Permeation * 200 + 55), 60, 255);
+                    if (bp.Reflectivity > 0.7f)
+                        color = (alpha << 24) | (255 << 16) | (255 << 8) | 255; // White
+                    else if (bp.Reflectivity > 0.3f)
+                        color = (alpha << 24) | (0 << 16) | (200 << 8) | 255;   // Yellow
+                    else
+                        color = (alpha << 24) | (0 << 16) | (50 << 8) | 180;    // Dark Red
+                }
 
                 AppendWireframeBox(mesh, bp.PosX, bp.PosY, bp.PosZ, 0.05f, color, cam);
             }
@@ -434,14 +456,15 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Occlusion: lines from each bounce point to player, colored by occlusion severity.
-        /// Green=clear(<0.3), Orange=partial(0.3-1.0), Red=heavy(>1.0).
+        /// Occlusion: lines from player eye to each bounce point, colored by occlusion severity.
+        /// Green=clear(&lt;0.3), Orange=partial(0.3-1.0), Red=heavy(&gt;1.0).
+        /// Uses the sound source position as the anchor, not the player/camera.
         /// </summary>
         private void AppendOcclusionLines(MeshData mesh, Vec3d cam)
         {
-            Vec3d playerPos = capi.World.Player.Entity.Pos.XYZ;
-            playerPos.Add(capi.World.Player.Entity.LocalEyePos);
-
+            // Draw lines from the sound source to each bounce point,
+            // colored by path occlusion. This shows which bounce paths
+            // are clear vs blocked between source and bounce surface.
             for (int i = 0; i < activeBounceCount; i++)
             {
                 ref BouncePoint bp = ref activeBounces[i];
@@ -453,8 +476,8 @@ namespace soundphysicsadapted
                 else
                     color = (180 << 24) | (0 << 16) | (0 << 8) | 255;    // Red
 
-                AppendLine(mesh, bp.PosX, bp.PosY, bp.PosZ,
-                    playerPos.X, playerPos.Y, playerPos.Z, color, cam);
+                AppendLine(mesh, activeSoundPosX, activeSoundPosY, activeSoundPosZ,
+                    bp.PosX, bp.PosY, bp.PosZ, color, cam);
             }
         }
 
@@ -489,39 +512,6 @@ namespace soundphysicsadapted
                 int color = (alpha << 24) | (255 << 16) | (255 << 8) | 0; // Cyan
 
                 AppendWireframeBox(mesh, op.PosX, op.PosY, op.PosZ, 0.1f, color, cam);
-            }
-        }
-
-        /// <summary>
-        /// Reverb slots: bounce points colored by which reverb slot they feed.
-        /// Slot 0=Blue, 1=Green, 2=Yellow, 3=Red.
-        /// Slot determined by reflectionDelay = totalDistance * 0.12.
-        /// </summary>
-        private void AppendReverbSlotBoxes(MeshData mesh, Vec3d cam)
-        {
-            for (int i = 0; i < activeBounceCount; i++)
-            {
-                ref BouncePoint bp = ref activeBounces[i];
-                float reflectionDelay = bp.TotalDistance * 0.12f;
-
-                // Dominant slot: same crossfade logic as raytracer, pick highest weight
-                float cross0 = 1f - Math.Clamp(Math.Abs(reflectionDelay - 0f), 0f, 1f);
-                float cross1 = 1f - Math.Clamp(Math.Abs(reflectionDelay - 1f), 0f, 1f);
-                float cross2 = 1f - Math.Clamp(Math.Abs(reflectionDelay - 2f), 0f, 1f);
-                float cross3 = Math.Clamp(reflectionDelay - 2f, 0f, 1f);
-
-                int color;
-                float maxCross = Math.Max(Math.Max(cross0, cross1), Math.Max(cross2, cross3));
-                if (maxCross == cross0)
-                    color = (200 << 24) | (255 << 16) | (100 << 8) | 100;   // Blue
-                else if (maxCross == cross1)
-                    color = (200 << 24) | (100 << 16) | (255 << 8) | 100;   // Green
-                else if (maxCross == cross2)
-                    color = (200 << 24) | (100 << 16) | (255 << 8) | 255;   // Yellow
-                else
-                    color = (200 << 24) | (100 << 16) | (100 << 8) | 255;   // Red
-
-                AppendWireframeBox(mesh, bp.PosX, bp.PosY, bp.PosZ, 0.06f, color, cam);
             }
         }
 

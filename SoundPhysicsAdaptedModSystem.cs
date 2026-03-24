@@ -1022,7 +1022,8 @@ namespace soundphysicsadapted
                 .EndSubCommand()
                 .BeginSubCommand("viz")
                     .WithDescription("Toggle debug visualizations.\n" +
-                        "Modes: bounces | rays | occlusion | reposition | weather | openings | reverb | off\n" +
+                        "Modes: bounces | rays | occlusion | reposition | weather | openings | off\n" +
+                        "bounces cycles: reflectivity \u2192 reverb slots \u2192 off\n" +
                         "No argument = show status of all modes")
                     .WithArgs(api.ChatCommands.Parsers.OptionalWord("mode"))
                     .HandleWith((args) =>
@@ -1035,22 +1036,30 @@ namespace soundphysicsadapted
 
                         if (mode == null)
                         {
+                        {
+                            string bounceLabel = viz.BounceColorMode switch
+                            {
+                                1 => "ON (reflectivity)",
+                                2 => "ON (reverb slots)",
+                                _ => "off"
+                            };
                             return TextCommandResult.Success(
                                 $"[SPA] Viz modes:\n" +
-                                $"  bounces: {(viz.ShowBounces ? "ON" : "off")}\n" +
+                                $"  bounces: {bounceLabel}\n" +
                                 $"  rays: {(viz.ShowRays ? "ON" : "off")}\n" +
                                 $"  occlusion: {(viz.ShowOcclusion ? "ON" : "off")}\n" +
                                 $"  reposition: {(viz.ShowReposition ? "ON" : "off")}\n" +
                                 $"  openings: {(viz.ShowOpenings ? "ON" : "off")}\n" +
-                                $"  reverb: {(viz.ShowReverbSlots ? "ON" : "off")}\n" +
                                 $"  weather: {(config.DebugWeatherVisualization ? "ON" : "off")}");
+                        }
                         }
 
                         switch (mode.ToLower())
                         {
                             case "bounces":
-                                viz.ShowBounces = !viz.ShowBounces;
-                                return TextCommandResult.Success($"[SPA] Bounce viz: {(viz.ShowBounces ? "ON" : "OFF")}");
+                                viz.BounceColorMode = (viz.BounceColorMode + 1) % 3;
+                                string bLabel = viz.BounceColorMode switch { 1 => "ON (reflectivity)", 2 => "ON (reverb slots)", _ => "OFF" };
+                                return TextCommandResult.Success($"[SPA] Bounce viz: {bLabel}");
                             case "rays":
                                 viz.ShowRays = !viz.ShowRays;
                                 return TextCommandResult.Success($"[SPA] Ray path viz: {(viz.ShowRays ? "ON" : "OFF")}");
@@ -1067,16 +1076,13 @@ namespace soundphysicsadapted
                             case "openings":
                                 viz.ShowOpenings = !viz.ShowOpenings;
                                 return TextCommandResult.Success($"[SPA] Opening probe viz: {(viz.ShowOpenings ? "ON" : "OFF")}");
-                            case "reverb":
-                                viz.ShowReverbSlots = !viz.ShowReverbSlots;
-                                return TextCommandResult.Success($"[SPA] Reverb slot viz: {(viz.ShowReverbSlots ? "ON" : "OFF")}");
                             case "off":
                             case "clear":
                                 viz.ClearAll();
                                 config.DebugWeatherVisualization = false;
                                 return TextCommandResult.Success("[SPA] All visualizations OFF");
                             default:
-                                return TextCommandResult.Error($"Unknown viz mode: {mode}\nValid: bounces | rays | occlusion | reposition | weather | openings | reverb | off");
+                                return TextCommandResult.Error($"Unknown viz mode: {mode}\nValid: bounces | rays | occlusion | reposition | weather | openings | off");
                         }
                     })
                 .EndSubCommand();
