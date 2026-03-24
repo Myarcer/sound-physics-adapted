@@ -88,6 +88,12 @@ namespace soundphysicsadapted
         private static OpeningData[] _cacheableOpenings = new OpeningData[24];
         private static int _cacheableOpeningCount = 0;
 
+        // Public accessors for debug visualization capture
+        public static BouncePoint[] CacheableBouncePoints => _cacheableBouncePoints;
+        public static int CacheableBounceCount => _cacheableBounceCount;
+        public static OpeningData[] CacheableOpenings => _cacheableOpenings;
+        public static int CacheableOpeningCount => _cacheableOpeningCount;
+
         /// <summary>
         /// Cache-aware version of CalculateWithPaths.
         /// On top of the normal reverb + path calculation, captures BouncePoint[] and 
@@ -188,6 +194,17 @@ namespace soundphysicsadapted
                 Vec3d lastRayDir = rayDir;
                 BlockPos lastHitBlock = hit.Value.blockPos;
 
+                // Viz: capture first ray segment (source → first hit)
+                var vizInst = DebugVisualization.Instance;
+                bool vizCaptureRays = vizInst != null && vizInst.ShowRays && !vizInst.HasCapturedThisTick;
+                if (vizCaptureRays)
+                {
+                    vizInst.CaptureRaySegment(
+                        soundPos.X, soundPos.Y, soundPos.Z,
+                        hit.Value.position.X, hit.Value.position.Y, hit.Value.position.Z,
+                        i, 0);
+                }
+
                 for (int bounce = 0; bounce < bounces; bounce++)
                 {
                     totalBouncePoints++;
@@ -271,6 +288,15 @@ namespace soundphysicsadapted
                         Vec3d newRayDir = Reflect(lastRayDir, lastHitNormal);
                         var nextHit = RaycastToSurface(lastHitPos, newRayDir, maxDistance, blockAccessor, lastHitBlock);
                         if (!nextHit.HasValue) break;
+
+                        // Viz: capture bounce ray segment
+                        if (vizCaptureRays)
+                        {
+                            vizInst.CaptureRaySegment(
+                                lastHitPos.X, lastHitPos.Y, lastHitPos.Z,
+                                nextHit.Value.position.X, nextHit.Value.position.Y, nextHit.Value.position.Z,
+                                i, bounce + 1);
+                        }
 
                         totalDistance += nextHit.Value.distance;
                         lastHitPos = nextHit.Value.position;

@@ -218,6 +218,9 @@ namespace soundphysicsadapted
             _tickStopwatch.Restart();
             budgetExceededThisTick = 0;
 
+            // Reset viz nearest-sound tracking for this tick
+            DebugVisualization.Instance?.ResetTickCapture();
+
             var activeSounds = AudioRenderer.GetActiveSounds();
             int count = 0;
             _candidates.Clear();
@@ -556,6 +559,7 @@ namespace soundphysicsadapted
             {
                 ReverbResult reverbResult;
                 SoundPathResult? pathResult;
+                bool didFullRaytrace = false;
 
                 // === CELL CACHE CHECK ===
                 // Composite key = (soundCell, playerCell) — cache auto-invalidates
@@ -586,6 +590,7 @@ namespace soundphysicsadapted
                             out float sharedAirspaceRatio, out float directOccOut, out bool hasDirectAirspaceOut);
                         reverbResult = rv;
                         pathResult = pr;
+                        didFullRaytrace = true;
 
                         reverbCellCache.StoreCellIfEmpty(soundPos, playerPos, currentTimeMs,
                             reverbResult, bouncePoints, bounceCount,
@@ -598,6 +603,7 @@ namespace soundphysicsadapted
                         var (rv, pr) = AcousticRaytracer.CalculateWithPaths(soundPos, playerPos, blockAccessor, occlusion, soundRange);
                         reverbResult = rv;
                         pathResult = pr;
+                        didFullRaytrace = true;
                     }
                 }
                 else
@@ -606,12 +612,24 @@ namespace soundphysicsadapted
                     var (rv, pr) = AcousticRaytracer.CalculateWithPaths(soundPos, playerPos, blockAccessor, occlusion, soundRange);
                     reverbResult = rv;
                     pathResult = pr;
+                    didFullRaytrace = true;
                 }
 
                 // Apply reverb from path calculation (always — reverb is independent of repositioning)
                 // CRITICAL: Validate sourceId to detect VS recycling source IDs.
                 // When sound A finishes and sound B takes its sourceId, stale entries
                 // could apply sound A's reverb to sound B.
+
+                // === VIZ CAPTURE: first sound with a full raytrace this tick (nearest, since sorted by distance) ===
+                var viz = DebugVisualization.Instance;
+                if (viz != null && viz.AnyAcousticVizActive && !viz.HasCapturedThisTick && didFullRaytrace)
+                {
+                    viz.CaptureFromRaytracer(
+                        AcousticRaytracer.CacheableBouncePoints, AcousticRaytracer.CacheableBounceCount,
+                        AcousticRaytracer.CacheableOpenings, AcousticRaytracer.CacheableOpeningCount,
+                        pathResult, soundPos);
+                }
+
                 int? validatedSourceId = AudioRenderer.GetValidatedSourceId(sound);
 
                 // DEBUG: Log which sound got which reverb result BEFORE applying

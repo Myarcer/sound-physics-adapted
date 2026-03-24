@@ -51,6 +51,9 @@ namespace soundphysicsadapted
         private static WeatherAudioManager weatherManager;
         private long weatherTimerId = 0;
 
+        // Debug visualization (IRenderer wireframe)
+        private static DebugVisualization debugViz;
+
         // === WORLD READINESS GATE ===
         // Prevents tick handlers and Harmony patches from running expensive raycasts
         // before the world is fully loaded. Without this, DDA raycasts against an
@@ -659,6 +662,9 @@ namespace soundphysicsadapted
                 }
             }
 
+            // Initialize debug visualization (IRenderer wireframe)
+            debugViz = new DebugVisualization(api);
+
             // Register debug commands
             RegisterCommands(api);
 
@@ -1024,6 +1030,66 @@ namespace soundphysicsadapted
                             : "";
                         return TextCommandResult.Success($"[SoundPhysicsAdapted] Weather visualization: {(config.DebugWeatherVisualization ? "ON" : "OFF")}{legend}");
                     })
+                .EndSubCommand()
+                .BeginSubCommand("viz")
+                    .WithDescription("Toggle debug visualizations.\n" +
+                        "Modes: bounces | rays | occlusion | reposition | weather | openings | reverb | off\n" +
+                        "No argument = show status of all modes")
+                    .WithArgs(api.ChatCommands.Parsers.OptionalWord("mode"))
+                    .HandleWith((args) =>
+                    {
+                        var viz = DebugVisualization.Instance;
+                        if (viz == null)
+                            return TextCommandResult.Error("[SPA] Visualization system not initialized");
+
+                        string mode = (args.Parsers[0].IsMissing) ? null : (string)args[0];
+
+                        if (mode == null)
+                        {
+                            return TextCommandResult.Success(
+                                $"[SPA] Viz modes:\n" +
+                                $"  bounces: {(viz.ShowBounces ? "ON" : "off")}\n" +
+                                $"  rays: {(viz.ShowRays ? "ON" : "off")}\n" +
+                                $"  occlusion: {(viz.ShowOcclusion ? "ON" : "off")}\n" +
+                                $"  reposition: {(viz.ShowReposition ? "ON" : "off")}\n" +
+                                $"  openings: {(viz.ShowOpenings ? "ON" : "off")}\n" +
+                                $"  reverb: {(viz.ShowReverbSlots ? "ON" : "off")}\n" +
+                                $"  weather: {(config.DebugWeatherVisualization ? "ON" : "off")}");
+                        }
+
+                        switch (mode.ToLower())
+                        {
+                            case "bounces":
+                                viz.ShowBounces = !viz.ShowBounces;
+                                return TextCommandResult.Success($"[SPA] Bounce viz: {(viz.ShowBounces ? "ON" : "OFF")}");
+                            case "rays":
+                                viz.ShowRays = !viz.ShowRays;
+                                return TextCommandResult.Success($"[SPA] Ray path viz: {(viz.ShowRays ? "ON" : "OFF")}");
+                            case "occlusion":
+                                viz.ShowOcclusion = !viz.ShowOcclusion;
+                                return TextCommandResult.Success($"[SPA] Occlusion path viz: {(viz.ShowOcclusion ? "ON" : "OFF")}");
+                            case "reposition":
+                                viz.ShowReposition = !viz.ShowReposition;
+                                return TextCommandResult.Success($"[SPA] Reposition viz: {(viz.ShowReposition ? "ON" : "OFF")}");
+                            case "weather":
+                                config.DebugWeatherVisualization = !config.DebugWeatherVisualization;
+                                return TextCommandResult.Success($"[SPA] Weather viz: {(config.DebugWeatherVisualization ? "ON" : "OFF")}" +
+                                    (config.DebugWeatherVisualization ? "\nSky: Blue=covered Yellow=exposed | Paths: White=confirmed Red=blocked | Audio: Magenta=source" : ""));
+                            case "openings":
+                                viz.ShowOpenings = !viz.ShowOpenings;
+                                return TextCommandResult.Success($"[SPA] Opening probe viz: {(viz.ShowOpenings ? "ON" : "OFF")}");
+                            case "reverb":
+                                viz.ShowReverbSlots = !viz.ShowReverbSlots;
+                                return TextCommandResult.Success($"[SPA] Reverb slot viz: {(viz.ShowReverbSlots ? "ON" : "OFF")}");
+                            case "off":
+                            case "clear":
+                                viz.ClearAll();
+                                config.DebugWeatherVisualization = false;
+                                return TextCommandResult.Success("[SPA] All visualizations OFF");
+                            default:
+                                return TextCommandResult.Error($"Unknown viz mode: {mode}\nValid: bounces | rays | occlusion | reposition | weather | openings | reverb | off");
+                        }
+                    })
                 .EndSubCommand();
         }
 
@@ -1080,6 +1146,10 @@ namespace soundphysicsadapted
             // Phase 5A: Dispose weather audio
             weatherManager?.Dispose();
             weatherManager = null;
+
+            // Dispose debug visualization
+            debugViz?.Dispose();
+            debugViz = null;
 
             // Dispose all per-sound filters
             AudioRenderer.Dispose();
