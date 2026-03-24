@@ -76,9 +76,7 @@ namespace soundphysicsadapted
         private double activeApparentPosX, activeApparentPosY, activeApparentPosZ;
         private bool activeHasReposition;
 
-        private bool meshDirty = false;
-        private long lastRebuildMs = 0;
-        private const long REBUILD_INTERVAL_MS = 250; // 4 Hz mesh rebuild
+        private volatile bool meshDirty = false;
 
         // Pre-allocated mesh arrays (worst case: all modes on)
         // bounces: 256*8=2048v, rays: 256*2=512v, occlusion: 256*2=512v,
@@ -89,9 +87,6 @@ namespace soundphysicsadapted
         // Mesh building state
         private int vertexOffset;
         private int indexOffset;
-
-        // Camera position at last mesh build (for per-frame drift compensation)
-        private double meshCamX, meshCamY, meshCamZ;
 
         // Reusable uniforms
         private Vec3f origin = new Vec3f(0, 0, 0);
@@ -210,16 +205,17 @@ namespace soundphysicsadapted
         {
             if (!AnyActive || capi.World?.Player?.Entity == null) return;
 
-            long nowMs = capi.ElapsedMilliseconds;
-
-            // Swap pending→active and rebuild mesh at 4 Hz
-            if (meshDirty && nowMs - lastRebuildMs >= REBUILD_INTERVAL_MS)
+            // Swap pending→active immediately when new data arrives
+            if (meshDirty)
             {
                 SwapBuffers();
-                RebuildMesh();
-                lastRebuildMs = nowMs;
                 meshDirty = false;
             }
+
+            // Rebuild mesh every frame with current camera position.
+            // Eliminates drift (no stale camera offset) and shutter (no frame gaps).
+            // Cost is negligible: ~5K vertices = ~60KB GPU upload per frame.
+            RebuildMesh();
 
             if (currentMeshRef == null) return;
 
@@ -235,15 +231,7 @@ namespace soundphysicsadapted
             rpi.GLDepthMask(false);
             rpi.GlToggleBlend(true);
 
-            // Camera-relative model-view matrix with drift compensation:
-            // Vertices were built relative to meshCam*; translate by (meshCam - currentCam)
-            // so they stay anchored to world positions between 4 Hz rebuilds.
-            Vec3d camNow = capi.World.Player.Entity.CameraPos;
             mvMat.Set(rpi.CameraMatrixOriginf);
-            mvMat.Translate(
-                (float)(meshCamX - camNow.X),
-                (float)(meshCamY - camNow.Y),
-                (float)(meshCamZ - camNow.Z));
 
             prog.Uniform("origin", origin);
             prog.UniformMatrix("projectionMatrix", rpi.CurrentProjectionMatrix);
@@ -294,10 +282,6 @@ namespace soundphysicsadapted
             indexOffset = 0;
 
             Vec3d cam = capi.World.Player.Entity.CameraPos;
-            // Store build-time camera for per-frame drift compensation
-            meshCamX = cam.X;
-            meshCamY = cam.Y;
-            meshCamZ = cam.Z;
 
             if (ShowBounces) AppendBounceBoxes(mesh, cam);
             if (ShowRays) AppendRayLines(mesh, cam);
