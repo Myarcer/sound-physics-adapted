@@ -835,10 +835,22 @@ namespace soundphysicsadapted
                         float pathFilter = smoothedOcc <= 0 ? 1.0f
                             : OcclusionCalculator.OcclusionToFilter(smoothedOcc);
 
+                        // DIFFRACTION ANGLE DARKENING:
+                        // Sounds bending around corners lose HF proportional to bend angle.
+                        // RepositionOffset / distance ≈ sin(diffraction angle).
+                        // At 0° bend (direct) → no extra darkening. At 90° bend → up to 30% HF loss.
+                        // This bridges the brightness gap between "almost clear" and "hard around corner",
+                        // making the occluded→clear transition smoother (gradual HF recovery as player
+                        // rounds the corner and the bend angle decreases).
+                        float reposOffset = (float)pathResult.Value.RepositionOffset;
+                        float bendRatio = distance > 0.1f ? Math.Clamp(reposOffset / distance, 0f, 1f) : 0f;
+                        float diffractionDarkening = 1f - bendRatio * 0.3f;
+                        pathFilter *= diffractionDarkening;
+
                         finalFilter = pathFilter;
 
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[4B-LPF] dOcc={occlusion:F2} bOcc={blendedOcc:F2} smooth={smoothedOcc:F2} filt={pathFilter:F3} clarity={pathClarity:P0} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
+                            $"[4B-LPF] dOcc={occlusion:F2} bOcc={blendedOcc:F2} smooth={smoothedOcc:F2} filt={pathFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} clarity={pathClarity:P0} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
                     }
 
                     if (updatedThisTick == 0 && pathResult.Value.RepositionOffset > 0.1)
