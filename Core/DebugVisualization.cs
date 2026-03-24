@@ -88,10 +88,20 @@ namespace soundphysicsadapted
         private readonly object _swapLock = new object();
 
         // === Fade / persistence ===
-        private float timeSinceCapture = 0f;   // seconds since last SwapBuffers
-        private const float VIZ_HOLD_SECONDS = 1.5f;  // full-opacity hold after capture
-        private const float VIZ_FADE_SECONDS = 1.5f;  // linear fade-to-zero after hold
-        private float currentFadeAlpha = 1f;          // computed once per render frame
+        // timeSinceCapture tracks when fresh data last arrived from any raytrace,
+        // NOT when the last swap happened. Fade starts only when sounds stop producing data.
+        private float timeSinceCapture = 0f;
+        private const float VIZ_HOLD_SECONDS = 2.0f;  // full-opacity hold after last data
+        private const float VIZ_FADE_SECONDS = 2.0f;  // linear fade-to-zero after hold
+        private float currentFadeAlpha = 1f;
+        private volatile bool newDataArrived = false;  // set by CaptureFromRaytracer, consumed by renderer
+
+        // === Accumulation ===
+        // Data accumulates across multiple ticks before swapping to active.
+        // This ensures ALL sounds that raytrace within the window contribute,
+        // preventing content oscillation (9 bounces one frame, 891 the next).
+        private float accumulationTimer = 0f;
+        private const float ACCUMULATION_WINDOW_S = 0.4f;  // 400ms — collects ~8 ticks of data
 
         // === Debug logging ===
         private float debugLogTimer = 0f;
@@ -124,15 +134,11 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Called by AudioPhysicsSystem at start of each update tick to reset capture tracking.
-        /// Clears ALL pending counters so this tick accumulates fresh data from all sounds.
+        /// Does NOT clear pending buffers — data accumulates across ticks until the next swap.
         /// </summary>
         public void ResetTickCapture()
         {
             capturedThisTick = false;
-            pendingRayCount = 0;
-            pendingBounceCount = 0;
-            pendingOpeningCount = 0;
-            pendingRepositionCount = 0;
         }
 
         /// <summary>
@@ -187,31 +193,34 @@ namespace soundphysicsadapted
                 meshDirty = true;
                 capturedThisTick = true;
                 debugCaptureCount++;
+                newDataArrived = true;
             }
         }
 
         /// <summary>
         /// Capture a ray segment for visualization.
         /// Called from AcousticRaytracer during the ray loop.
-        /// Lock not needed: rays are written between ResetTickCapture and CaptureFromRaytracer
-        /// (which holds _swapLock), and SwapBuffers only runs when meshDirty is true
-        /// (set at end of CaptureFromRaytracer under lock).
+        /// Lock required: with accumulation window, SwapBuffers can run on the render
+        /// thread while the game tick thread is mid-raytrace.
         /// </summary>
         public void CaptureRaySegment(
             double startX, double startY, double startZ,
             double endX, double endY, double endZ,
             int rayIndex, int bounceIndex)
         {
-            if (pendingRayCount >= pendingRays.Length) return;
-
-            pendingRays[pendingRayCount] = new RaySegment
+            lock (_swapLock)
             {
-                StartX = (float)startX, StartY = (float)startY, StartZ = (float)startZ,
-                EndX = (float)endX, EndY = (float)endY, EndZ = (float)endZ,
-                RayIndex = rayIndex,
-                BounceIndex = bounceIndex
-            };
-            pendingRayCount++;
+                if (pendingRayCount >= pendingRays.Length) return;
+
+                pendingRays[pendingRayCount] = new RaySegment
+                {
+                    StartX = (float)startX, StartY = (float)startY, StartZ = (float)startZ,
+                    EndX = (float)endX, EndY = (float)endY, EndZ = (float)endZ,
+                    RayIndex = rayIndex,
+                    BounceIndex = bounceIndex
+                };
+                pendingRayCount++;
+            }
         }
 
         /// <summary>
@@ -243,21 +252,39 @@ namespace soundphysicsadapted
         {
             if (!AnyActive || capi.World?.Player?.Entity == null) return;
 
-            timeSinceCapture += deltaTime;
             debugFramesSinceCapture++;
 
-            // Swap pending->active under lock to prevent mid-capture race
+            // Track data freshness: reset fade timer when new raytrace data arrives.
+            // This is separate from the swap — fade tracks when data STOPS arriving,
+            // not when we last swapped buffers.
+            if (newDataArrived)
+            {
+                timeSinceCapture = 0f;
+                newDataArrived = false;
+            }
+            else
+            {
+                timeSinceCapture += deltaTime;
+            }
+
+            // Accumulate pending data over a window before swapping to active.
+            // Collects rays/bounces from multiple sounds across several ticks,
+            // giving a complete picture rather than one tick's random subset.
             if (meshDirty)
             {
-                lock (_swapLock)
+                accumulationTimer += deltaTime;
+                if (accumulationTimer >= ACCUMULATION_WINDOW_S)
                 {
-                    if (meshDirty)
+                    lock (_swapLock)
                     {
-                        SwapBuffers();
-                        meshDirty = false;
-                        timeSinceCapture = 0f;
-                        debugFramesSinceCapture = 0;
-                        debugSwapCount++;
+                        if (meshDirty)
+                        {
+                            SwapBuffers();
+                            meshDirty = false;
+                            accumulationTimer = 0f;
+                            debugFramesSinceCapture = 0;
+                            debugSwapCount++;
+                        }
                     }
                 }
             }
@@ -355,6 +382,12 @@ namespace soundphysicsadapted
             activeRepositionCount = pendingRepositionCount;
 
             debugSoundsThisSwap = debugCaptureCount;
+
+            // Clear the new pending buffers (old active arrays) for next accumulation window
+            pendingBounceCount = 0;
+            pendingRayCount = 0;
+            pendingOpeningCount = 0;
+            pendingRepositionCount = 0;
         }
 
         private void RebuildMesh()
