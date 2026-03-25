@@ -635,7 +635,7 @@ namespace soundphysicsadapted
                     viz.CaptureFromRaytracer(
                         AcousticRaytracer.CacheableBouncePoints, AcousticRaytracer.CacheableBounceCount,
                         AcousticRaytracer.CacheableOpenings, AcousticRaytracer.CacheableOpeningCount,
-                        pathResult, soundPos, occlusion);
+                        pathResult, soundPos, playerPos, occlusion);
                 }
 
                 int? validatedSourceId = AudioRenderer.GetValidatedSourceId(sound);

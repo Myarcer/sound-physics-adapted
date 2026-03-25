@@ -34,6 +34,7 @@ namespace soundphysicsadapted
     public struct SoundOcclusionViz
     {
         public float PosX, PosY, PosZ;
+        public float PlayerX, PlayerY, PlayerZ;
         public float Occlusion;
     }
 
@@ -113,7 +114,7 @@ namespace soundphysicsadapted
         // === Fade / persistence ===
         // Each snapshot holds at full opacity for VIZ_HOLD_SECONDS after creation,
         // then fades linearly over VIZ_FADE_SECONDS. Old data persists on screen.
-        private const float VIZ_HOLD_SECONDS = 2.0f;  // full-opacity hold per snapshot
+        private const float VIZ_HOLD_SECONDS = 1.0f;  // full-opacity hold per snapshot
         private const float VIZ_FADE_SECONDS = 2.0f;  // linear fade-to-zero after hold
         private float currentFadeAlpha = 1f;           // set per-snapshot during mesh rebuild
         private volatile bool clearRequested = false;  // ClearAll sets this; render thread processes
@@ -178,7 +179,7 @@ namespace soundphysicsadapted
         public void CaptureFromRaytracer(
             BouncePoint[] bouncePoints, int bounceCount,
             OpeningData[] openings, int openingCount,
-            SoundPathResult? pathResult, Vec3d soundPos, float occlusion)
+            SoundPathResult? pathResult, Vec3d soundPos, Vec3d playerPos, float occlusion)
         {
             lock (_swapLock)
             {
@@ -218,6 +219,7 @@ namespace soundphysicsadapted
                     pendingOccViz[pendingOccVizCount] = new SoundOcclusionViz
                     {
                         PosX = (float)soundPos.X, PosY = (float)soundPos.Y, PosZ = (float)soundPos.Z,
+                        PlayerX = (float)playerPos.X, PlayerY = (float)playerPos.Y, PlayerZ = (float)playerPos.Z,
                         Occlusion = occlusion
                     };
                     pendingOccVizCount++;
@@ -669,9 +671,10 @@ namespace soundphysicsadapted
                     color = (200 << 24) | (0 << 16) | (0 << 8) | 255;     // Red
 
                 // cam IS the mesh origin, so endpoint in mesh space is (0,0,0).
-                // AppendLine subtracts cam, so pass cam as the world-space endpoint.
+                // AppendLine subtracts cam, so pass stored player pos as the world-space endpoint.
+                // Using stored player pos (not current cam) keeps lines stable in old snapshots.
                 AppendLine(mesh, ov.PosX, ov.PosY, ov.PosZ,
-                    cam.X, cam.Y, cam.Z, color, cam);
+                    ov.PlayerX, ov.PlayerY, ov.PlayerZ, color, cam);
             }
         }
 
