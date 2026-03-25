@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
@@ -41,7 +42,8 @@ namespace soundphysicsadapted
     /// Renders wireframe boxes and lines at sub-block precision using the VS wireframe shader.
     /// 
     /// MULTI-SOUND: Accumulates data from ALL sounds that raytrace each tick.
-    /// Data is double-buffered: game tick thread appends to pending, renderer swaps to active.
+    /// Data accumulates per tick, then commits as a VizSnapshot every 400ms.
+    /// All snapshots render simultaneously with independent per-snapshot fade timers.
     /// Mesh rebuilds every render frame with current camera position.
     /// </summary>
     public class DebugVisualization : IRenderer, IDisposable
@@ -86,29 +88,34 @@ namespace soundphysicsadapted
         // Track whether ANY sound captured viz data this tick
         private bool capturedThisTick = false;
 
-        // === Active data (snapshot for rendering) ===
-        private BouncePoint[] activeBounces = new BouncePoint[2048];
-        private int activeBounceCount;
-        private RaySegment[] activeRays = new RaySegment[2048];
-        private int activeRayCount;
-        private OpeningData[] activeOpenings = new OpeningData[96];
-        private int activeOpeningCount;
-        private RepositionPair[] activeRepositions = new RepositionPair[32];
-        private int activeRepositionCount;
-        private SoundOcclusionViz[] activeOccViz = new SoundOcclusionViz[64];
-        private int activeOccVizCount;
+        // === Snapshot storage: each accumulation window produces a VizSnapshot ===
+        // All snapshots render simultaneously; each fades independently based on age.
+        private class VizSnapshot
+        {
+            public BouncePoint[] Bounces = Array.Empty<BouncePoint>();
+            public int BounceCount;
+            public RaySegment[] Rays = Array.Empty<RaySegment>();
+            public int RayCount;
+            public OpeningData[] Openings = Array.Empty<OpeningData>();
+            public int OpeningCount;
+            public RepositionPair[] Repositions = Array.Empty<RepositionPair>();
+            public int RepositionCount;
+            public SoundOcclusionViz[] OccViz = Array.Empty<SoundOcclusionViz>();
+            public int OccVizCount;
+            public float Age; // seconds since committed
+        }
+        private readonly List<VizSnapshot> activeSnapshots = new List<VizSnapshot>();
 
         private volatile bool meshDirty = false;
         private readonly object _swapLock = new object();
 
         // === Fade / persistence ===
-        // timeSinceCapture tracks when fresh data last arrived from any raytrace,
-        // NOT when the last swap happened. Fade starts only when sounds stop producing data.
-        private float timeSinceCapture = 0f;
-        private const float VIZ_HOLD_SECONDS = 2.0f;  // full-opacity hold after last data
+        // Each snapshot holds at full opacity for VIZ_HOLD_SECONDS after creation,
+        // then fades linearly over VIZ_FADE_SECONDS. Old data persists on screen.
+        private const float VIZ_HOLD_SECONDS = 2.0f;  // full-opacity hold per snapshot
         private const float VIZ_FADE_SECONDS = 2.0f;  // linear fade-to-zero after hold
-        private float currentFadeAlpha = 1f;
-        private volatile bool newDataArrived = false;  // set by CaptureFromRaytracer, consumed by renderer
+        private float currentFadeAlpha = 1f;           // set per-snapshot during mesh rebuild
+        private volatile bool clearRequested = false;  // ClearAll sets this; render thread processes
 
         // === Accumulation ===
         // Data accumulates across multiple ticks before swapping to active.
@@ -218,7 +225,6 @@ namespace soundphysicsadapted
                 meshDirty = true;
                 capturedThisTick = true;
                 debugCaptureCount++;
-                newDataArrived = true;
             }
         }
 
@@ -263,38 +269,25 @@ namespace soundphysicsadapted
             ShowOcclusion = false;
             ShowReposition = false;
             ShowOpenings = false;
-
-            activeBounceCount = 0;
-            activeRayCount = 0;
-            activeOpeningCount = 0;
-            activeRepositionCount = 0;
-
-            currentMeshRef?.Dispose();
-            currentMeshRef = null;
+            clearRequested = true;
         }
 
         public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
         {
+            // Process clear request from game thread (ClearAll)
+            if (clearRequested)
+            {
+                clearRequested = false;
+                activeSnapshots.Clear();
+                currentMeshRef?.Dispose();
+                currentMeshRef = null;
+            }
+
             if (!AnyActive || capi.World?.Player?.Entity == null) return;
 
             debugFramesSinceCapture++;
 
-            // Track data freshness: reset fade timer when new raytrace data arrives.
-            // This is separate from the swap — fade tracks when data STOPS arriving,
-            // not when we last swapped buffers.
-            if (newDataArrived)
-            {
-                timeSinceCapture = 0f;
-                newDataArrived = false;
-            }
-            else
-            {
-                timeSinceCapture += deltaTime;
-            }
-
-            // Accumulate pending data over a window before swapping to active.
-            // Collects rays/bounces from multiple sounds across several ticks,
-            // giving a complete picture rather than one tick's random subset.
+            // Accumulate pending data over a window before committing as a new snapshot.
             if (meshDirty)
             {
                 accumulationTimer += deltaTime;
@@ -304,7 +297,7 @@ namespace soundphysicsadapted
                     {
                         if (meshDirty)
                         {
-                            SwapBuffers();
+                            CommitSnapshot();
                             meshDirty = false;
                             accumulationTimer = 0f;
                             debugFramesSinceCapture = 0;
@@ -314,11 +307,14 @@ namespace soundphysicsadapted
                 }
             }
 
-            // Compute fade alpha: hold at full opacity, then linear fade to zero
-            if (timeSinceCapture <= VIZ_HOLD_SECONDS)
-                currentFadeAlpha = 1f;
-            else
-                currentFadeAlpha = Math.Max(0f, 1f - (timeSinceCapture - VIZ_HOLD_SECONDS) / VIZ_FADE_SECONDS);
+            // Age all snapshots and remove fully faded ones
+            float totalLifetime = VIZ_HOLD_SECONDS + VIZ_FADE_SECONDS;
+            for (int i = activeSnapshots.Count - 1; i >= 0; i--)
+            {
+                activeSnapshots[i].Age += deltaTime;
+                if (activeSnapshots[i].Age > totalLifetime)
+                    activeSnapshots.RemoveAt(i);
+            }
 
             // Debug logging (1 Hz when debugMode + viz active)
             var config = SoundPhysicsAdaptedModSystem.Config;
@@ -327,9 +323,19 @@ namespace soundphysicsadapted
                 debugLogTimer += deltaTime;
                 if (debugLogTimer >= 1f)
                 {
+                    int totalBounces = 0, totalRays = 0, totalOpenings = 0, totalRepos = 0;
+                    float youngestAge = float.MaxValue;
+                    for (int i = 0; i < activeSnapshots.Count; i++)
+                    {
+                        totalBounces += activeSnapshots[i].BounceCount;
+                        totalRays += activeSnapshots[i].RayCount;
+                        totalOpenings += activeSnapshots[i].OpeningCount;
+                        totalRepos += activeSnapshots[i].RepositionCount;
+                        if (activeSnapshots[i].Age < youngestAge) youngestAge = activeSnapshots[i].Age;
+                    }
                     SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[VIZ-RENDER] rays={activeRayCount} bounces={activeBounceCount} openings={activeOpeningCount} repos={activeRepositionCount} " +
-                        $"fade={currentFadeAlpha:F2} age={timeSinceCapture:F1}s framesStale={debugFramesSinceCapture} " +
+                        $"[VIZ-RENDER] snaps={activeSnapshots.Count} rays={totalRays} bounces={totalBounces} openings={totalOpenings} repos={totalRepos} " +
+                        $"youngest={youngestAge:F1}s framesStale={debugFramesSinceCapture} " +
                         $"swaps={debugSwapCount} captures={debugCaptureCount} sounds={debugSoundsThisSwap}");
                     debugLogTimer = 0f;
                     debugSwapCount = 0;
@@ -338,8 +344,8 @@ namespace soundphysicsadapted
                 }
             }
 
-            // Fully faded out - nothing to render
-            if (currentFadeAlpha <= 0f)
+            // Nothing to render if no snapshots alive
+            if (activeSnapshots.Count == 0)
             {
                 currentMeshRef?.Dispose();
                 currentMeshRef = null;
@@ -378,43 +384,50 @@ namespace soundphysicsadapted
             rpi.GLDepthMask(true);
         }
 
-        private void SwapBuffers()
+        private void CommitSnapshot()
         {
             // Note: caller holds _swapLock
+            var snap = new VizSnapshot();
 
-            // Swap bounce data
-            var tmpBounces = activeBounces;
-            activeBounces = pendingBounces;
-            pendingBounces = tmpBounces;
-            activeBounceCount = pendingBounceCount;
+            if (pendingBounceCount > 0)
+            {
+                snap.Bounces = new BouncePoint[pendingBounceCount];
+                Array.Copy(pendingBounces, 0, snap.Bounces, 0, pendingBounceCount);
+                snap.BounceCount = pendingBounceCount;
+            }
 
-            // Swap ray data
-            var tmpRays = activeRays;
-            activeRays = pendingRays;
-            pendingRays = tmpRays;
-            activeRayCount = pendingRayCount;
+            if (pendingRayCount > 0)
+            {
+                snap.Rays = new RaySegment[pendingRayCount];
+                Array.Copy(pendingRays, 0, snap.Rays, 0, pendingRayCount);
+                snap.RayCount = pendingRayCount;
+            }
 
-            // Swap opening data
-            var tmpOpenings = activeOpenings;
-            activeOpenings = pendingOpenings;
-            pendingOpenings = tmpOpenings;
-            activeOpeningCount = pendingOpeningCount;
+            if (pendingOpeningCount > 0)
+            {
+                snap.Openings = new OpeningData[pendingOpeningCount];
+                Array.Copy(pendingOpenings, 0, snap.Openings, 0, pendingOpeningCount);
+                snap.OpeningCount = pendingOpeningCount;
+            }
 
-            // Swap reposition data
-            var tmpRepos = activeRepositions;
-            activeRepositions = pendingRepositions;
-            pendingRepositions = tmpRepos;
-            activeRepositionCount = pendingRepositionCount;
+            if (pendingRepositionCount > 0)
+            {
+                snap.Repositions = new RepositionPair[pendingRepositionCount];
+                Array.Copy(pendingRepositions, 0, snap.Repositions, 0, pendingRepositionCount);
+                snap.RepositionCount = pendingRepositionCount;
+            }
 
-            // Swap occlusion viz data
-            var tmpOcc = activeOccViz;
-            activeOccViz = pendingOccViz;
-            pendingOccViz = tmpOcc;
-            activeOccVizCount = pendingOccVizCount;
+            if (pendingOccVizCount > 0)
+            {
+                snap.OccViz = new SoundOcclusionViz[pendingOccVizCount];
+                Array.Copy(pendingOccViz, 0, snap.OccViz, 0, pendingOccVizCount);
+                snap.OccVizCount = pendingOccVizCount;
+            }
 
+            activeSnapshots.Add(snap);
             debugSoundsThisSwap = debugCaptureCount;
 
-            // Clear the new pending buffers (old active arrays) for next accumulation window
+            // Clear pending for next accumulation window
             pendingBounceCount = 0;
             pendingRayCount = 0;
             pendingOpeningCount = 0;
@@ -431,11 +444,25 @@ namespace soundphysicsadapted
 
             Vec3d cam = capi.World.Player.Entity.CameraPos;
 
-            if (BounceColorMode > 0) AppendBounceBoxes(mesh, cam);
-            if (ShowRays) AppendRayLines(mesh, cam);
-            if (ShowOcclusion) AppendOcclusionLines(mesh, cam);
-            if (ShowReposition && activeRepositionCount > 0) AppendRepositionLines(mesh, cam);
-            if (ShowOpenings) AppendOpeningBoxes(mesh, cam);
+            // Render oldest snapshots first so newest draws on top
+            for (int s = 0; s < activeSnapshots.Count; s++)
+            {
+                var snap = activeSnapshots[s];
+
+                // Per-snapshot fade alpha
+                if (snap.Age <= VIZ_HOLD_SECONDS)
+                    currentFadeAlpha = 1f;
+                else
+                    currentFadeAlpha = Math.Max(0f, 1f - (snap.Age - VIZ_HOLD_SECONDS) / VIZ_FADE_SECONDS);
+
+                if (currentFadeAlpha <= 0f) continue;
+
+                if (BounceColorMode > 0 && snap.BounceCount > 0) AppendBounceBoxes(mesh, cam, snap.Bounces, snap.BounceCount);
+                if (ShowRays && snap.RayCount > 0) AppendRayLines(mesh, cam, snap.Rays, snap.RayCount);
+                if (ShowOcclusion && snap.OccVizCount > 0) AppendOcclusionLines(mesh, cam, snap.OccViz, snap.OccVizCount);
+                if (ShowReposition && snap.RepositionCount > 0) AppendRepositionLines(mesh, cam, snap.Repositions, snap.RepositionCount);
+                if (ShowOpenings && snap.OpeningCount > 0) AppendOpeningBoxes(mesh, cam, snap.Openings, snap.OpeningCount);
+            }
 
             if (vertexOffset == 0)
             {
@@ -544,11 +571,11 @@ namespace soundphysicsadapted
         /// BounceColorMode 1 = reflectivity: White/Yellow/DarkRed by surface reflectivity.
         /// BounceColorMode 2 = reverb slots: Blue/Green/Yellow/Red by which reverb slot the bounce feeds.
         /// </summary>
-        private void AppendBounceBoxes(MeshData mesh, Vec3d cam)
+        private void AppendBounceBoxes(MeshData mesh, Vec3d cam, BouncePoint[] bounces, int count)
         {
-            for (int i = 0; i < activeBounceCount; i++)
+            for (int i = 0; i < count; i++)
             {
-                ref BouncePoint bp = ref activeBounces[i];
+                ref BouncePoint bp = ref bounces[i];
                 int color;
 
                 if (BounceColorMode == 2)
@@ -590,11 +617,11 @@ namespace soundphysicsadapted
         /// Rays: line segments from source through bounce chain.
         /// Color gradient by bounce depth: Cyan(0) → Green(1) → Yellow(2) → Red(3+).
         /// </summary>
-        private void AppendRayLines(MeshData mesh, Vec3d cam)
+        private void AppendRayLines(MeshData mesh, Vec3d cam, RaySegment[] rays, int count)
         {
-            for (int i = 0; i < activeRayCount; i++)
+            for (int i = 0; i < count; i++)
             {
-                ref RaySegment seg = ref activeRays[i];
+                ref RaySegment seg = ref rays[i];
                 int color;
                 switch (seg.BounceIndex)
                 {
@@ -613,15 +640,15 @@ namespace soundphysicsadapted
         /// Occlusion: line from each sound source to the player, colored by
         /// occlusion severity (green=clear, yellow=partial, red=heavy).
         /// </summary>
-        private void AppendOcclusionLines(MeshData mesh, Vec3d cam)
+        private void AppendOcclusionLines(MeshData mesh, Vec3d cam, SoundOcclusionViz[] occViz, int count)
         {
             // Player endpoint = cam (CameraPos), which is the rendering origin.
             // In camera-relative mesh space this is (0,0,0) — lines converge at camera.
             // Using Entity.Pos.XYZ would produce an offset (entity pos ≠ camera origin)
             // causing lines to drift ahead of the player's movement direction.
-            for (int i = 0; i < activeOccVizCount; i++)
+            for (int i = 0; i < count; i++)
             {
-                ref SoundOcclusionViz ov = ref activeOccViz[i];
+                ref SoundOcclusionViz ov = ref occViz[i];
                 int color;
                 if (ov.Occlusion < 0.3f)
                     color = (200 << 24) | (0 << 16) | (255 << 8) | 0;      // Green
@@ -643,15 +670,15 @@ namespace soundphysicsadapted
         /// Reposition: for each repositioned sound, green box at original sound pos,
         /// orange box at apparent pos, yellow line connecting them.
         /// </summary>
-        private void AppendRepositionLines(MeshData mesh, Vec3d cam)
+        private void AppendRepositionLines(MeshData mesh, Vec3d cam, RepositionPair[] repos, int count)
         {
             int greenColor = (200 << 24) | (0 << 16) | (255 << 8) | 0;     // Green
             int orangeColor = (200 << 24) | (0 << 16) | (165 << 8) | 255;  // Orange
             int yellowColor = (200 << 24) | (0 << 16) | (255 << 8) | 255;  // Yellow
 
-            for (int i = 0; i < activeRepositionCount; i++)
+            for (int i = 0; i < count; i++)
             {
-                ref RepositionPair rp = ref activeRepositions[i];
+                ref RepositionPair rp = ref repos[i];
                 AppendWireframeBox(mesh, rp.SrcX, rp.SrcY, rp.SrcZ, 0.08f, greenColor, cam);
                 AppendWireframeBox(mesh, rp.AppX, rp.AppY, rp.AppZ, 0.08f, orangeColor, cam);
                 AppendLine(mesh, rp.SrcX, rp.SrcY, rp.SrcZ,
@@ -663,11 +690,11 @@ namespace soundphysicsadapted
         /// Openings: cyan wireframe boxes at each opening probe exit.
         /// Brighter alpha for low OccToPlayer (clear path to player).
         /// </summary>
-        private void AppendOpeningBoxes(MeshData mesh, Vec3d cam)
+        private void AppendOpeningBoxes(MeshData mesh, Vec3d cam, OpeningData[] openings, int count)
         {
-            for (int i = 0; i < activeOpeningCount; i++)
+            for (int i = 0; i < count; i++)
             {
-                ref OpeningData op = ref activeOpenings[i];
+                ref OpeningData op = ref openings[i];
                 byte alpha = (byte)Math.Clamp((int)(255 - op.OccToPlayer * 80), 80, 255);
                 int color = (alpha << 24) | (255 << 16) | (255 << 8) | 0; // Cyan
 
