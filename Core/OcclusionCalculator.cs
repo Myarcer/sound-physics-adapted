@@ -577,8 +577,8 @@ namespace soundphysicsadapted
                         return false;
                     }
 
-                    // SIMPLIFIED PARTIAL BLOCK PATH for weather:
-                    // Apply material occlusion for blocks with substantial collision geometry.
+                    // PARTIAL BLOCK PATH for weather:
+                    // Ray-AABB intersection for accurate sub-block handling.
                     // Tiny-volume blocks (beams, chiseled pillars, rails) are weather-transparent
                     // — rain passes right through them, same as foliage/decorative items.
                     // Doors/trapdoors still get interactable treatment (separate accumulator).
@@ -598,6 +598,21 @@ namespace soundphysicsadapted
                         if (totalVol < 0.15f)
                         {
                             // Tiny collision volume — weather-transparent (beams, pillars, rails)
+                            if (previousBlockWasOccluding)
+                            {
+                                entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                                hasEntryPoint = true;
+                            }
+                            previousBlockWasOccluding = false;
+                            return false;
+                        }
+
+                        // Ray-AABB check: does the ray actually hit the collision geometry?
+                        // Half-slabs, stairs etc. only occlude if the ray passes through
+                        // their actual shape, not just their blockspace.
+                        if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
+                        {
+                            // Ray misses geometry — pass through empty part of sub-block
                             if (previousBlockWasOccluding)
                             {
                                 entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
