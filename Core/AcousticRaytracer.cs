@@ -212,10 +212,11 @@ namespace soundphysicsadapted
                     float reflectivity = GetBlockReflectivity(hit.Value.block, lastHitBlock, lastHitNormal, blockAccessor);
                     bounceReflectivity[bounce] += reflectivity;
 
-                    // Calculate bounce point offset from surface
-                    double bpX = lastHitPos.X + lastHitNormal.X * 0.15;
-                    double bpY = lastHitPos.Y + lastHitNormal.Y * 0.15;
-                    double bpZ = lastHitPos.Z + lastHitNormal.Z * 0.15;
+                    // Tiny epsilon offset along normal to prevent path-occlusion raycast
+                    // from re-hitting the source wall. SPR uses 0.001 for shared-airspace only.
+                    double bpX = lastHitPos.X + lastHitNormal.X * 0.01;
+                    double bpY = lastHitPos.Y + lastHitNormal.Y * 0.01;
+                    double bpZ = lastHitPos.Z + lastHitNormal.Z * 0.01;
 
                     _reusableBouncePoint.Set(bpX, bpY, bpZ);
 
