@@ -328,14 +328,9 @@ namespace soundphysicsadapted
                 {
                     // NON-SOLID BLOCK PATH: Only ~5% of DDA-visited blocks reach here.
                     // Doors, fences, trapdoors, multiblock spacers, foliage, etc.
-
-                    // OPEN DOOR/GATE CHECK: cached per block ID — very cheap.
-                    // Doors/gates with "opened" in their code path are fully transparent.
-                    if (BlockClassification.IsOpenInteractable(block))
-                    {
-                        if (verboseLog) ddaTrace.Append($"  DDA open-gate skip: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z})\n");
-                        return false; // Continue — treat as air
-                    }
+                    // Doors handled purely by AABB geometry — open doors have collision
+                    // boxes moved to the side, so rays naturally pass through the opening.
+                    // Closed doors present their panel in the doorway for ray intersection.
 
                     // MULTIBLOCK SPACER CHECK: prefix cached per block ID.
                     // Only blocks starting with "multiblock-" do the expensive controller lookup.
@@ -557,19 +552,8 @@ namespace soundphysicsadapted
                 else
                 {
                     // NON-SOLID BLOCK PATH: Only ~5% of DDA-visited blocks reach here.
-
-                    // OPEN DOOR/GATE CHECK: cached per block ID — very cheap.
-                    if (BlockClassification.IsOpenInteractable(block))
-                    {
-                        // Treat same as air — track occlusion-to-open transition
-                        if (previousBlockWasOccluding)
-                        {
-                            entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
-                            hasEntryPoint = true;
-                        }
-                        previousBlockWasOccluding = false;
-                        return false;
-                    }
+                    // Doors handled purely by AABB geometry — open doors have collision
+                    // boxes moved to the side, so rays naturally pass through the opening.
 
                     // MULTIBLOCK SPACER CHECK: prefix cached per block ID.
                     // Only blocks starting with "multiblock-" do the expensive controller lookup.
