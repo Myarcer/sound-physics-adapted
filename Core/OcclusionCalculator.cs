@@ -343,7 +343,19 @@ namespace soundphysicsadapted
                     // Check if ray actually intersects the block's collision geometry.
                     collisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
                     var collisionBoxes = block.GetCollisionBoxes(blockAccessor, collisionCheckPos);
-                    if (collisionBoxes == null || collisionBoxes.Length == 0)
+
+                    // DOOR/GATE/TRAPDOOR: skip ray-AABB test entirely.
+                    // Door panels are ~3/16 block thick — the slab intersection test
+                    // frequently misses at oblique angles, producing false pass-throughs
+                    // even for closed doors. If the DDA stepped into this block cell
+                    // and it's an interactable (door/gate), apply override occlusion directly.
+                    if (BlockClassification.IsWeatherInteractable(block))
+                    {
+                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                        if (verboseLog)
+                            ddaTrace.Append($"  DDA door-hit: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2}\n");
+                    }
+                    else if (collisionBoxes == null || collisionBoxes.Length == 0)
                     {
                         // No collision geometry — foliage path.
                         // Blocks you walk through: leaves, flowers, grass, paintings, etc.
@@ -596,10 +608,16 @@ namespace soundphysicsadapted
                             return false;
                         }
 
-                        // Ray-AABB check: does the ray actually hit the collision geometry?
-                        // Half-slabs, stairs etc. only occlude if the ray passes through
-                        // their actual shape, not just their blockspace.
-                        if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
+                        // DOOR/GATE/TRAPDOOR: skip ray-AABB test.
+                        // Thin panel geometry causes false ray misses at oblique angles.
+                        // If DDA stepped into this block cell and it's a door/gate,
+                        // apply override occlusion directly.
+                        if (BlockClassification.IsWeatherInteractable(block))
+                        {
+                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                            isInteractable = true;
+                        }
+                        else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
                         {
                             // Ray misses geometry — pass through empty part of sub-block
                             if (previousBlockWasOccluding)
@@ -610,9 +628,11 @@ namespace soundphysicsadapted
                             previousBlockWasOccluding = false;
                             return false;
                         }
-
-                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                        isInteractable = BlockClassification.IsWeatherInteractable(block);
+                        else
+                        {
+                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                            isInteractable = BlockClassification.IsWeatherInteractable(block);
+                        }
                     }
                     else
                     {
