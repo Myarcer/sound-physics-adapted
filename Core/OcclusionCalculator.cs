@@ -504,6 +504,14 @@ namespace soundphysicsadapted
             int steppedZ = (int)Math.Floor(from.Z - ndz * 0.1);
             bool skipFirstBlock = (startX == steppedX && startY == steppedY && startZ == steppedZ);
 
+            // Destination block skip: all weather rays converge on playerEarPos.
+            // Sub-blocks at the player's feet (ladders, half-slabs) have collision
+            // volume >= 0.15 and would occlude EVERY ray, spiking OcclusionFactor.
+            // The block the player is standing inside shouldn't occlude sound TO them.
+            int destX = (int)Math.Floor(to.X);
+            int destY = (int)Math.Floor(to.Y);
+            int destZ = (int)Math.Floor(to.Z);
+
             int maxDDASteps = config.MaxDDASteps;
             bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
@@ -519,6 +527,11 @@ namespace soundphysicsadapted
                     previousBlockWasOccluding = false;
                     return false;
                 }
+
+                // Skip destination block (player position) — sub-blocks here
+                // (ladders, half-slabs) shouldn't self-occlude the listener
+                if (ctx.X == destX && ctx.Y == destY && ctx.Z == destZ)
+                    return false;
 
                 float blockOcclusion = 0f;
                 bool isInteractable = false;
