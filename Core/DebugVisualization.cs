@@ -670,11 +670,10 @@ namespace soundphysicsadapted
                 else
                     color = (200 << 24) | (0 << 16) | (0 << 8) | 255;     // Red
 
-                // cam IS the mesh origin, so endpoint in mesh space is (0,0,0).
-                // AppendLine subtracts cam, so pass stored player pos as the world-space endpoint.
-                // Using stored player pos (not current cam) keeps lines stable in old snapshots.
+                // Endpoint always tracks current camera so lines stay attached to the player head.
+                // AppendLine subtracts cam from both endpoints, so cam becomes (0,0,0) in mesh space.
                 AppendLine(mesh, ov.PosX, ov.PosY, ov.PosZ,
-                    ov.PlayerX, ov.PlayerY, ov.PlayerZ, color, cam);
+                    cam.X, cam.Y, cam.Z, color, cam);
             }
         }
 
