@@ -10,10 +10,14 @@ namespace soundphysicsadapted
     /// Calculates weather enclosure using two complementary metrics derived from
     /// AAA game audio principles (Wwise obstruction vs occlusion separation):
     ///
-    /// 1. Sky Coverage (heightmap sampling, ~50 points, radius 8):
-    ///    "What fraction of the sky above me is blocked by structure?"
+    /// 1. Sky Coverage (heightmap sampling + DDA verification, ~312 points, radius 12):
+    ///    "What fraction of the sky above me is blocked by solid structure?"
     ///    Drives VOLUME of ambient weather bed.
     ///    One opening doesn't collapse the entire room's coverage.
+    ///    Heightmap pre-filters covered columns, then vertical DDA ray confirms
+    ///    at least one IsSolidForOcclusion block exists above the player.
+    ///    Partial blocks (half slabs, ladders, glass panes) that register in the
+    ///    heightmap but aren't solid are correctly treated as exposed.
     ///
     /// 2. Occlusion Factor (multi-height DDA verification on exposed columns):
     ///    "Can I hear rain falling at ANY visible height in this column?"
@@ -34,7 +38,7 @@ namespace soundphysicsadapted
     /// Also outputs verified open-air rain positions for Phase 5B positional
     /// source clustering.
     ///
-    /// Performance: ~312 heightmap O(1) lookups + ~640 probe march O(1) + ~90 DDA rays ≈ 0.95ms every 100ms.
+    /// Performance: ~312 heightmap O(1) lookups + ~312 vertical DDA rays (1-12 blocks each) + ~640 probe march O(1) + ~90 DDA rays ≈ 1.2ms every 100ms.
     /// </summary>
     public class WeatherEnclosureCalculator : IDisposable
     {
@@ -394,9 +398,32 @@ namespace soundphysicsadapted
 
                 if (ctx.PlayerY < rainHeight)
                 {
-                    // Player is BELOW the rain-blocking surface at this column -> covered
-                    coveredWeight += sp.Weight;
-                    ctx.Viz?.AddSample(sampleX, ctx.PlayerY, sampleZ, EnclosureDebugVisualizer.VizColor.Covered);
+                    // Heightmap says player is below rain-blocking surface.
+                    // Verify with vertical DDA: partial blocks (half slabs, ladders, glass panes)
+                    // register in the heightmap but don't actually provide solid coverage.
+                    if (VerifyColumnCoverage(ctx, sampleX, sampleZ, rainHeight))
+                    {
+                        coveredWeight += sp.Weight;
+                        ctx.Viz?.AddSample(sampleX, ctx.PlayerY, sampleZ, EnclosureDebugVisualizer.VizColor.Covered);
+                    }
+                    else
+                    {
+                        // Heightmap says covered but no solid block above — treat as exposed
+                        int yDiff = Math.Abs(rainHeight - ctx.PlayerY);
+                        if (yDiff <= MAX_Y_DIFF)
+                        {
+                            ctx.ExposedCandidates.Add(new ExposedCandidate
+                            {
+                                WorldX = sampleX,
+                                WorldZ = sampleZ,
+                                RainY = rainHeight,
+                                HorizontalDist = sp.Distance,
+                                Weight = sp.Weight
+                            });
+
+                            ctx.Viz?.AddSample(sampleX, ctx.PlayerY, sampleZ, EnclosureDebugVisualizer.VizColor.Exposed);
+                        }
+                    }
                 }
                 else
                 {
@@ -419,6 +446,40 @@ namespace soundphysicsadapted
             }
 
             SkyCoverage = totalWeight > 0f ? coveredWeight / totalWeight : 0f;
+        }
+
+        /// <summary>
+        /// Verify that a column actually has solid coverage above the player using a vertical DDA ray.
+        /// The heightmap reports this column as covered (rainHeight > playerY), but partial blocks
+        /// like ladders, half slabs, and glass panes register in the heightmap without truly blocking
+        /// weather. Casts a ray straight up to confirm at least one IsSolidForOcclusion block exists.
+        /// Does NOT skip the starting block — the player may be inside a half-slab wall's block space,
+        /// and skipping it would incorrectly report indoor positions as exposed.
+        /// </summary>
+        private static bool VerifyColumnCoverage(ScanContext ctx, int sampleX, int sampleZ, int rainHeight)
+        {
+            // Pure vertical ray: player Y up to rain height.
+            // Very cheap — only steps Y axis, typically 1-12 blocks.
+            Vec3d from = new Vec3d(sampleX + 0.5, ctx.PlayerEarPos.Y - 0.5, sampleZ + 0.5);
+            Vec3d to = new Vec3d(sampleX + 0.5, rainHeight + 1.0, sampleZ + 0.5);
+
+            bool foundSolid = false;
+            DDABlockTraversal.Traverse(from, to, ctx.BlockAccessor, (ref DDABlockTraversal.TraversalContext ddaCtx) =>
+            {
+                Block block = ddaCtx.Block;
+                if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
+                    return false;
+
+                if (BlockClassification.IsSolidForOcclusion(block))
+                {
+                    foundSolid = true;
+                    return true; // Stop — confirmed solid coverage
+                }
+
+                return false;
+            }, skipFirst: false);
+
+            return foundSolid;
         }
 
         /// <summary>

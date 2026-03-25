@@ -375,8 +375,6 @@ namespace soundphysicsadapted
                     },
                     TreatAsFullCube = new List<string>
                     {
-                        // Leaded glass panes fill most of the block - skip expensive AABB testing
-                        "game:glasspane-leaded-*",
                         // ALL slanted roofing: collision boxes are sloped geometry that
                         // diagonal DDA rays frequently miss. Treat as full cube so the
                         // block's occlusion value (override or material) is always applied.

@@ -265,6 +265,21 @@ namespace soundphysicsadapted
                         materialConfig.Version = 3;
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v3: added decorative block overrides (toolrack, torchholder, lantern, anvil, etc.)");
                     }
+
+                    // Version 4 migration: remove glass panes from TreatAsFullCube.
+                    // Glass panes are partial blocks that shouldn't be treated as full cubes.
+                    // The new DDA-verified sky coverage scan properly handles partial blocks,
+                    // so the workaround is no longer needed.
+                    if (materialConfig.Version < 4)
+                    {
+                        if (materialConfig.Occlusion.TreatAsFullCube != null)
+                        {
+                            materialConfig.Occlusion.TreatAsFullCube.RemoveAll(p => p.Contains("glasspane"));
+                        }
+
+                        materialConfig.Version = 4;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v4: removed glass panes from TreatAsFullCube (DDA sky coverage handles partial blocks)");
+                    }
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");
