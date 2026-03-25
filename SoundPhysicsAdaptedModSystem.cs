@@ -296,6 +296,35 @@ namespace soundphysicsadapted
                         materialConfig.Version = 4;
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v4: added knapping/clayforming surface + loose ground item overrides");
                     }
+
+                    // Version 5 migration: fix door/gate override patterns
+                    // Old patterns required state suffix ("door-*-closed-*") that VS doors
+                    // don't have (e.g. "door-solid-aged"). Replace with broad prefixes.
+                    // Open/closed is now handled by collision geometry, not code matching.
+                    if (materialConfig.Version < 5)
+                    {
+                        var overrides = materialConfig.Occlusion.BlockOverrides;
+                        if (overrides != null)
+                        {
+                            // Remove broken state-specific patterns
+                            overrides.Remove("game:door-*-closed-*");
+                            overrides.Remove("game:door-*-opened-*");
+                            overrides.Remove("game:trapdoor-*-closed-*");
+                            overrides.Remove("game:trapdoor-*-opened-*");
+                            // Add broad patterns matching actual VS block codes
+                            if (!overrides.ContainsKey("game:door-*"))
+                                overrides["game:door-*"] = 0.8f;
+                            if (!overrides.ContainsKey("game:metaldoor-*"))
+                                overrides["game:metaldoor-*"] = 0.9f;
+                            if (!overrides.ContainsKey("game:trapdoor-*"))
+                                overrides["game:trapdoor-*"] = 0.7f;
+                            if (!overrides.ContainsKey("game:*gate*"))
+                                overrides["game:*gate*"] = 0.8f;
+                        }
+
+                        materialConfig.Version = 5;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v5: fixed door/gate override patterns (broad prefix match)");
+                    }
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");

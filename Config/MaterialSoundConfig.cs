@@ -318,12 +318,14 @@ namespace soundphysicsadapted
                     },
                     BlockOverrides = new Dictionary<string, float>
                     {
-                        // Doors
-                        { "game:door-*-closed-*", 0.8f },
-                        { "game:door-*-opened-*", 0.05f },
+                        // Doors — broad patterns match all states (open/closed handled by geometry)
+                        // Override prevents volume scaling from clobbering thin panel occlusion
+                        { "game:door-*", 0.8f },
+                        { "game:metaldoor-*", 0.9f },
                         // Trapdoors
-                        { "game:trapdoor-*-closed-*", 0.7f },
-                        { "game:trapdoor-*-opened-*", 0.05f },
+                        { "game:trapdoor-*", 0.7f },
+                        // Gates — fencegate, gate3x3, wicketgate, portcullis
+                        { "game:*gate*", 0.8f },
                         // Soft materials
                         { "game:wool-*", 0.4f },
                         { "game:carpet-*", 0.3f },
