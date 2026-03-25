@@ -318,16 +318,12 @@ namespace soundphysicsadapted
                     },
                     BlockOverrides = new Dictionary<string, float>
                     {
-                        // Doors — open doors are already filtered by IsOpenInteractable
-                        // before reaching GetBlockOcclusion, so no opened patterns needed.
-                        // VS door codes have NO "closed" suffix (e.g. "door-solid-aged"),
-                        // so we match broadly on prefix.
-                        { "game:door-*", 0.8f },
-                        { "game:metaldoor-*", 0.9f },
-                        // Trapdoors — same: closed trapdoors have no state suffix
-                        { "game:trapdoor-*", 0.7f },
-                        // Gates — fencegate, gate3x3, wicketgate, portcullis variants
-                        { "game:*gate*", 0.8f },
+                        // Doors
+                        { "game:door-*-closed-*", 0.8f },
+                        { "game:door-*-opened-*", 0.05f },
+                        // Trapdoors
+                        { "game:trapdoor-*-closed-*", 0.7f },
+                        { "game:trapdoor-*-opened-*", 0.05f },
                         // Soft materials
                         { "game:wool-*", 0.4f },
                         { "game:carpet-*", 0.3f },
