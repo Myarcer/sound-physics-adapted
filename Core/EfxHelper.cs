@@ -18,6 +18,7 @@ namespace soundphysicsadapted
         private static MethodInfo alGetErrorMethod;
         private static Type filterFloatType;
         private static Type filterIntegerType;
+        private static object lowpassGainValue;
         private static object lowpassGainHFValue;
         private static object filterTypeValue;
 
@@ -81,6 +82,18 @@ namespace soundphysicsadapted
                     api.Logger.Warning("[EfxHelper] FilterFloat or FilterInteger enum not found");
                     return false;
                 }
+
+                // Get LowpassGain enum value (overall volume through filter)
+                try
+                {
+                    lowpassGainValue = Enum.Parse(filterFloatType, "LowpassGain");
+                }
+                catch
+                {
+                    // Try numeric value (LowpassGain = 1 in OpenAL spec)
+                    lowpassGainValue = Enum.ToObject(filterFloatType, 1);
+                }
+                api.Logger.Debug($"[EfxHelper] LowpassGain value: {lowpassGainValue}");
 
                 // Get LowpassGainHF enum value
                 try
@@ -233,6 +246,9 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Configure filter as lowpass with given GAINHF value.
+        /// Also sets AL_LOWPASS_GAIN (overall volume attenuation) using SPR formula:
+        /// directGain = pow(gainHF, 0.1) — gentle overall volume reduction that
+        /// preserves low-frequency content while reducing perceived loudness through walls.
         /// </summary>
         public static bool ConfigureLowpass(int filterId, float gainHF)
         {
@@ -242,7 +258,6 @@ namespace soundphysicsadapted
             try
             {
                 // Set filter type to lowpass (value = 1)
-                // We need to find and call Filter(int, FilterInteger, int)
                 var efxType = filterFloatMethod.DeclaringType;
                 var filterIntMethod = efxType.GetMethod("Filter",
                     BindingFlags.Public | BindingFlags.Static,
@@ -259,7 +274,11 @@ namespace soundphysicsadapted
                     SoundPhysicsAdaptedModSystem.DebugLog($"[EfxHelper] WARNING: filterIntMethod is NULL - cannot set filter type!");
                 }
 
-                // Set LowpassGainHF
+                // Set AL_LOWPASS_GAIN — overall volume attenuation (SPR: pow(cutoff, 0.1))
+                float directGain = (float)Math.Pow(Math.Max(gainHF, 0.0001f), 0.1);
+                filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainValue, directGain });
+
+                // Set AL_LOWPASS_GAINHF — high-frequency cutoff
                 filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainHFValue, gainHF });
                 return true;
             }
@@ -271,7 +290,8 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Update filter's LowpassGainHF value.
+        /// Update filter's LowpassGainHF and LowpassGain values.
+        /// Sets both high-frequency cutoff AND overall gain attenuation.
         /// </summary>
         public static bool SetLowpassGainHF(int filterId, float gainHF)
         {
@@ -283,6 +303,11 @@ namespace soundphysicsadapted
 
             try
             {
+                // Set AL_LOWPASS_GAIN — overall volume attenuation (SPR: pow(cutoff, 0.1))
+                float directGain = (float)Math.Pow(Math.Max(gainHF, 0.0001f), 0.1);
+                filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainValue, directGain });
+
+                // Set AL_LOWPASS_GAINHF — high-frequency cutoff
                 filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainHFValue, gainHF });
                 return true;
             }
