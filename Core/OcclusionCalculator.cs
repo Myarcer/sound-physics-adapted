@@ -373,10 +373,11 @@ namespace soundphysicsadapted
                     else
                     {
                         blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                        // Skip volume scaling for doors/trapdoors — their config overrides
-                        // already encode the intended occlusion. Volume scaling would clobber
-                        // a door's 0.8 override down to ~0.34 (sqrt of thin panel volume).
-                        if (!BlockClassification.IsWeatherInteractable(block))
+                        // Skip volume scaling for blocks with explicit config overrides —
+                        // their occlusion values are intentional and shouldn't be clobbered
+                        // by collision box volume (e.g. door panel 0.8 → 0.34 without this).
+                        var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
+                        if (matConfig == null || !matConfig.HasBlockOverride(block))
                         {
                             blockOcclusion *= GetPartialBlockVolumeScale(block, blockAccessor, ctx.X, ctx.Y, ctx.Z, collisionBoxes);
                         }

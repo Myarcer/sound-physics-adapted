@@ -31,6 +31,9 @@ namespace soundphysicsadapted
         private readonly float[] _occlusionResultCache = new float[OCCLUSION_RESULT_CACHE_SIZE];
         private readonly bool[] _occlusionResultCached = new bool[OCCLUSION_RESULT_CACHE_SIZE];
 
+        // Per-block-ID cache for HasBlockOverride (tracks whether a block matched a BlockOverride pattern).
+        private readonly byte[] _hasOverrideCache = new byte[OCCLUSION_RESULT_CACHE_SIZE]; // 0=unknown, 1=yes, 2=no
+
         // Pre-cached material name lookups (avoids ToString().ToLowerInvariant() per call)
         private Dictionary<EnumBlockMaterial, float> _materialOcclusionLookup;
 
@@ -40,6 +43,7 @@ namespace soundphysicsadapted
         private void ClearOcclusionResultCache()
         {
             Array.Clear(_occlusionResultCached, 0, OCCLUSION_RESULT_CACHE_SIZE);
+            Array.Clear(_hasOverrideCache, 0, OCCLUSION_RESULT_CACHE_SIZE);
         }
 
         /// <summary>
@@ -72,6 +76,63 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Check if a block has an explicit BlockOverride in config.
+        /// Blocks with overrides have intentionally set occlusion values that
+        /// should not be modified by volume scaling.
+        /// Cached per block ID.
+        /// </summary>
+        public bool HasBlockOverride(Block block)
+        {
+            if (block == null) return false;
+
+            int blockId = block.Id;
+            if (blockId >= 0 && blockId < OCCLUSION_RESULT_CACHE_SIZE)
+            {
+                byte cached = _hasOverrideCache[blockId];
+                if (cached != 0)
+                    return cached == 1;
+            }
+
+            // Compute — reuses the same compiled regex list as GetOcclusion
+            bool result = ComputeHasBlockOverride(block);
+
+            if (blockId >= 0 && blockId < OCCLUSION_RESULT_CACHE_SIZE)
+                _hasOverrideCache[blockId] = result ? (byte)1 : (byte)2;
+
+            return result;
+        }
+
+        private bool ComputeHasBlockOverride(Block block)
+        {
+            string blockCode = block.Code?.ToString() ?? "";
+            if (string.IsNullOrEmpty(blockCode) || Occlusion.BlockOverrides == null)
+                return false;
+
+            EnsureOverridesCompiled();
+
+            foreach (var (pattern, _) in _compiledOcclusionOverrides)
+            {
+                if (pattern.IsMatch(blockCode))
+                    return true;
+            }
+            return false;
+        }
+
+        private void EnsureOverridesCompiled()
+        {
+            if (_compiledOcclusionOverrides != null) return;
+
+            _compiledOcclusionOverrides = new List<(Regex, float)>();
+            if (Occlusion.BlockOverrides == null) return;
+
+            foreach (var kvp in Occlusion.BlockOverrides)
+            {
+                string pattern = "^" + Regex.Escape(kvp.Key).Replace("\\*", ".*") + "$";
+                _compiledOcclusionOverrides.Add((new Regex(pattern, RegexOptions.Compiled), kvp.Value));
+            }
+        }
+
+        /// <summary>
         /// Compute occlusion multiplier (expensive — runs regex patterns).
         /// Only called on cache miss per block type.
         /// </summary>
@@ -81,17 +142,7 @@ namespace soundphysicsadapted
             string blockCode = block.Code?.ToString() ?? "";
             if (!string.IsNullOrEmpty(blockCode) && Occlusion.BlockOverrides != null)
             {
-                // Lazy compile patterns
-                if (_compiledOcclusionOverrides == null)
-                {
-                    _compiledOcclusionOverrides = new List<(Regex, float)>();
-                    foreach (var kvp in Occlusion.BlockOverrides)
-                    {
-                        // Convert wildcard pattern to regex
-                        string pattern = "^" + Regex.Escape(kvp.Key).Replace("\\*", ".*") + "$";
-                        _compiledOcclusionOverrides.Add((new Regex(pattern, RegexOptions.Compiled), kvp.Value));
-                    }
-                }
+                EnsureOverridesCompiled();
 
                 foreach (var (pattern, value) in _compiledOcclusionOverrides)
                 {
