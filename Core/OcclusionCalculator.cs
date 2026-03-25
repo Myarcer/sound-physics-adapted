@@ -373,7 +373,13 @@ namespace soundphysicsadapted
                     else
                     {
                         blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                        blockOcclusion *= GetPartialBlockVolumeScale(block, blockAccessor, ctx.X, ctx.Y, ctx.Z, collisionBoxes);
+                        // Skip volume scaling for doors/trapdoors — their config overrides
+                        // already encode the intended occlusion. Volume scaling would clobber
+                        // a door's 0.8 override down to ~0.34 (sqrt of thin panel volume).
+                        if (!BlockClassification.IsWeatherInteractable(block))
+                        {
+                            blockOcclusion *= GetPartialBlockVolumeScale(block, blockAccessor, ctx.X, ctx.Y, ctx.Z, collisionBoxes);
+                        }
                     }
                 }
 
