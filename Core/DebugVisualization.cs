@@ -455,6 +455,21 @@ namespace soundphysicsadapted
 
             Vec3d cam = capi.World.Player.Entity.CameraPos;
 
+            // Update stored player positions in all occlusion entries to current camera.
+            // This keeps occlusion line endpoints attached to the player head every frame
+            // while still using the stored-value rendering path (float precision).
+            float camXf = (float)cam.X, camYf = (float)cam.Y, camZf = (float)cam.Z;
+            for (int s = 0; s < activeSnapshots.Count; s++)
+            {
+                var snap = activeSnapshots[s];
+                for (int i = 0; i < snap.OccVizCount; i++)
+                {
+                    snap.OccViz[i].PlayerX = camXf;
+                    snap.OccViz[i].PlayerY = camYf;
+                    snap.OccViz[i].PlayerZ = camZf;
+                }
+            }
+
             // Render oldest snapshots first so newest draws on top
             for (int s = 0; s < activeSnapshots.Count; s++)
             {
@@ -670,10 +685,10 @@ namespace soundphysicsadapted
                 else
                     color = (200 << 24) | (0 << 16) | (0 << 8) | 255;     // Red
 
-                // Endpoint always tracks current camera so lines stay attached to the player head.
-                // AppendLine subtracts cam from both endpoints, so cam becomes (0,0,0) in mesh space.
+                // Endpoint uses stored player position (updated to current camera each frame above).
+                // Using float stored values avoids double→float precision jitter at large world coords.
                 AppendLine(mesh, ov.PosX, ov.PosY, ov.PosZ,
-                    cam.X, cam.Y, cam.Z, color, cam);
+                    ov.PlayerX, ov.PlayerY, ov.PlayerZ, color, cam);
             }
         }
 
