@@ -36,6 +36,10 @@ namespace soundphysicsadapted
         // 0 = not cached, 1 = is interactable, 2 = is NOT interactable
         private static readonly byte[] isWeatherInteractableCache = new byte[BLOCK_CACHE_SIZE];
 
+        // Cache for IsOpenInteractable (door/gate in opened state — skip collision)
+        // 0 = not cached, 1 = is open interactable, 2 = is NOT
+        private static readonly byte[] isOpenInteractableCache = new byte[BLOCK_CACHE_SIZE];
+
         // Cache for IsChiseledBlock (custom voxel geometry — needs AABB path)
         // 0 = not cached, 1 = is chiseled, 2 = is NOT chiseled
         private static readonly byte[] isChiseledBlockCache = new byte[BLOCK_CACHE_SIZE];
@@ -64,6 +68,7 @@ namespace soundphysicsadapted
             Array.Clear(treatAsFullCubeCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(hasMultipleSolidFacesCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isWeatherInteractableCache, 0, BLOCK_CACHE_SIZE);
+            Array.Clear(isOpenInteractableCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isChiseledBlockCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isMultiblockPrefixCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isSolidForOcclusionCache, 0, BLOCK_CACHE_SIZE);
@@ -366,6 +371,41 @@ namespace soundphysicsadapted
             if (path == null) return false;
 
             return path.Contains("door") || path.Contains("gate") || path.Contains("portcullis");
+        }
+
+        /// <summary>
+        /// Check if a door/gate/trapdoor block is in the opened state.
+        /// Modded multi-block gates (e.g., Medieval Expansion) use "spacer" blocks
+        /// that retain collision boxes even when the gate is opened. This check lets
+        /// the DDA skip collision testing and treat them as pass-through.
+        /// Cached per block ID (each opened/closed variant has a unique ID).
+        /// </summary>
+        public static bool IsOpenInteractable(Block block)
+        {
+            if (block == null) return false;
+
+            int blockId = block.Id;
+            if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
+            {
+                byte cached = isOpenInteractableCache[blockId];
+                if (cached != 0)
+                    return cached == 1;
+
+                bool result = CheckOpenInteractable(block);
+                isOpenInteractableCache[blockId] = result ? (byte)1 : (byte)2;
+                return result;
+            }
+
+            return CheckOpenInteractable(block);
+        }
+
+        private static bool CheckOpenInteractable(Block block)
+        {
+            if (!IsWeatherInteractable(block)) return false;
+            string path = block.Code?.Path;
+            if (path == null) return false;
+            // VS door/gate variants encode state: "door-oak-opened-north", "gate3x3-spacer-oak-opened-north"
+            return path.Contains("opened") || path.Contains("-open-");
         }
 
         /// <summary>
