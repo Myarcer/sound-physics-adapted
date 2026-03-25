@@ -615,8 +615,10 @@ namespace soundphysicsadapted
         /// </summary>
         private void AppendOcclusionLines(MeshData mesh, Vec3d cam)
         {
-            Vec3d playerPos = capi.World.Player.Entity.Pos.XYZ.Add(0, capi.World.Player.Entity.LocalEyePos.Y, 0);
-
+            // Player endpoint = cam (CameraPos), which is the rendering origin.
+            // In camera-relative mesh space this is (0,0,0) — lines converge at camera.
+            // Using Entity.Pos.XYZ would produce an offset (entity pos ≠ camera origin)
+            // causing lines to drift ahead of the player's movement direction.
             for (int i = 0; i < activeOccVizCount; i++)
             {
                 ref SoundOcclusionViz ov = ref activeOccViz[i];
@@ -630,8 +632,10 @@ namespace soundphysicsadapted
                 else
                     color = (200 << 24) | (0 << 16) | (0 << 8) | 255;     // Red
 
+                // cam IS the mesh origin, so endpoint in mesh space is (0,0,0).
+                // AppendLine subtracts cam, so pass cam as the world-space endpoint.
                 AppendLine(mesh, ov.PosX, ov.PosY, ov.PosZ,
-                    playerPos.X, playerPos.Y, playerPos.Z, color, cam);
+                    cam.X, cam.Y, cam.Z, color, cam);
             }
         }
 
