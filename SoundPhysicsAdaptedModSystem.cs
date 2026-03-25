@@ -163,7 +163,7 @@ namespace soundphysicsadapted
                     {
                         materialConfig.Occlusion.TreatAsFullCube = new System.Collections.Generic.List<string>
                         {
-                            "game:glasspane-leaded-*"
+                            "game:slantedroofing*"
                         };
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated config: added TreatAsFullCube defaults");
                     }
