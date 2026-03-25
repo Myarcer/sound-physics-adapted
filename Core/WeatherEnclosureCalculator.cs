@@ -531,7 +531,7 @@ namespace soundphysicsadapted
                     {
                         WorldPos = result.BestRainPos,
                         EntryPos = result.BestEntryPoint,
-                        Occlusion = result.BestOcclusion + result.BestInteractableOcclusion,
+                        Occlusion = result.BestOcclusion,
                         Distance = (float)result.BestRainPos.DistanceTo(ctx.PlayerEarPos),
                         ColumnX = candidate.WorldX,
                         ColumnZ = candidate.WorldZ,
@@ -594,7 +594,6 @@ namespace soundphysicsadapted
         private struct PathResult
         {
             public float BestOcclusion;
-            public float BestInteractableOcclusion;
             public Vec3d BestRainPos;
             public Vec3d BestEntryPoint;
             public float BestHeight;
@@ -631,9 +630,8 @@ namespace soundphysicsadapted
             Vec3d firstRainPos = new Vec3d(candidate.WorldX + 0.5, firstSampleY, candidate.WorldZ + 0.5);
 
             Vec3d firstEntryPoint;
-            float firstInteractable;
             float firstOcclusion = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                firstRainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out firstEntryPoint, out firstInteractable);
+                firstRainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out firstEntryPoint);
 
             // Early out: first ray already clear
             if (firstOcclusion < threshold)
@@ -641,7 +639,6 @@ namespace soundphysicsadapted
                 return new PathResult
                 {
                     BestOcclusion = firstOcclusion,
-                    BestInteractableOcclusion = firstInteractable,
                     BestRainPos = firstRainPos,
                     BestEntryPoint = firstEntryPoint,
                     BestHeight = firstSampleY
@@ -649,7 +646,6 @@ namespace soundphysicsadapted
             }
 
             float bestOcclusion = firstOcclusion;
-            float bestInteractable = firstInteractable;
             Vec3d bestRainPos = firstRainPos;
             Vec3d bestEntryPoint = firstEntryPoint;
             float bestHeight = firstSampleY;
@@ -666,9 +662,8 @@ namespace soundphysicsadapted
                     Vec3d samplePos = new Vec3d(candidate.WorldX + 0.5, sampleY, candidate.WorldZ + 0.5);
 
                     Vec3d sampleEntryPoint;
-                    float sampleInteractable;
                     float sampleOcclusion = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                        samplePos, ctx.PlayerEarPos, ctx.BlockAccessor, out sampleEntryPoint, out sampleInteractable);
+                        samplePos, ctx.PlayerEarPos, ctx.BlockAccessor, out sampleEntryPoint);
 
                     if (ctx.DebugWeather)
                     {
@@ -680,7 +675,6 @@ namespace soundphysicsadapted
                     if (sampleOcclusion < bestOcclusion)
                     {
                         bestOcclusion = sampleOcclusion;
-                        bestInteractable = sampleInteractable;
                         bestRainPos = samplePos;
                         bestEntryPoint = sampleEntryPoint;
                         bestHeight = sampleY;
@@ -702,9 +696,8 @@ namespace soundphysicsadapted
                     );
 
                     Vec3d elevatedEntryPoint;
-                    float elevatedInteractable;
                     float pathOcclusion = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                        rainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out elevatedEntryPoint, out elevatedInteractable);
+                        rainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out elevatedEntryPoint);
 
                     if (ctx.DebugWeather)
                     {
@@ -716,7 +709,6 @@ namespace soundphysicsadapted
                     if (pathOcclusion < bestOcclusion)
                     {
                         bestOcclusion = pathOcclusion;
-                        bestInteractable = elevatedInteractable;
                         bestRainPos = rainPos;
                         bestEntryPoint = elevatedEntryPoint;
                         bestHeight = COLUMN_SAMPLE_HEIGHTS[h];
@@ -731,7 +723,6 @@ namespace soundphysicsadapted
             return new PathResult
             {
                 BestOcclusion = bestOcclusion,
-                BestInteractableOcclusion = bestInteractable,
                 BestRainPos = bestRainPos,
                 BestEntryPoint = bestEntryPoint,
                 BestHeight = bestHeight
@@ -810,7 +801,6 @@ namespace soundphysicsadapted
                     }
 
                     float bestNeighborOcc = float.MaxValue;
-                    float bestNeighborInteractable = 0f;
                     Vec3d bestNeighborPos = null;
                     Vec3d bestNeighborEntry = null;
 
@@ -819,14 +809,12 @@ namespace soundphysicsadapted
                         Vec3d rainPos = new Vec3d(nx + 0.5, sampleYs[h], nz + 0.5);
 
                         Vec3d neighborEntryPoint;
-                        float neighborInteractable;
                         float pathOcc = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                            rainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out neighborEntryPoint, out neighborInteractable);
+                            rainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out neighborEntryPoint);
 
                         if (pathOcc < bestNeighborOcc)
                         {
                             bestNeighborOcc = pathOcc;
-                            bestNeighborInteractable = neighborInteractable;
                             bestNeighborPos = rainPos;
                             bestNeighborEntry = neighborEntryPoint;
                         }
@@ -839,7 +827,7 @@ namespace soundphysicsadapted
                         {
                             WorldPos = bestNeighborPos,
                             EntryPos = bestNeighborEntry,
-                            Occlusion = bestNeighborOcc + bestNeighborInteractable,
+                            Occlusion = bestNeighborOcc,
                             Distance = (float)bestNeighborPos.DistanceTo(ctx.PlayerEarPos),
                             ColumnX = nx,
                             ColumnZ = nz,
@@ -971,9 +959,8 @@ namespace soundphysicsadapted
                         Vec3d rainSourcePos = new Vec3d(bx + 0.5, rainH + 1.01, bz + 0.5);
 
                         Vec3d entryPoint;
-                        float probeInteractable;
                         float pathOcc = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                            rainSourcePos, ctx.PlayerEarPos, ctx.BlockAccessor, out entryPoint, out probeInteractable);
+                            rainSourcePos, ctx.PlayerEarPos, ctx.BlockAccessor, out entryPoint);
 
                         if (ctx.DebugWeather)
                         {
@@ -988,7 +975,7 @@ namespace soundphysicsadapted
                             {
                                 WorldPos = rainSourcePos,
                                 EntryPos = entryPoint,
-                                Occlusion = pathOcc + probeInteractable,
+                                Occlusion = pathOcc,
                                 Distance = (float)rainSourcePos.DistanceTo(ctx.PlayerEarPos),
                                 ColumnX = bx,
                                 ColumnZ = bz,

@@ -527,12 +527,9 @@ namespace soundphysicsadapted
                     cache.ThrottleFade = Math.Min(1f, cache.ThrottleFade + fadeStep);
             }
 
-            // NOTE: Sound occlusion uses OcclusionCalculator.Calculate() (multi-ray with voting),
-            // intentionally different from WeatherEnclosureCalculator's DDA path
-            // (CalculateWeatherPathOcclusionWithEntry). Weather DDA separates structural vs
-            // interactable occlusion so weather sources can spawn through closed doors/trapdoors
-            // — rain is audible through a door even when the door itself occludes. Sound
-            // occlusion here treats ALL blocking geometry uniformly for accurate per-sound LPF.
+            // NOTE: Sound occlusion uses OcclusionCalculator.Calculate() (multi-ray with voting).
+            // All blocks (including doors) are treated uniformly — AABB collision geometry
+            // determines occlusion naturally. No special door handling.
             float occlusion = OcclusionCalculator.Calculate(soundPos, playerPos, blockAccessor);
             float directFilter = occlusion <= 0 ? 1.0f : OcclusionCalculator.OcclusionToFilter(occlusion);
 
