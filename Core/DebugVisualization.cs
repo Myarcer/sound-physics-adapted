@@ -102,7 +102,8 @@ namespace soundphysicsadapted
             public int RepositionCount;
             public SoundOcclusionViz[] OccViz = Array.Empty<SoundOcclusionViz>();
             public int OccVizCount;
-            public float Age; // seconds since committed
+            public float Age;         // seconds since superseded (only ticks when Superseded=true)
+            public bool Superseded;   // true once a newer snapshot has replaced this one
         }
         private readonly List<VizSnapshot> activeSnapshots = new List<VizSnapshot>();
 
@@ -307,13 +308,17 @@ namespace soundphysicsadapted
                 }
             }
 
-            // Age all snapshots and remove fully faded ones
+            // Age only superseded snapshots; the newest stays at full opacity.
+            // Remove fully faded ones.
             float totalLifetime = VIZ_HOLD_SECONDS + VIZ_FADE_SECONDS;
             for (int i = activeSnapshots.Count - 1; i >= 0; i--)
             {
-                activeSnapshots[i].Age += deltaTime;
-                if (activeSnapshots[i].Age > totalLifetime)
-                    activeSnapshots.RemoveAt(i);
+                if (activeSnapshots[i].Superseded)
+                {
+                    activeSnapshots[i].Age += deltaTime;
+                    if (activeSnapshots[i].Age > totalLifetime)
+                        activeSnapshots.RemoveAt(i);
+                }
             }
 
             // Debug logging (1 Hz when debugMode + viz active)
@@ -423,6 +428,10 @@ namespace soundphysicsadapted
                 Array.Copy(pendingOccViz, 0, snap.OccViz, 0, pendingOccVizCount);
                 snap.OccVizCount = pendingOccVizCount;
             }
+
+            // Mark all existing snapshots as superseded — they start their fade timer now
+            for (int i = 0; i < activeSnapshots.Count; i++)
+                activeSnapshots[i].Superseded = true;
 
             activeSnapshots.Add(snap);
             debugSoundsThisSwap = debugCaptureCount;
