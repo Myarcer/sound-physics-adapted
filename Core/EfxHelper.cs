@@ -1265,7 +1265,10 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Set filter gain and HF cutoff.
+        /// Set filter gain and HF cutoff for reverb send filters.
+        /// Sets AL_LOWPASS_GAIN (overall volume) and AL_LOWPASS_GAINHF (HF cutoff) independently.
+        /// NOTE: Does NOT call SetLowpassGainHF() because that method also writes AL_LOWPASS_GAIN
+        /// using the directGain formula, which would overwrite our explicit gain value.
         /// </summary>
         public static void SetFilterGains(int filter, float gain, float gainHF)
         {
@@ -1273,29 +1276,14 @@ namespace soundphysicsadapted
 
             try
             {
-                // Set LowpassGain (0x0001)
-                var efxType = filterFloatMethod?.DeclaringType;
-                if (efxType != null)
+                // Set AL_LOWPASS_GAIN — explicit reverb send gain (NOT the pow(gainHF,0.1) formula)
+                if (lowpassGainValue != null)
                 {
-                    // Try to find LowpassGain enum value
-                    object lowpassGain = null;
-                    try
-                    {
-                        lowpassGain = Enum.Parse(filterFloatType, "LowpassGain");
-                    }
-                    catch
-                    {
-                        lowpassGain = Enum.ToObject(filterFloatType, 1); // LowpassGain = 1
-                    }
-
-                    if (lowpassGain != null)
-                    {
-                        filterFloatMethod.Invoke(null, new object[] { filter, lowpassGain, gain });
-                    }
+                    filterFloatMethod.Invoke(null, new object[] { filter, lowpassGainValue, gain });
                 }
 
-                // Set LowpassGainHF
-                SetLowpassGainHF(filter, gainHF);
+                // Set AL_LOWPASS_GAINHF — high-frequency cutoff
+                filterFloatMethod.Invoke(null, new object[] { filter, lowpassGainHFValue, gainHF });
             }
             catch (Exception ex)
             {
