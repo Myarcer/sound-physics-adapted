@@ -166,7 +166,7 @@ namespace soundphysicsadapted
                     {
                         materialConfig.Occlusion.TreatAsFullCube = new System.Collections.Generic.List<string>
                         {
-                            "game:glasspane-leaded-*"
+                            "game:slantedroofing*"
                         };
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated config: added TreatAsFullCube defaults");
                     }
@@ -342,6 +342,19 @@ namespace soundphysicsadapted
 
                         materialConfig.Version = 6;
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v6: added Medieval Expansion gate/portcullis/drawbridge overrides");
+                    }
+
+                    // Version 7 migration: remove glasspane-leaded from TreatAsFullCube
+                    // Glass panes are thin geometry handled correctly by normal AABB tests.
+                    if (materialConfig.Version < 7)
+                    {
+                        if (materialConfig.Occlusion.TreatAsFullCube != null)
+                        {
+                            materialConfig.Occlusion.TreatAsFullCube.RemoveAll(p => p.Contains("glasspane"));
+                        }
+
+                        materialConfig.Version = 7;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v7: removed glasspane-leaded from TreatAsFullCube");
                     }
                 }
                 // Always re-save to add any new properties from updates
