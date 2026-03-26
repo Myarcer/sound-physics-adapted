@@ -222,13 +222,15 @@ namespace soundphysicsadapted
             if (config == null || !config.Enabled)
                 return 0f;
 
-            return RunWeatherOcclusion(from, to, blockAccessor, config, out _);
+            return RunWeatherOcclusion(from, to, blockAccessor, config, doorTransparent: false, out _);
         }
 
         /// <summary>
         /// Weather-aware path occlusion with entry point tracking.
         /// Returns total occlusion along the path. Entry point is the last
         /// solid-to-air transition point (where sound enters player's space).
+        /// Doors are weather-transparent here: rain sources spawn behind closed doors,
+        /// and the 5B tracking system handles sound occlusion independently.
         /// </summary>
         public static float CalculateWeatherPathOcclusionWithEntry(
             Vec3d from, Vec3d to, IBlockAccessor blockAccessor,
@@ -241,7 +243,7 @@ namespace soundphysicsadapted
                 return 0f;
             }
 
-            return RunWeatherOcclusion(from, to, blockAccessor, config, out entryPoint);
+            return RunWeatherOcclusion(from, to, blockAccessor, config, doorTransparent: true, out entryPoint);
         }
 
         /// <summary>
@@ -476,7 +478,7 @@ namespace soundphysicsadapted
         /// No verbose debug logging — weather casts hundreds of rays per tick.
         /// Tracks last occluding-to-air transition for entry point detection.
         /// </summary>
-        private static float RunWeatherOcclusion(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, SoundPhysicsConfig config, out Vec3d entryPoint)
+        private static float RunWeatherOcclusion(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, SoundPhysicsConfig config, bool doorTransparent, out Vec3d entryPoint)
         {
             double dx = to.X - from.X;
             double dy = to.Y - from.Y;
@@ -545,11 +547,11 @@ namespace soundphysicsadapted
 
                 float blockOcclusion = 0f;
 
-                // DOOR/GATE CHECK: doors and gates are weather-transparent for SPAWNING.
-                // Open doors → no occlusion. Closed doors → rain source still spawns,
-                // AudioPhysicsSystem handles sound occlusion via the regular DDA path.
+                // DOOR/GATE CHECK (spawn path only): doors are weather-transparent
+                // for 5B SPAWNING so rain sources appear behind closed doors.
+                // Layer 1 stereo weather skips this — doors must occlude normally there.
                 // Must run BEFORE solid-face fast path — ME gate spacers have solid faces.
-                if (IsDoorOrGateBlock(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                if (doorTransparent && IsDoorOrGateBlock(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
                 {
                     if (previousBlockWasOccluding)
                     {
