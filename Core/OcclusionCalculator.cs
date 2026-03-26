@@ -587,17 +587,25 @@ namespace soundphysicsadapted
 
                         if (!hasOverride)
                         {
-                            // Check total collision volume — skip tiny blocks (beams, rails, etc.)
-                            float totalVol = 0f;
+                            // Check max cross-sectional face area — skip tiny blocks (beams, rails, etc.)
+                            // Uses face area instead of volume so thin-but-solid panels (glass panes,
+                            // slabs) aren't rejected. A pane has face area 1.0 but volume 0.12.
+                            float maxFace = 0f;
                             for (int cb = 0; cb < collisionBoxes.Length; cb++)
                             {
                                 var box = collisionBoxes[cb];
-                                totalVol += (box.X2 - box.X1) * (box.Y2 - box.Y1) * (box.Z2 - box.Z1);
+                                float sx = box.X2 - box.X1;
+                                float sy = box.Y2 - box.Y1;
+                                float sz = box.Z2 - box.Z1;
+                                float fXY = sx * sy, fXZ = sx * sz, fYZ = sy * sz;
+                                float best = fXY > fXZ ? fXY : fXZ;
+                                if (fYZ > best) best = fYZ;
+                                if (best > maxFace) maxFace = best;
                             }
 
-                            if (totalVol < 0.15f)
+                            if (maxFace < 0.15f)
                             {
-                                // Tiny collision volume — weather-transparent (beams, pillars, rails)
+                                // Tiny cross-section — weather-transparent (beams, pillars, rails)
                                 if (previousBlockWasOccluding)
                                 {
                                     entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
