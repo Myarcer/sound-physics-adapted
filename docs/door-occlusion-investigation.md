@@ -1,7 +1,7 @@
 # Door/Gate Occlusion Investigation
 
 **Date**: 2026-03-25 (updated 2026-03-26)  
-**Status**: Root cause confirmed — `RayHitsAnyCollisionBox` misses thin door panels on ~22% of rays  
+**Status**: Design complete — skip AABB + query `BEBehaviorDoor.Opened` for state-aware occlusion. ME gates handled via config overrides.  
 
 ## Problem
 
@@ -146,8 +146,9 @@ Bug 3's AABB bypass was reverted because `4B-LPF` showed `bOcc=0,57` instead of 
 3. ~~Check if the reverted `IsOpenInteractable` check is causing DDA to skip door blocks~~ — **No**: DDA visits doors, the blocks are logged
 4. ~~Verify override value actually reaches `OcclusionToFilter`~~ — **Yes**: When ray hits, occ=0.80 correctly applied
 5. ~~Check EMA smoothing behavior~~ — Not the primary cause; direct occlusion `dOcc` is already wrong
-6. **IMPLEMENT FIX**: Skip `RayHitsAnyCollisionBox` for blocks with `HasBlockOverride()`, apply override occlusion directly
-7. **Multiblock null boxes**: Investigate why `p1`-suffix multiblocks return null collision boxes (separate from door panel miss issue — likely `BlockMultiblock.Handle()` chain failure for non-adjacent offsets)
+6. **IMPLEMENT FIX**: Skip AABB + query `BEBehaviorDoor.Opened` — see "Open/Closed State-Aware Fix Design" section below
+7. ~~Multiblock null boxes~~ — **EXPLAINED**: `p1-p1` suffix = non-adjacent offset, `BlockMultiblock.Handle()` chain failure. Bottom door block provides occlusion, upper half missing is acceptable.
+8. **Add ME overrides**: `medievalexpansion:gate*`, `medievalexpansion:portcullis*`, `medievalexpansion:drawbridge*` — config only, no code changes needed for ME
 
 ---
 
@@ -306,3 +307,167 @@ This fires BEFORE the air/null early exit, so we'll see doors even if they're be
 { "game:*gate*", 0.8f },
 ```
 **Note**: Gates are now `door-2x2gate-*` etc., so `game:door-*` already catches them. The `*gate*` pattern is redundant but harmless.
+
+---
+
+## Open/Closed State-Aware Fix Design (2026-03-26)
+
+### Problem Statement
+
+Step 6 says "skip `RayHitsAnyCollisionBox` for blocks with `HasBlockOverride()`, apply override directly." But doors have open AND closed states. We must only occlude when **closed**. Open doors should be transparent to sound — they're air.
+
+### Three Door Architectures
+
+| Architecture | Examples | State Storage | Collision When Closed | Collision When Open |
+|---|---|---|---|---|
+| **Vanilla doors** (`BEBehaviorDoor`) | `game:door-solid-aged`, `game:door-2x2gate-larch` | `BEBehaviorDoor.Opened` (BlockEntity property) | Thin panel across doorway (non-null, 0.12 block thick) | Same panel rotated ±90° against wall (non-null) |
+| **Vanilla trapdoors** (`BEBehaviorTrapDoor`) | `game:trapdoor-oak`, `game:trapdoor-iron` | `BEBehaviorTrapDoor.Opened` (BlockEntity property) | Thin panel across opening (non-null) | Panel rotated against wall (non-null) |
+| **Medieval Expansion gates** (`Gate`, `Portcullis`, `Drawbridge`) | `medievalexpansion:gate3x3-model-aged-closed-north` | Block code variant (`-closed-`/`-opened-`) | Thin panel (non-null) | **Null** collision boxes |
+
+### Key Insight: Open Vanilla Doors Still Return Collision Boxes
+
+From `BEBehaviorDoor` (VS source):
+```csharp
+// Line 51: State-dependent collision
+public Cuboidf[] ColSelBoxes => opened ? boxesOpened : boxesClosed;
+public bool Opened => opened;  // Line 52: Public property
+
+// Lines 194-208: UpdateHitBoxes()
+// boxesOpened = boxesClosed rotated ±90° around center point (0.5, 0.5, 0.5)
+```
+
+When a door opens, the thin panel rotates into the adjacent wall cell. The boxes are **never null** for vanilla doors — they just move out of the doorway.
+
+**This means blindly skipping AABB for all `HasBlockOverride` blocks would produce false occlusion for open doors** — the rotated panel is still a valid AABB that would get tested, and at flush-against-wall positions might even hit more reliably than the thin panel across the doorway.
+
+### Fix Design: Skip AABB + Query Open State
+
+For blocks in the non-solid path that have `HasBlockOverride(block)`:
+
+```
+collision boxes exist?
+  ├─ NO  → foliage path (handles ME opened gates, spacer blocks)
+  └─ YES → HasBlockOverride?
+       ├─ NO  → existing AABB path unchanged (fences, chiseled blocks, etc.)
+       └─ YES → IsDoorOpen(blockAccessor, x, y, z)?
+            ├─ YES → pass-through (zero occlusion — door is open)
+            └─ NO  → apply override directly, SKIP AABB test
+```
+
+#### `IsDoorOpen()` Helper
+
+```csharp
+private static bool IsDoorOpen(IBlockAccessor blockAccessor, int x, int y, int z)
+{
+    var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0));
+    if (be == null) return false; // No entity — assume closed (safe default)
+    
+    var doorBeh = be.GetBehavior<BEBehaviorDoor>();
+    if (doorBeh != null) return doorBeh.Opened;
+    
+    var trapBeh = be.GetBehavior<BEBehaviorTrapDoor>();
+    if (trapBeh != null) return trapBeh.Opened;
+    
+    return false; // Unknown block type with override — assume closed
+}
+```
+
+**Performance**: Negligible. `GetBlockEntity()` is already called internally by `block.GetCollisionBoxes()` for doors. The `GetBehavior<T>()` call is an array scan on the cached entity behavior list. Only fires for override-matching blocks (~1-2% of DDA visits).
+
+### Why This Works For Each Architecture
+
+#### Vanilla Doors (closed)
+1. DDA visits `game:door-solid-aged`
+2. `IsSolidForOcclusion` → false → non-solid path
+3. `GetCollisionBoxes()` → thin panel across doorway (non-null, from `BEBehaviorDoor.boxesClosed`)
+4. `HasBlockOverride(block)` → true (`game:door-*` matches)
+5. `IsDoorOpen()` → `BEBehaviorDoor.Opened` → **false**
+6. Apply override 0.80 directly, skip AABB → **100% hit rate** ✓
+
+#### Vanilla Doors (open)
+1. DDA visits same block
+2. `GetCollisionBoxes()` → thin panel rotated against wall (non-null, from `BEBehaviorDoor.boxesOpened`)
+3. `HasBlockOverride(block)` → true
+4. `IsDoorOpen()` → `BEBehaviorDoor.Opened` → **true**
+5. Pass-through → **zero occlusion** ✓
+
+#### Vanilla Trapdoors
+Same as doors via `BEBehaviorTrapDoor.Opened`. Both behaviors expose identical `Opened` property.
+
+#### Medieval Expansion Gates (closed)
+1. DDA visits `medievalexpansion:gate3x3-model-aged-closed-north`
+2. `GetCollisionBoxes()` → thin panel (non-null)
+3. `HasBlockOverride(block)` → true (needs new override pattern)
+4. `IsDoorOpen()` → `GetBlockEntity()` → `GateEntity`, no `BEBehaviorDoor` → returns **false**
+5. Apply override directly → **correct** ✓
+
+#### Medieval Expansion Gates (opened)
+1. DDA visits `medievalexpansion:gate3x3-model-aged-opened-north`
+2. `GetCollisionBoxes()` → **null** (ME sets `"*-opened-*": null` in JSON)
+3. Falls to foliage path → `GetFoliageVolumeScale()` → zero-size shape → **0.0 occlusion** ✓
+
+Never reaches the override check. Open state handled entirely by null collision.
+
+#### ME Spacer Blocks
+- Entity is null (`entityClassByType: "*-spacer*": null`)
+- Zero-size invisible blocks → null or empty collision boxes
+- Falls to foliage path → near-zero occlusion regardless of state ✓
+
+### Multiblock Upper Halves (`game:multiblock-monolithic-*`)
+
+**Override patterns do NOT match multiblocks** — `game:door-*` doesn't match `game:multiblock-monolithic-*`. This is **intentionally correct**:
+
+- The bottom door block provides the door's full occlusion (0.80 via override)
+- Counting the upper half would double the door's occlusion (1.60 — wrong)
+- Both halves occupy the same DDA column; one hit is sufficient
+
+For the multiblock delegation chain, `BlockMultiblock.OffsetInv` IS a public field:
+```csharp
+// BlockMultiblock.cs line 52
+public Vec3i OffsetInv;  // Calculated in OnLoaded(): OffsetInv = -Offset
+```
+
+Navigation to controller: `Handle()` → `GetBlock(pos+offset)` → `GetBehavior(IMultiBlockColSelBoxes)` → `MBGetCollisionBoxes()` → `getColSelBoxes()` → `GetBlockEntity(pos+offset)` → `BEBehaviorDoor.ColSelBoxes`
+
+The `p1-0` suffix multiblocks resolve successfully (boxes=1 in logs). The `p1-p1` suffix multiblocks fail to resolve (boxes=-1, null) — this is a VS engine limitation for non-adjacent offsets in 2x2 gates, not something we can fix.
+
+Since multiblocks don't match override patterns, they go through the existing AABB path:
+- `p1-0` (resolves): thin panel → AABB miss ~22% → acceptable loss (bottom block provides occlusion)
+- `p1-p1` (null): foliage path → near-zero → acceptable (bottom block provides occlusion)
+
+### Medieval Expansion Config Overrides
+
+ME gates need override patterns added to `MaterialSoundConfig.cs` defaults. ME blocks use custom classes — NOT `BEBehaviorDoor` — so `IsDoorOpen()` returns false for them. But this is correct: opened ME gates have null collision → never reach the override check.
+
+| Block Type | Code Pattern | Entity Class | Override Value |
+|---|---|---|---|
+| Gates | `medievalexpansion:gate*` | `GateEntity` | 0.8 |
+| Portcullis | `medievalexpansion:portcullis*` | `PortcullisEntity` | 0.85 |
+| Drawbridge | `medievalexpansion:drawbridge*` | `DrawbridgeEntity` | 0.8 |
+
+**Variant format** (confirmed from JSONs):
+- Gates: `medievalexpansion:gate{NxN}-{model|spacer}-{wood}-{closed|opened}-{facing}`
+- Portcullis: `medievalexpansion:portcullis{NxN}-{model|spacer}-{closed|opened}-{facing}`
+- Drawbridge: `medievalexpansion:drawbridge{NxM}-{model|hspacer|vspacer}-{wood}-{closed|opened}-{facing}`
+
+The wildcard patterns match all variants including spacers. Spacers have null/zero collision → foliage path → volume scale ≈ 0. Override value never matters for spacers.
+
+No code changes needed for ME — just config override additions. The open/closed state is handled naturally by ME's collision box architecture (null when open).
+
+### Both DDA Paths Need The Fix
+
+The same non-solid AABB logic exists in both:
+- **`RunOcclusion()`** (sound occlusion) — lines 344-393
+- **`RunWeatherOcclusion()`** (weather occlusion) — lines 566-601
+
+Both need the `HasBlockOverride → IsDoorOpen → skip AABB` branch.
+
+### Implementation Checklist
+
+1. **`OcclusionCalculator.cs`**: Add `IsDoorOpen()` static helper
+2. **`OcclusionCalculator.cs` `RunOcclusion()`**: In non-solid collision path, before `RayHitsAnyCollisionBox`, check `HasBlockOverride` → `IsDoorOpen` → apply directly or pass-through
+3. **`OcclusionCalculator.cs` `RunWeatherOcclusion()`**: Same change in weather DDA visitor
+4. **`MaterialSoundConfig.cs`**: Add ME override patterns to defaults
+5. **Config migration**: Bump to v6, add ME patterns to existing saved configs
+6. **Remove DOOR-DIAG logging**: Diagnostic logging no longer needed after fix
+7. **Build + test**: Verify closed doors show occ=0.80, open doors show occ=0.00
