@@ -1,7 +1,7 @@
 # Door/Gate Occlusion Investigation
 
 **Date**: 2026-03-25 (updated 2026-03-26)  
-**Status**: Design complete — skip AABB + query `BEBehaviorDoor.Opened` for state-aware occlusion. ME gates handled via config overrides.  
+**Status**: IMPLEMENTED — skip AABB + query `BEBehaviorDoor.Opened` for state-aware occlusion. Bug 5 (weather volume threshold) also fixed.  
 
 ## Problem
 
@@ -464,10 +464,34 @@ Both need the `HasBlockOverride → IsDoorOpen → skip AABB` branch.
 
 ### Implementation Checklist
 
-1. **`OcclusionCalculator.cs`**: Add `IsDoorOpen()` static helper
-2. **`OcclusionCalculator.cs` `RunOcclusion()`**: In non-solid collision path, before `RayHitsAnyCollisionBox`, check `HasBlockOverride` → `IsDoorOpen` → apply directly or pass-through
-3. **`OcclusionCalculator.cs` `RunWeatherOcclusion()`**: Same change in weather DDA visitor
-4. **`MaterialSoundConfig.cs`**: Add ME override patterns to defaults
-5. **Config migration**: Bump to v6, add ME patterns to existing saved configs
-6. **Remove DOOR-DIAG logging**: Diagnostic logging no longer needed after fix
-7. **Build + test**: Verify closed doors show occ=0.80, open doors show occ=0.00
+1. **`OcclusionCalculator.cs`**: Add `IsDoorOpen()` static helper ✅
+2. **`OcclusionCalculator.cs` `RunOcclusion()`**: In non-solid collision path, before `RayHitsAnyCollisionBox`, check `HasBlockOverride` → `IsDoorOpen` → apply directly or pass-through ✅
+3. **`OcclusionCalculator.cs` `RunWeatherOcclusion()`**: Same change in weather DDA visitor ✅
+4. **`MaterialSoundConfig.cs`**: Add ME override patterns to defaults ✅
+5. **Config migration**: Bump to v6, add ME patterns to existing saved configs ✅
+6. **Remove DOOR-DIAG logging**: Diagnostic logging no longer needed after fix ✅
+7. **Build + test**: Verify closed doors show occ=0.80, open doors show occ=0.00 ✅
+
+---
+
+## Bug 5: Weather Volume Threshold Bypassing Doors (FIXED — 2026-03-26)
+
+### Problem
+After implementing the AABB skip fix (bugs 1-4), sound occlusion through doors worked (5,971 `DDA door-closed` hits, 0 pass-throughs), but **weather/rain occlusion through doors was unchanged**. Opening and closing doors had no effect on rain volume.
+
+### Root Cause
+`RunWeatherOcclusion()` has a **collision volume filter** that `RunOcclusion()` does not:
+
+```csharp
+float totalVol = 0f;
+for (int cb = 0; cb < collisionBoxes.Length; cb++) {
+    var box = collisionBoxes[cb];
+    totalVol += (box.X2 - box.X1) * (box.Y2 - box.Y1) * (box.Z2 - box.Z1);
+}
+if (totalVol < 0.15f) { return false; } // weather-transparent
+```
+
+Door panel volume: `1.0 × 1.0 × 0.12 = 0.12` → **0.12 < 0.15** → door rejected as "tiny collision" before the `HasBlockOverride` check ever fired.
+
+### Fix
+Moved `HasBlockOverride` check **before** the volume filter. Override blocks (doors, gates, trapdoors) bypass the tiny-volume threshold entirely. Non-override blocks still filtered normally.
