@@ -305,6 +305,15 @@ namespace soundphysicsadapted
 
                 float blockOcclusion = 0f;
 
+                // OPEN DOOR/GATE CHECK: must run BEFORE solid-face fast path.
+                // ME gate spacers have solid faces that would take the fast path and occlude.
+                // Multiblock door spacers also need controller resolution here.
+                if (IsOpenDoorOrGate(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                {
+                    if (verboseLog) ddaTrace.Append($"  DDA door-open: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (open, pass-through)\n");
+                    return false; // Continue — treat as air
+                }
+
                 // FAST PATH (95%+ of blocks): Solid-face check is purely cached array lookups.
                 // Runs FIRST to skip all expensive checks below for stone, dirt, wood, etc.
                 if (BlockClassification.IsSolidForOcclusion(block))
@@ -536,6 +545,19 @@ namespace soundphysicsadapted
 
                 float blockOcclusion = 0f;
 
+                // OPEN DOOR/GATE CHECK: must run BEFORE solid-face fast path.
+                // ME gate spacers have solid faces that would take the fast path.
+                if (IsOpenDoorOrGate(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                {
+                    if (previousBlockWasOccluding)
+                    {
+                        entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                        hasEntryPoint = true;
+                    }
+                    previousBlockWasOccluding = false;
+                    return false; // Continue — treat as air
+                }
+
                 // FAST PATH (95%+ of blocks): Solid-face check is purely cached array lookups.
                 // Runs FIRST to skip all expensive checks for stone, dirt, wood, etc.
                 if (BlockClassification.IsSolidForOcclusion(block))
@@ -682,6 +704,10 @@ namespace soundphysicsadapted
         /// Get a volume-based occlusion scale factor for partial/chiseled blocks.
         /// Chiseled blocks: uses VolumeRel from BlockEntityMicroBlock (pre-computed voxel ratio).
         /// Other AABB blocks: estimates fill from collision box volumes.
+        /// Uses max cross-sectional face area for regular blocks (thin-but-solid panels
+        /// like glass panes occlude fully, while lattice/fence geometry scales down).
+        /// For chiseled blocks, uses sideAlmostSolid (any face ≥87.5% filled → full scale,
+        /// otherwise falls back to VolumeRel for lattice shapes).
         /// Returns sqrt(fillRatio) clamped to [0.1, 1.0].
         /// </summary>
         private static float GetPartialBlockVolumeScale(Block block, IBlockAccessor blockAccessor,
@@ -694,19 +720,35 @@ namespace soundphysicsadapted
                 var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0)) as BlockEntityMicroBlock;
                 if (be != null)
                 {
-                    fillRatio = be.VolumeRel;
+                    // If any face is almost solid, this is a wall/slab shape — full occlusion scale
+                    bool anySolid = false;
+                    for (int i = 0; i < 6; i++)
+                    {
+                        if (be.sideAlmostSolid[i]) { anySolid = true; break; }
+                    }
+                    fillRatio = anySolid ? 1f : be.VolumeRel;
                 }
             }
             else if (collisionBoxes != null && collisionBoxes.Length > 0)
             {
-                // Estimate fill from collision box volumes (already fetched, no extra cost)
-                float totalVolume = 0f;
+                // Use max cross-sectional face area across all collision boxes.
+                // A thin panel spanning the full block face (1×1) gets scale ~1.0,
+                // while a fence post (0.25×0.25) correctly scales down.
+                float maxFaceArea = 0f;
                 for (int i = 0; i < collisionBoxes.Length; i++)
                 {
                     var box = collisionBoxes[i];
-                    totalVolume += (box.X2 - box.X1) * (box.Y2 - box.Y1) * (box.Z2 - box.Z1);
+                    float sx = box.X2 - box.X1;
+                    float sy = box.Y2 - box.Y1;
+                    float sz = box.Z2 - box.Z1;
+                    float faceXY = sx * sy;
+                    float faceXZ = sx * sz;
+                    float faceYZ = sy * sz;
+                    float best = faceXY > faceXZ ? faceXY : faceXZ;
+                    if (faceYZ > best) best = faceYZ;
+                    if (best > maxFaceArea) maxFaceArea = best;
                 }
-                fillRatio = Math.Min(totalVolume, 1f);
+                fillRatio = Math.Min(maxFaceArea, 1f);
             }
 
             float scale = (float)Math.Sqrt(fillRatio);
@@ -738,6 +780,79 @@ namespace soundphysicsadapted
                 return true;
 
             return false;
+        }
+
+        // Pooled BlockPos for multiblock controller lookup in DDA (avoid alloc per call)
+        private static readonly BlockPos _mbControllerPos = new BlockPos(0, 0, 0, 0);
+
+        /// <summary>
+        /// Check if a block should be treated as air because it's an open door/gate.
+        /// Handles three cases:
+        /// 1. Direct door/gate blocks with HasBlockOverride + IsDoorOpen (vanilla + ME)
+        /// 2. ME gate spacer blocks with solid faces that bypass the non-solid path
+        /// 3. Multiblock spacers whose controller is an open door/gate
+        /// Must run BEFORE IsSolidForOcclusion — ME gate spacers have solid faces.
+        /// </summary>
+        private static bool IsOpenDoorOrGate(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
+        {
+            var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
+
+            // Check if this block itself is an open door/gate with a config override
+            if (matConfig != null && matConfig.HasBlockOverride(block))
+            {
+                if (IsDoorOpen(block, blockAccessor, x, y, z))
+                    return true;
+            }
+
+            // Check if this is a multiblock spacer whose controller is an open door/gate
+            string path = block.Code?.Path;
+            if (path != null && path.StartsWith("multiblock-", StringComparison.Ordinal))
+            {
+                var variant = block.Variant;
+                if (variant != null &&
+                    variant.TryGetValue("dx", out string dxStr) &&
+                    variant.TryGetValue("dy", out string dyStr) &&
+                    variant.TryGetValue("dz", out string dzStr))
+                {
+                    int cdx = ParseVariantOffset(dxStr);
+                    int cdy = ParseVariantOffset(dyStr);
+                    int cdz = ParseVariantOffset(dzStr);
+
+                    _mbControllerPos.Set(x - cdx, y - cdy, z - cdz);
+                    Block controller = blockAccessor.GetBlock(_mbControllerPos);
+
+                    if (controller != null && controller.Id != 0 &&
+                        !(controller.Code?.Path?.StartsWith("multiblock-", StringComparison.Ordinal) == true))
+                    {
+                        if (matConfig != null && matConfig.HasBlockOverride(controller))
+                        {
+                            if (IsDoorOpen(controller, blockAccessor,
+                                _mbControllerPos.X, _mbControllerPos.InternalY, _mbControllerPos.Z))
+                                return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Parses a VS multiblock variant offset string.
+        /// "0" -> 0, "p1" -> +1, "n1" -> -1, "p2" -> +2, etc.
+        /// </summary>
+        private static int ParseVariantOffset(string s)
+        {
+            if (string.IsNullOrEmpty(s) || s == "0") return 0;
+            if (s.StartsWith("n", StringComparison.Ordinal))
+            {
+                if (int.TryParse(s.AsSpan(1), out int val)) return -val;
+            }
+            else if (s.StartsWith("p", StringComparison.Ordinal))
+            {
+                if (int.TryParse(s.AsSpan(1), out int val)) return val;
+            }
+            return 0;
         }
 
         /// <summary>
