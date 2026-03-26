@@ -546,9 +546,13 @@ namespace soundphysicsadapted
                     return false;
                 }
 
-                // Skip destination block (player position) — sub-blocks here
-                // (ladders, half-slabs) shouldn't self-occlude the listener
-                if (ctx.X == destX && ctx.Y == destY && ctx.Z == destZ)
+                // Skip destination block only for fully-solid blocks (player inside a wall).
+                // Partial geometry (half-slabs, ladders) falls through to AABB intersection
+                // below, which correctly determines if the ray actually passes through the
+                // solid geometry. This fixes: player entering a wall half-slab block →
+                // ray from outside correctly accumulates slab occlusion instead of bypassing it.
+                if (ctx.X == destX && ctx.Y == destY && ctx.Z == destZ
+                    && BlockClassification.IsSolidForOcclusion(block))
                     return false;
 
                 float blockOcclusion = 0f;
