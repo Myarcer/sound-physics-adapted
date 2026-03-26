@@ -545,9 +545,11 @@ namespace soundphysicsadapted
 
                 float blockOcclusion = 0f;
 
-                // OPEN DOOR/GATE CHECK: must run BEFORE solid-face fast path.
-                // ME gate spacers have solid faces that would take the fast path.
-                if (IsOpenDoorOrGate(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                // DOOR/GATE CHECK: doors and gates are weather-transparent for SPAWNING.
+                // Open doors → no occlusion. Closed doors → rain source still spawns,
+                // AudioPhysicsSystem handles sound occlusion via the regular DDA path.
+                // Must run BEFORE solid-face fast path — ME gate spacers have solid faces.
+                if (IsDoorOrGateBlock(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
                 {
                     if (previousBlockWasOccluding)
                     {
@@ -555,7 +557,7 @@ namespace soundphysicsadapted
                         hasEntryPoint = true;
                     }
                     previousBlockWasOccluding = false;
-                    return false; // Continue — treat as air
+                    return false; // Continue — treat as air for weather spawning
                 }
 
                 // FAST PATH (95%+ of blocks): Solid-face check is purely cached array lookups.
@@ -618,19 +620,18 @@ namespace soundphysicsadapted
 
                         if (hasOverride)
                         {
-                            if (IsDoorOpen(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                            // Doors/gates/trapdoors: weather-transparent for SPAWNING purposes.
+                            // Open doors are fully transparent. Closed doors still allow rain
+                            // sources to spawn — AudioPhysicsSystem handles the actual sound
+                            // occlusion independently via the regular DDA path.
+                            // Record entry point at the door for positioning.
+                            if (previousBlockWasOccluding)
                             {
-                                // Open door — weather-transparent
-                                if (previousBlockWasOccluding)
-                                {
-                                    entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
-                                    hasEntryPoint = true;
-                                }
-                                previousBlockWasOccluding = false;
-                                return false;
+                                entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                                hasEntryPoint = true;
                             }
-                            // Closed — apply override directly, skip AABB
-                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                            previousBlockWasOccluding = false;
+                            return false;
                         }
                         else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
                         {
@@ -838,6 +839,49 @@ namespace soundphysicsadapted
                                 _mbControllerPos.X, _mbControllerPos.InternalY, _mbControllerPos.Z))
                                 return true;
                         }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Check if a block is a door/gate/trapdoor (open OR closed).
+        /// Used by weather DDA to make ALL doors weather-transparent for spawning,
+        /// regardless of open/closed state. The 5B tracking system handles sound
+        /// occlusion independently via AudioPhysicsSystem.
+        /// </summary>
+        private static bool IsDoorOrGateBlock(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
+        {
+            var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
+
+            // Check if this block itself has a config override (doors, gates, trapdoors)
+            if (matConfig != null && matConfig.HasBlockOverride(block))
+                return true;
+
+            // Check if this is a multiblock spacer whose controller has a config override
+            string path = block.Code?.Path;
+            if (path != null && path.StartsWith("multiblock-", StringComparison.Ordinal))
+            {
+                var variant = block.Variant;
+                if (variant != null &&
+                    variant.TryGetValue("dx", out string dxStr) &&
+                    variant.TryGetValue("dy", out string dyStr) &&
+                    variant.TryGetValue("dz", out string dzStr))
+                {
+                    int cdx = ParseVariantOffset(dxStr);
+                    int cdy = ParseVariantOffset(dyStr);
+                    int cdz = ParseVariantOffset(dzStr);
+
+                    _mbControllerPos.Set(x - cdx, y - cdy, z - cdz);
+                    Block controller = blockAccessor.GetBlock(_mbControllerPos);
+
+                    if (controller != null && controller.Id != 0 &&
+                        !(controller.Code?.Path?.StartsWith("multiblock-", StringComparison.Ordinal) == true))
+                    {
+                        if (matConfig != null && matConfig.HasBlockOverride(controller))
+                            return true;
                     }
                 }
             }
