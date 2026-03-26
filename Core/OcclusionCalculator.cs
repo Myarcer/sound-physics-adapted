@@ -299,6 +299,20 @@ namespace soundphysicsadapted
             bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
+
+                // DOOR DIAGNOSTIC: Log every block at door positions to trace occlusion failure
+                bool isDoorDiag = block != null && block.Code != null &&
+                    (block.Code.Path.Contains("door") || block.Code.Path.Contains("multiblock"));
+                if (isDoorDiag && verboseLog)
+                {
+                    collisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
+                    var diagBoxes = block.GetCollisionBoxes(blockAccessor, collisionCheckPos);
+                    int boxCount = diagBoxes?.Length ?? -1;
+                    string boxInfo = boxCount > 0 ? $"box0=({diagBoxes[0].X1:F2},{diagBoxes[0].Y1:F2},{diagBoxes[0].Z1:F2})-({diagBoxes[0].X2:F2},{diagBoxes[0].Y2:F2},{diagBoxes[0].Z2:F2})" : "null";
+                    bool isSolid = BlockClassification.IsSolidForOcclusion(block);
+                    ddaTrace?.Append($"  DOOR-DIAG: {block.Code} id={block.Id} mat={block.BlockMaterial} solid={isSolid} boxes={boxCount} {boxInfo} at ({ctx.X},{ctx.Y},{ctx.Z})\n");
+                }
+
                 if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
                     return false; // Continue
 
@@ -498,6 +512,20 @@ namespace soundphysicsadapted
             bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
+
+                // DOOR DIAGNOSTIC (weather path)
+                bool isDoorDiag = block != null && block.Code != null &&
+                    (block.Code.Path.Contains("door") || block.Code.Path.Contains("multiblock"));
+                if (isDoorDiag)
+                {
+                    collisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
+                    var diagBoxes = block.GetCollisionBoxes(blockAccessor, collisionCheckPos);
+                    int boxCount = diagBoxes?.Length ?? -1;
+                    string boxInfo = boxCount > 0 ? $"box0=({diagBoxes[0].X1:F2},{diagBoxes[0].Y1:F2},{diagBoxes[0].Z1:F2})-({diagBoxes[0].X2:F2},{diagBoxes[0].Y2:F2},{diagBoxes[0].Z2:F2})" : "null";
+                    bool isSolid = BlockClassification.IsSolidForOcclusion(block);
+                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog($"DOOR-DIAG-WX: {block.Code} id={block.Id} mat={block.BlockMaterial} solid={isSolid} boxes={boxCount} {boxInfo} at ({ctx.X},{ctx.Y},{ctx.Z})");
+                }
+
                 if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
                 {
                     // Air — track transition

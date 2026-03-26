@@ -1,7 +1,7 @@
 # Door/Gate Occlusion Investigation
 
-**Date**: 2026-03-25  
-**Status**: Partially fixed, root cause still unknown  
+**Date**: 2026-03-25 (updated 2026-03-26)  
+**Status**: Active investigation — diagnostic logging deployed  
 
 ## Problem
 
@@ -84,3 +84,161 @@ DDA door-hit: game:door-solid-aged occ=0,80     # every ray hits
 3. Check if the reverted `IsOpenInteractable` check is causing DDA to skip door blocks
 4. Verify override value actually reaches `OcclusionToFilter` and isn't overwritten
 5. Check EMA smoothing behavior — is it keeping stale low values from before door was closed?
+
+---
+
+## VS 1.21+ Door Architecture (Deep Dive — 2026-03-26)
+
+### New Door System (BlockBehaviorDoor + BEBehaviorDoor)
+
+VS 1.21 replaced legacy `BlockDoor` with a **behavior-based multiblock system**. Understanding this is critical because it changes how collision boxes are exposed.
+
+#### Block Type Definition (JSON)
+```json
+// assets/survival/blocktypes/wood/woodtyped/door.json
+{
+    code: "door",
+    class: "BlockGeneric",       // NOT BlockDoor — plain BlockGeneric
+    entityClass: "Generic",
+    behaviors: [
+        { name: "Lockable" },
+        { name: "Door" },        // BlockBehaviorDoor (StrongBlockBehavior)
+        { name: "BlockEntityInteract" }
+    ],
+    entityBehaviors: [{ name: "Door" }],  // BEBehaviorDoor
+    blockmaterial: "Wood",       // NOT Air
+    sidesolid: { all: false },
+    collisionbox: { x1: 0, y1: 0, z1: 0.875, x2: 1, y2: 1, z2: 1 }
+    // This is the DEFAULT thin panel — but BEBehaviorDoor overrides it
+}
+```
+
+#### Class Hierarchy
+```
+Block (base)
+  └─ BlockGeneric                    ← VS door blocks use this
+       │  Overrides GetCollisionBoxes() to dispatch to StrongBlockBehaviors
+       │
+  └─ BlockMultiblock : Block         ← Upper door halves (NOT BlockGeneric!)
+       │  Overrides GetCollisionBoxes() to delegate to IMultiBlockColSelBoxes
+       │  Uses Handle<T,K>() pattern to find controller block
+       │
+  └─ BlockBaseDoor : Block           ← LEGACY (pre-1.21), still exists for old saves
+       └─ BlockDoor
+```
+
+#### Behavior Chain
+```
+BlockBehaviorDoor : StrongBlockBehavior, IMultiBlockColSelBoxes, IMultiBlockBlockProperties
+  │
+  ├─ GetCollisionBoxes(ba, pos, ref handled)
+  │    → handled = PreventSubsequent
+  │    → returns BEBehaviorDoor.ColSelBoxes (from BlockEntity)
+  │
+  ├─ MBGetCollisionBoxes(ba, pos, offset)     // For multiblock upper half
+  │    → getColSelBoxes() → BEBehaviorDoor.ColSelBoxes
+  │
+  BEBehaviorDoor (BlockEntity Behavior)
+  │  boxesClosed = Block.CollisionBoxes rotated by RotateYRad
+  │  boxesOpened = boxesClosed rotated ±90° around center
+  │  ColSelBoxes => opened ? boxesOpened : boxesClosed
+```
+
+#### Key Insight: Collision Boxes Are Dynamic
+The collision boxes returned by `block.GetCollisionBoxes(ba, pos)` for doors depend on:
+1. **Open/closed state** — stored in `BEBehaviorDoor.opened`
+2. **Rotation** — `BEBehaviorDoor.RotateYRad` determines facing
+3. **BlockEntity existence** — requires `ba.GetBlockEntity(pos)` to work
+
+**This means**: If the `IBlockAccessor` doesn't support `GetBlockEntity()`, or the BlockEntity isn't loaded, `GetCollisionBoxes()` returns null → foliage path → near-zero occlusion.
+
+### Multiblock Structure (Tall Doors)
+
+Standard 1x2 doors occupy 2 blocks vertically:
+- **Bottom**: actual `game:door-*` block (BlockGeneric with Door behavior)
+- **Top**: `game:multiblock-monolithic-0-p1-0` (BlockMultiblock, extends raw `Block` not `BlockGeneric`)
+
+The multiblock JSON definition:
+```json
+{
+    code: "multiblock",
+    class: "BlockMultiblock",
+    blockmaterial: "Wood",
+    sidesolid: { all: false }
+}
+```
+
+#### Multiblock Collision Delegation
+```csharp
+// BlockMultiblock.GetCollisionBoxes (extends Block, NOT BlockGeneric)
+public override Cuboidf[] GetCollisionBoxes(IBlockAccessor ba, BlockPos pos)
+{
+    return Handle<Cuboidf[], IMultiBlockColSelBoxes>(
+        ba,
+        pos.X + OffsetInv.X, pos.InternalY + OffsetInv.Y, pos.Z + OffsetInv.Z,
+        // Looks up the REAL door block at (pos + offset), checks for IMultiBlockColSelBoxes
+        (inf) => inf.MBGetCollisionBoxes(ba, pos, OffsetInv),
+        (block) => new Cuboidf[] { Cuboidf.Default() },  // fallback if multiblock chain
+        (block) => block.GetCollisionBoxes(ba, pos.AddCopy(OffsetInv))
+    );
+}
+```
+
+This delegates to `BlockBehaviorDoor.MBGetCollisionBoxes()` on the main (bottom) door block, which then reads `BEBehaviorDoor.ColSelBoxes`.
+
+### How DDA Sees Doors
+
+Both `RunOcclusion()` and `RunWeatherOcclusion()` in OcclusionCalculator follow this path:
+1. DDA visits block at (x,y,z)
+2. `blockAccessor.GetBlock(pos)` returns the Block
+3. Early exit: `block.BlockMaterial == EnumBlockMaterial.Air` → **doors are Wood, not Air** ✓
+4. `IsSolidForOcclusion(block)` → false (sidesolid: all false) → enters non-solid path
+5. `block.GetCollisionBoxes(blockAccessor, pos)` → **this is the critical call**
+6. If boxes != null → `RayHitsAnyCollisionBox()` → apply occlusion if hit
+
+### Suspected Failure Points (2026-03-26)
+
+#### Hypothesis A: BlockEntity Not Available
+If `GetBlockEntity(pos)` returns null (chunk not loaded, wrong accessor type), `BEBehaviorDoor.ColSelBoxes` is never reached. The fallback in `BlockBehaviorDoor.GetCollisionBoxes()`:
+```csharp
+return blockAccessor.GetBlockEntity(pos)?.GetBehavior<BEBehaviorDoor>()?.ColSelBoxes ?? null;
+```
+Returns **null** → foliage path → near-zero scaled occlusion.
+
+#### Hypothesis B: Multiblock Upper Half (BlockMultiblock extends Block, not BlockGeneric)
+`BlockMultiblock` extends raw `Block`. The base `Block.GetCollisionBoxes()` just returns `CollisionBoxes` (static from JSON). It does NOT dispatch to behaviors.
+
+However, `BlockMultiblock` **overrides** `GetCollisionBoxes()` with its own delegation to `IMultiBlockColSelBoxes`. So this should still work — but the delegation chain is long:
+1. `BlockMultiblock.GetCollisionBoxes()` → `Handle()` → `GetBlock(pos+offset)` → check behaviors → `MBGetCollisionBoxes()` → `getColSelBoxes()` → `GetBlockEntity(pos+offset)` → `BEBehaviorDoor.ColSelBoxes`
+
+If ANY link in this chain fails to resolve, it returns null or Cuboidf.Default().
+
+#### Hypothesis C: DDA Never Visits Door Blocks
+The DDA logs from 2026-03-26 show **zero door hits** — only slantedroofing blocks. If the ray path doesn't cross the door's grid cell, the door is never evaluated. This could happen if:
+- The sound source and player are on the same side of the door
+- The DDA path goes over/around/under the door cell
+
+#### Current Diagnostic
+`DOOR-DIAG` logging added to both `RunOcclusion()` and `RunWeatherOcclusion()` DDA visitors. Logs:
+- Block code, ID, material
+- `IsSolidForOcclusion()` result
+- Collision box count and first box dimensions
+- Position
+
+This fires BEFORE the air/null early exit, so we'll see doors even if they're being skipped.
+
+### Block Code Patterns (Verified from VS 1.22 Assets)
+- Wood doors: `game:door-{style}-{wood}` (e.g., `door-solid-aged`, `door-sleek-windowed-oak`)
+- Metal doors: `game:door-metal-{style}-{metal}` (via `door-metal.json`)
+- Trapdoors: `game:trapdoor-{wood}` / `game:trapdoor-{metal}`
+- Gates: `game:door-1x3gate-{wood}`, `game:door-2x2gate-{wood}`, etc.
+- Multiblock upper halves: `game:multiblock-monolithic-0-p1-0` (all door types)
+
+### Config Override Patterns (Current)
+```csharp
+{ "game:door-*", 0.8f },
+{ "game:metaldoor-*", 0.9f },     // May need update — metal doors now "door-metal-*"?
+{ "game:trapdoor-*", 0.7f },
+{ "game:*gate*", 0.8f },
+```
+**Note**: Gates are now `door-2x2gate-*` etc., so `game:door-*` already catches them. The `*gate*` pattern is redundant but harmless.
