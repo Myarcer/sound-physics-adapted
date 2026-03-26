@@ -419,17 +419,15 @@ namespace soundphysicsadapted.Patches
         }
 
         /// <summary>
-        /// Prefix for ClientCoreAPI.StartTrack — swaps MusicGlitchunaffected to Ambient
+        /// Prefix for ClientCoreAPI.StartTrack — swaps MusicGlitchunaffected to AmbientGlitchunaffected
         /// when triggered by resonator's StartMusic. This moves the resonator audio from the Music
         /// volume slider to the Ambient volume slider, while vanilla music remains on the Music slider.
-        /// Using plain Ambient (not AmbientGlitchunaffected) so the Option E ambient volume sound
-        /// detection treats the resonator consistently with other ambient block sounds.
         /// </summary>
         public static void StartTrackSoundTypePrefix(ref EnumSoundType __2)
         {
             if (NextStartTrackUseAmbient && __2 == EnumSoundType.MusicGlitchunaffected)
             {
-                __2 = EnumSoundType.Ambient;
+                __2 = EnumSoundType.AmbientGlitchunaffected;
                 NextStartTrackUseAmbient = false;
             }
         }

@@ -64,12 +64,11 @@ namespace soundphysicsadapted
         private const float SPAWN_FADE_DURATION = 2.0f;
         private const float SPAWN_FADE_RATE = 1.0f / SPAWN_FADE_DURATION; // per second
 
-        // ── Warmup period ──
-        // Hard guarantee: produce ZERO audio for the first N ticks after player appears.
-        // This covers ALL timing edge cases: chunk loading delays, enclosure calc rate limiter,
-        // vanilla sound suppression gap, and initialization ordering.
-        // 3 ticks * 100ms = 300ms silence on spawn (imperceptible vs a loud spike).
-        private int warmupTicksRemaining = 3;
+        // ── Warmup gate ──
+        // Delegates to SoundPhysicsAdaptedModSystem.IsWorldReady which gates on
+        // LevelFinalize + warmup ticks. This ensures mono downmix, occlusion, and
+        // reverb systems are all ready before weather creates any sounds.
+        // Previous independent warmup caused stereo sources on world join/rejoin.
         private bool warmupComplete = false;
 
         // Faded intensities (real intensity * spawnFadeMultiplier), used by both OnGameTick and UpdatePositionalWeather
@@ -218,29 +217,26 @@ namespace soundphysicsadapted
 
                 enclosureCalculator?.Update(earPos, gameTimeMs);
 
-                // ── Warmup period: absolute silence for first N ticks ──
-                // Covers ALL timing edge cases: chunk loading, enclosure calc rate limiter,
-                // vanilla suppression gap, and initialization ordering.
+                // ── Warmup gate: wait for mod system readiness ──
+                // IsWorldReady ensures LevelFinalize + warmup ticks have completed,
+                // meaning mono downmix, occlusion, and reverb are all operational.
                 // Enclosure calculator still runs during warmup (converges in background).
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady)
+                {
+                    // Force all intensities to zero — no audio during warmup
+                    fadedRainIntensity = 0f;
+                    fadedHailIntensity = 0f;
+                    fadedWindSpeed = 0f;
+                    return;
+                }
+
                 if (!warmupComplete)
                 {
-                    warmupTicksRemaining--;
-                    if (warmupTicksRemaining <= 0)
-                    {
-                        warmupComplete = true;
-                        // Reset spawn fade to start clean AFTER warmup
-                        spawnFadeMultiplier = 0f;
-                        WeatherDebugLog($"[WARMUP] Complete — enclosure converged, starting spawn fade. " +
-                            $"sky={SkyCoverage:F2} occl={OcclusionFactor:F2}");
-                    }
-                    else
-                    {
-                        // Force all intensities to zero — no audio during warmup
-                        fadedRainIntensity = 0f;
-                        fadedHailIntensity = 0f;
-                        fadedWindSpeed = 0f;
-                        return;
-                    }
+                    warmupComplete = true;
+                    // Reset spawn fade to start clean AFTER warmup
+                    spawnFadeMultiplier = 0f;
+                    WeatherDebugLog($"[WARMUP] Complete (IsWorldReady) — starting spawn fade. " +
+                        $"sky={SkyCoverage:F2} occl={OcclusionFactor:F2}");
                 }
 
                 // Spawn fade-in: ramp from silence to full over SPAWN_FADE_DURATION.
@@ -514,7 +510,7 @@ namespace soundphysicsadapted
             string thunderDebug = thunderHandler?.GetDebugStatus() ?? "No thunder handler";
 
             return $"Weather audio: {enabledStr}\n" +
-                   $"  Spawn Fade: {spawnFadeMultiplier:F2} (1.0 = fully faded in) Warmup: {(warmupComplete ? "complete" : $"{warmupTicksRemaining} ticks remaining")}\n" +
+                   $"  Spawn Fade: {spawnFadeMultiplier:F2} (1.0 = fully faded in) Warmup: {(warmupComplete ? "complete" : "waiting for IsWorldReady")}\n" +
                    $"  Sky Coverage: {SkyCoverage:F2} (drives volume)\n" +
                    $"  Occlusion Factor: {OcclusionFactor:F2} (drives LPF)\n" +
                    $"  Vanilla roomVolumePitchLoss: {RoomVolumePitchLoss:F2} (reference)\n" +

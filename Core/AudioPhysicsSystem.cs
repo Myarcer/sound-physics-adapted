@@ -218,6 +218,9 @@ namespace soundphysicsadapted
             _tickStopwatch.Restart();
             budgetExceededThisTick = 0;
 
+            // Reset viz nearest-sound tracking for this tick
+            DebugVisualization.Instance?.ResetTickCapture();
+
             var activeSounds = AudioRenderer.GetActiveSounds();
             int count = 0;
             _candidates.Clear();
@@ -388,6 +391,14 @@ namespace soundphysicsadapted
                     $"skipped={skippedThisTick} deferred={deferredThisTick} playerPos={playerPosThisTick} " +
                     $"total={totalActive} outdoor={isOutdoors}{cellCacheInfo}{throttleInfo}{budgetInfo}");
             }
+
+            // Per-tick viz diagnostic: log when viz wanted data but no raytrace fired
+            var vizTick = DebugVisualization.Instance;
+            if (vizTick != null && vizTick.AnyAcousticVizActive && config?.DebugMode == true && !vizTick.HasCapturedThisTick)
+            {
+                SoundPhysicsAdaptedModSystem.DebugLog(
+                    $"[VIZ-TICK] No capture this tick: updated={updatedThisTick} cached={cachedThisTick} skipped={skippedThisTick} total={totalActive}");
+            }
         }
 
         /// <summary>
@@ -516,12 +527,9 @@ namespace soundphysicsadapted
                     cache.ThrottleFade = Math.Min(1f, cache.ThrottleFade + fadeStep);
             }
 
-            // NOTE: Sound occlusion uses OcclusionCalculator.Calculate() (multi-ray with voting),
-            // intentionally different from WeatherEnclosureCalculator's DDA path
-            // (CalculateWeatherPathOcclusionWithEntry). Weather DDA separates structural vs
-            // interactable occlusion so weather sources can spawn through closed doors/trapdoors
-            // — rain is audible through a door even when the door itself occludes. Sound
-            // occlusion here treats ALL blocking geometry uniformly for accurate per-sound LPF.
+            // NOTE: Sound occlusion uses OcclusionCalculator.Calculate() (multi-ray with voting).
+            // All blocks (including doors) are treated uniformly — AABB collision geometry
+            // determines occlusion naturally. No special door handling.
             float occlusion = OcclusionCalculator.Calculate(soundPos, playerPos, blockAccessor);
             float directFilter = occlusion <= 0 ? 1.0f : OcclusionCalculator.OcclusionToFilter(occlusion);
 
@@ -556,6 +564,7 @@ namespace soundphysicsadapted
             {
                 ReverbResult reverbResult;
                 SoundPathResult? pathResult;
+                bool didFullRaytrace = false;
 
                 // === CELL CACHE CHECK ===
                 // Composite key = (soundCell, playerCell) — cache auto-invalidates
@@ -586,6 +595,7 @@ namespace soundphysicsadapted
                             out float sharedAirspaceRatio, out float directOccOut, out bool hasDirectAirspaceOut);
                         reverbResult = rv;
                         pathResult = pr;
+                        didFullRaytrace = true;
 
                         reverbCellCache.StoreCellIfEmpty(soundPos, playerPos, currentTimeMs,
                             reverbResult, bouncePoints, bounceCount,
@@ -598,6 +608,7 @@ namespace soundphysicsadapted
                         var (rv, pr) = AcousticRaytracer.CalculateWithPaths(soundPos, playerPos, blockAccessor, occlusion, soundRange);
                         reverbResult = rv;
                         pathResult = pr;
+                        didFullRaytrace = true;
                     }
                 }
                 else
@@ -606,12 +617,24 @@ namespace soundphysicsadapted
                     var (rv, pr) = AcousticRaytracer.CalculateWithPaths(soundPos, playerPos, blockAccessor, occlusion, soundRange);
                     reverbResult = rv;
                     pathResult = pr;
+                    didFullRaytrace = true;
                 }
 
                 // Apply reverb from path calculation (always — reverb is independent of repositioning)
                 // CRITICAL: Validate sourceId to detect VS recycling source IDs.
                 // When sound A finishes and sound B takes its sourceId, stale entries
                 // could apply sound A's reverb to sound B.
+
+                // === VIZ CAPTURE: accumulate all raytraced sounds this tick ===
+                var viz = DebugVisualization.Instance;
+                if (viz != null && viz.AnyAcousticVizActive && didFullRaytrace)
+                {
+                    viz.CaptureFromRaytracer(
+                        AcousticRaytracer.CacheableBouncePoints, AcousticRaytracer.CacheableBounceCount,
+                        AcousticRaytracer.CacheableOpenings, AcousticRaytracer.CacheableOpeningCount,
+                        pathResult, soundPos, playerPos, occlusion);
+                }
+
                 int? validatedSourceId = AudioRenderer.GetValidatedSourceId(sound);
 
                 // DEBUG: Log which sound got which reverb result BEFORE applying
@@ -679,29 +702,15 @@ namespace soundphysicsadapted
                 // (the stone-throw panning bug: 40 bounce rays outvoted 1 direct path → 16° shift).
                 bool skipRepositioning = occlusion < 0.3f;
 
-                // OPTION E: Ambient volume sounds (beehives, water, lava) skip probes entirely.
-                // VS plays these as dynamic bounding-box volumes whose position tracks the player
-                // (nearest point on bbox). This lands at block boundaries that produce bogus probe
-                // results (e.g. 14 open / 0 perm through a wall). The direct ray correctly reads
-                // occlusion (occ=1.00 through stone), so use that with EMA smoothing.
-                // Reverb still applies (computed above). Repositioning is meaningless for volumes
-                // since VS already handles spatial placement via the bounding box clamping.
-                // Note: probes still run inside the raytracer (reverb shares the same call) but
-                // pathResult is discarded here. Acceptable perf cost for ambient sound rarity.
-                bool isAmbientVolume = sound.Params?.SoundType == EnumSoundType.Ambient;
-                if (isAmbientVolume)
-                    skipRepositioning = true;
-
                 if (skipRepositioning)
                 {
-                    // Clear LOS or ambient volume: sound stays at original position.
+                    // Clear LOS: sound stays at original position.
                     AudioRenderer.ResetSoundPosition(sound, soundPos);
 
                     // SMOOTH TRANSITION: When switching from occluded→clear, don't snap
                     // the filter. Instead, EMA-smooth toward the direct occlusion value.
                     // This prevents the audible brightness pop when crossing the occ<0.3
                     // threshold (filter could jump 2-3x in one tick otherwise).
-                    // For ambient volumes, this gives smooth occlusion as player moves around walls.
                     if (cache.HasSmoothedOcc && cache.SmoothedBlendedOcc > occlusion + 0.3f)
                     {
                         // Still converging from previous occlusion — smooth toward clear
@@ -723,21 +732,12 @@ namespace soundphysicsadapted
 
                     // Clear LOS with occlusion near 0.3 threshold = near acoustic boundary.
                     // Values above 0.15 suggest growing foliage/obstruction — keep update interval high.
-                    // Ambient volumes always get responsive updates (position changes every tick).
-                    cache.NearAcousticBoundary = isAmbientVolume || occlusion > 0.15f;
+                    cache.NearAcousticBoundary = occlusion > 0.15f;
 
                     if (updatedThisTick == 0)
                     {
-                        if (isAmbientVolume)
-                        {
-                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[4B-AMBIENT] occ={occlusion:F2} filt={directFilter:F3} (direct ray only, probe skip)");
-                        }
-                        else
-                        {
-                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[4B-LOS] occ={occlusion:F2}<0.3 filt={directFilter:F3} (no repos)");
-                        }
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"[4B-LOS] occ={occlusion:F2}<0.3 filt={directFilter:F3} (no repos)");
                     }
                 }
                 else if (pathResult.HasValue)
@@ -858,10 +858,22 @@ namespace soundphysicsadapted
                         float pathFilter = smoothedOcc <= 0 ? 1.0f
                             : OcclusionCalculator.OcclusionToFilter(smoothedOcc);
 
+                        // DIFFRACTION ANGLE DARKENING:
+                        // Sounds bending around corners lose HF proportional to bend angle.
+                        // RepositionOffset / distance ≈ sin(diffraction angle).
+                        // At 0° bend (direct) → no extra darkening. At 90° bend → up to 30% HF loss.
+                        // This bridges the brightness gap between "almost clear" and "hard around corner",
+                        // making the occluded→clear transition smoother (gradual HF recovery as player
+                        // rounds the corner and the bend angle decreases).
+                        float reposOffset = (float)pathResult.Value.RepositionOffset;
+                        float bendRatio = distance > 0.1f ? Math.Clamp(reposOffset / distance, 0f, 1f) : 0f;
+                        float diffractionDarkening = 1f - bendRatio * 0.3f;
+                        pathFilter *= diffractionDarkening;
+
                         finalFilter = pathFilter;
 
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[4B-LPF] dOcc={occlusion:F2} bOcc={blendedOcc:F2} smooth={smoothedOcc:F2} filt={pathFilter:F3} clarity={pathClarity:P0} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
+                            $"[4B-LPF] dOcc={occlusion:F2} bOcc={blendedOcc:F2} smooth={smoothedOcc:F2} filt={pathFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} clarity={pathClarity:P0} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
                     }
 
                     if (updatedThisTick == 0 && pathResult.Value.RepositionOffset > 0.1)
