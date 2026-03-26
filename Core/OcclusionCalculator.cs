@@ -620,13 +620,11 @@ namespace soundphysicsadapted
                             }
                         }
 
-                        if (hasOverride)
+                        if (hasOverride && doorTransparent)
                         {
-                            // Doors/gates/trapdoors: weather-transparent for SPAWNING purposes.
-                            // Open doors are fully transparent. Closed doors still allow rain
-                            // sources to spawn — AudioPhysicsSystem handles the actual sound
-                            // occlusion independently via the regular DDA path.
-                            // Record entry point at the door for positioning.
+                            // 5B spawn path only: doors/gates/trapdoors are weather-transparent
+                            // so rain sources spawn behind closed doors. AudioPhysicsSystem
+                            // handles the actual sound occlusion independently.
                             if (previousBlockWasOccluding)
                             {
                                 entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
@@ -634,6 +632,12 @@ namespace soundphysicsadapted
                             }
                             previousBlockWasOccluding = false;
                             return false;
+                        }
+                        else if (hasOverride)
+                        {
+                            // Layer 1 path: override blocks apply their configured occlusion
+                            // directly, skip AABB ray test (same as sound DDA door-closed path).
+                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
                         }
                         else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
                         {
