@@ -325,6 +325,24 @@ namespace soundphysicsadapted
                         materialConfig.Version = 5;
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v5: fixed door/gate override patterns (broad prefix match)");
                     }
+
+                    // Version 6 migration: Medieval Expansion gate/portcullis/drawbridge overrides
+                    if (materialConfig.Version < 6)
+                    {
+                        var overrides = materialConfig.Occlusion.BlockOverrides;
+                        if (overrides != null)
+                        {
+                            if (!overrides.ContainsKey("medievalexpansion:gate*"))
+                                overrides["medievalexpansion:gate*"] = 0.8f;
+                            if (!overrides.ContainsKey("medievalexpansion:portcullis*"))
+                                overrides["medievalexpansion:portcullis*"] = 0.85f;
+                            if (!overrides.ContainsKey("medievalexpansion:drawbridge*"))
+                                overrides["medievalexpansion:drawbridge*"] = 0.8f;
+                        }
+
+                        materialConfig.Version = 6;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v6: added Medieval Expansion gate/portcullis/drawbridge overrides");
+                    }
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");

@@ -287,7 +287,7 @@ namespace soundphysicsadapted
         {
             return new MaterialSoundConfig
             {
-                Version = 4,
+                Version = 6,
                 Occlusion = new OcclusionSection
                 {
                     Materials = new Dictionary<string, float>
@@ -379,7 +379,14 @@ namespace soundphysicsadapted
                         { "game:slantedroofinghalfleft-*", 0.45f },
                         { "game:slantedroofinghalfright-*", 0.45f },
                         // Hay bales — packed dry grass blocks
-                        { "game:hay-*", 0.4f }
+                        { "game:hay-*", 0.4f },
+                        // Medieval Expansion — gates, portcullis, drawbridges
+                        // Open state has null collision in JSON → foliage path → zero occlusion.
+                        // Closed state has collision → override applied (IsDoorOpen returns false
+                        // for custom Gate/Portcullis/Drawbridge entities, assumes closed).
+                        { "medievalexpansion:gate*", 0.8f },
+                        { "medievalexpansion:portcullis*", 0.85f },
+                        { "medievalexpansion:drawbridge*", 0.8f }
                     },
                     TreatAsFullCube = new List<string>
                     {

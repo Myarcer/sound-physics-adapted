@@ -300,19 +300,6 @@ namespace soundphysicsadapted
             {
                 Block block = ctx.Block;
 
-                // DOOR DIAGNOSTIC: Log every block at door positions to trace occlusion failure
-                bool isDoorDiag = block != null && block.Code != null &&
-                    (block.Code.Path.Contains("door") || block.Code.Path.Contains("multiblock"));
-                if (isDoorDiag && verboseLog)
-                {
-                    collisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
-                    var diagBoxes = block.GetCollisionBoxes(blockAccessor, collisionCheckPos);
-                    int boxCount = diagBoxes?.Length ?? -1;
-                    string boxInfo = boxCount > 0 ? $"box0=({diagBoxes[0].X1:F2},{diagBoxes[0].Y1:F2},{diagBoxes[0].Z1:F2})-({diagBoxes[0].X2:F2},{diagBoxes[0].Y2:F2},{diagBoxes[0].Z2:F2})" : "null";
-                    bool isSolid = BlockClassification.IsSolidForOcclusion(block);
-                    ddaTrace?.Append($"  DOOR-DIAG: {block.Code} id={block.Id} mat={block.BlockMaterial} solid={isSolid} boxes={boxCount} {boxInfo} at ({ctx.X},{ctx.Y},{ctx.Z})\n");
-                }
-
                 if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
                     return false; // Continue
 
@@ -359,20 +346,37 @@ namespace soundphysicsadapted
                             }
                         }
                     }
-                    else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
-                    {
-                        // Ray misses collision geometry (e.g. open door panel on the side)
-                        if (verboseLog) ddaTrace.Append($"  DDA pass-through: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (ray misses geometry)\n");
-                    }
                     else
                     {
-                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                        // Skip volume scaling for blocks with explicit config overrides —
-                        // their occlusion values are intentional and shouldn't be clobbered
-                        // by collision box volume (e.g. door panel 0.8 → 0.34 without this).
+                        // Check if this is a door/gate with a configured override.
+                        // Thin door panels (~0.12 block) cause RayHitsAnyCollisionBox to miss
+                        // ~22% of rays at oblique angles. For override blocks, skip the AABB
+                        // test entirely and apply the override directly — but only when closed.
                         var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
-                        if (matConfig == null || !matConfig.HasBlockOverride(block))
+                        bool hasOverride = matConfig != null && matConfig.HasBlockOverride(block);
+
+                        if (hasOverride)
                         {
+                            if (IsDoorOpen(blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                            {
+                                // Door/trapdoor is open — treat as air, zero occlusion
+                                if (verboseLog) ddaTrace.Append($"  DDA door-open: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (open, pass-through)\n");
+                            }
+                            else
+                            {
+                                // Closed door/gate — apply override directly, skip AABB
+                                blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                                if (verboseLog) ddaTrace.Append($"  DDA door-closed: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2} (override, skip AABB)\n");
+                            }
+                        }
+                        else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
+                        {
+                            // Ray misses collision geometry (e.g. fence post gap)
+                            if (verboseLog) ddaTrace.Append($"  DDA pass-through: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (ray misses geometry)\n");
+                        }
+                        else
+                        {
+                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
                             blockOcclusion *= GetPartialBlockVolumeScale(block, blockAccessor, ctx.X, ctx.Y, ctx.Z, collisionBoxes);
                         }
                     }
@@ -513,19 +517,6 @@ namespace soundphysicsadapted
             {
                 Block block = ctx.Block;
 
-                // DOOR DIAGNOSTIC (weather path)
-                bool isDoorDiag = block != null && block.Code != null &&
-                    (block.Code.Path.Contains("door") || block.Code.Path.Contains("multiblock"));
-                if (isDoorDiag)
-                {
-                    collisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
-                    var diagBoxes = block.GetCollisionBoxes(blockAccessor, collisionCheckPos);
-                    int boxCount = diagBoxes?.Length ?? -1;
-                    string boxInfo = boxCount > 0 ? $"box0=({diagBoxes[0].X1:F2},{diagBoxes[0].Y1:F2},{diagBoxes[0].Z1:F2})-({diagBoxes[0].X2:F2},{diagBoxes[0].Y2:F2},{diagBoxes[0].Z2:F2})" : "null";
-                    bool isSolid = BlockClassification.IsSolidForOcclusion(block);
-                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog($"DOOR-DIAG-WX: {block.Code} id={block.Id} mat={block.BlockMaterial} solid={isSolid} boxes={boxCount} {boxInfo} at ({ctx.X},{ctx.Y},{ctx.Z})");
-                }
-
                 if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
                 {
                     // Air — track transition
@@ -587,8 +578,27 @@ namespace soundphysicsadapted
                             return false;
                         }
 
-                        // Ray-AABB check: does the ray actually hit the collision geometry?
-                        if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
+                        // Door/gate override: skip AABB test for thin panels, query open state
+                        var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
+                        bool hasOverride = matConfig != null && matConfig.HasBlockOverride(block);
+
+                        if (hasOverride)
+                        {
+                            if (IsDoorOpen(blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                            {
+                                // Open door — weather-transparent
+                                if (previousBlockWasOccluding)
+                                {
+                                    entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                                    hasEntryPoint = true;
+                                }
+                                previousBlockWasOccluding = false;
+                                return false;
+                            }
+                            // Closed — apply override directly, skip AABB
+                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                        }
+                        else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
                         {
                             // Ray misses geometry — pass through empty part of sub-block
                             if (previousBlockWasOccluding)
@@ -599,8 +609,10 @@ namespace soundphysicsadapted
                             previousBlockWasOccluding = false;
                             return false;
                         }
-
-                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                        else
+                        {
+                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                        }
                     }
                     else
                     {
@@ -695,6 +707,26 @@ namespace soundphysicsadapted
 
             float scale = (float)Math.Sqrt(fillRatio);
             return Math.Max(scale, 0.1f);
+        }
+
+        /// <summary>
+        /// Check if a door/trapdoor at this position is currently open.
+        /// Returns true if the block has a BEBehaviorDoor or BEBehaviorTrapDoor
+        /// with Opened == true. Returns false if no door behavior found (safe
+        /// default: assume closed, apply occlusion).
+        /// </summary>
+        private static bool IsDoorOpen(IBlockAccessor blockAccessor, int x, int y, int z)
+        {
+            var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0));
+            if (be == null) return false;
+
+            var doorBeh = be.GetBehavior<BEBehaviorDoor>();
+            if (doorBeh != null) return doorBeh.Opened;
+
+            var trapBeh = be.GetBehavior<BEBehaviorTrapDoor>();
+            if (trapBeh != null) return trapBeh.Opened;
+
+            return false;
         }
 
         /// <summary>
