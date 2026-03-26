@@ -31,9 +31,6 @@ namespace soundphysicsadapted
         private readonly float[] _occlusionResultCache = new float[OCCLUSION_RESULT_CACHE_SIZE];
         private readonly bool[] _occlusionResultCached = new bool[OCCLUSION_RESULT_CACHE_SIZE];
 
-        // Per-block-ID cache for HasBlockOverride (tracks whether a block matched a BlockOverride pattern).
-        private readonly byte[] _hasOverrideCache = new byte[OCCLUSION_RESULT_CACHE_SIZE]; // 0=unknown, 1=yes, 2=no
-
         // Pre-cached material name lookups (avoids ToString().ToLowerInvariant() per call)
         private Dictionary<EnumBlockMaterial, float> _materialOcclusionLookup;
 
@@ -43,7 +40,6 @@ namespace soundphysicsadapted
         private void ClearOcclusionResultCache()
         {
             Array.Clear(_occlusionResultCached, 0, OCCLUSION_RESULT_CACHE_SIZE);
-            Array.Clear(_hasOverrideCache, 0, OCCLUSION_RESULT_CACHE_SIZE);
         }
 
         /// <summary>
@@ -76,63 +72,6 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Check if a block has an explicit BlockOverride in config.
-        /// Blocks with overrides have intentionally set occlusion values that
-        /// should not be modified by volume scaling.
-        /// Cached per block ID.
-        /// </summary>
-        public bool HasBlockOverride(Block block)
-        {
-            if (block == null) return false;
-
-            int blockId = block.Id;
-            if (blockId >= 0 && blockId < OCCLUSION_RESULT_CACHE_SIZE)
-            {
-                byte cached = _hasOverrideCache[blockId];
-                if (cached != 0)
-                    return cached == 1;
-            }
-
-            // Compute — reuses the same compiled regex list as GetOcclusion
-            bool result = ComputeHasBlockOverride(block);
-
-            if (blockId >= 0 && blockId < OCCLUSION_RESULT_CACHE_SIZE)
-                _hasOverrideCache[blockId] = result ? (byte)1 : (byte)2;
-
-            return result;
-        }
-
-        private bool ComputeHasBlockOverride(Block block)
-        {
-            string blockCode = block.Code?.ToString() ?? "";
-            if (string.IsNullOrEmpty(blockCode) || Occlusion.BlockOverrides == null)
-                return false;
-
-            EnsureOverridesCompiled();
-
-            foreach (var (pattern, _) in _compiledOcclusionOverrides)
-            {
-                if (pattern.IsMatch(blockCode))
-                    return true;
-            }
-            return false;
-        }
-
-        private void EnsureOverridesCompiled()
-        {
-            if (_compiledOcclusionOverrides != null) return;
-
-            _compiledOcclusionOverrides = new List<(Regex, float)>();
-            if (Occlusion.BlockOverrides == null) return;
-
-            foreach (var kvp in Occlusion.BlockOverrides)
-            {
-                string pattern = "^" + Regex.Escape(kvp.Key).Replace("\\*", ".*") + "$";
-                _compiledOcclusionOverrides.Add((new Regex(pattern, RegexOptions.Compiled), kvp.Value));
-            }
-        }
-
-        /// <summary>
         /// Compute occlusion multiplier (expensive — runs regex patterns).
         /// Only called on cache miss per block type.
         /// </summary>
@@ -142,7 +81,17 @@ namespace soundphysicsadapted
             string blockCode = block.Code?.ToString() ?? "";
             if (!string.IsNullOrEmpty(blockCode) && Occlusion.BlockOverrides != null)
             {
-                EnsureOverridesCompiled();
+                // Lazy compile patterns
+                if (_compiledOcclusionOverrides == null)
+                {
+                    _compiledOcclusionOverrides = new List<(Regex, float)>();
+                    foreach (var kvp in Occlusion.BlockOverrides)
+                    {
+                        // Convert wildcard pattern to regex
+                        string pattern = "^" + Regex.Escape(kvp.Key).Replace("\\*", ".*") + "$";
+                        _compiledOcclusionOverrides.Add((new Regex(pattern, RegexOptions.Compiled), kvp.Value));
+                    }
+                }
 
                 foreach (var (pattern, value) in _compiledOcclusionOverrides)
                 {
@@ -287,7 +236,7 @@ namespace soundphysicsadapted
         {
             return new MaterialSoundConfig
             {
-                Version = 4,
+                Version = 2,
                 Occlusion = new OcclusionSection
                 {
                     Materials = new Dictionary<string, float>
@@ -318,14 +267,12 @@ namespace soundphysicsadapted
                     },
                     BlockOverrides = new Dictionary<string, float>
                     {
-                        // Doors — broad patterns match all states (open/closed handled by geometry)
-                        // Override prevents volume scaling from clobbering thin panel occlusion
-                        { "game:door-*", 0.8f },
-                        { "game:metaldoor-*", 0.9f },
+                        // Doors
+                        { "game:door-*-closed-*", 0.8f },
+                        { "game:door-*-opened-*", 0.05f },
                         // Trapdoors
-                        { "game:trapdoor-*", 0.7f },
-                        // Gates — fencegate, gate3x3, wicketgate, portcullis
-                        { "game:*gate*", 0.8f },
+                        { "game:trapdoor-*-closed-*", 0.7f },
+                        { "game:trapdoor-*-opened-*", 0.05f },
                         // Soft materials
                         { "game:wool-*", 0.4f },
                         { "game:carpet-*", 0.3f },
@@ -334,7 +281,13 @@ namespace soundphysicsadapted
                         { "game:barrel-*", 0.5f },
                         // Furniture
                         { "game:bed-*", 0.3f },
-                        // Leaves — dense canopy muffles sound (higher than Plant default)
+                        // Vegetation — walkable, slight muffling from dense foliage
+                        { "game:tallgrass-*", 0.01f },
+                        { "game:flower-*", 0.01f },
+                        { "game:fern-*", 0.02f },
+                        { "game:waterlily-*", 0.01f },
+                        { "game:mushroom-*", 0.01f },
+                        // Leaves — dense canopy muffles sound
                         { "game:leaves-*", 0.08f },
                         { "game:leavesbranchy-*", 0.12f },
                         // Berry bushes — thick foliage muffles sound
@@ -353,11 +306,50 @@ namespace soundphysicsadapted
                         { "wildcraftfruit:bottompricklybush-*", 0.06f },
                         { "wildcraftfruit:bottomtreebush-*", 0.06f },
                         { "wildcraftfruit:groundberryplant-*", 0.02f },
-
+                        // Paintings — thin flat decorative panel on wall, no sound blocking
+                        { "game:painting-*", 0.0f },
+                        // Clutter — small decorative items (bottles, plates on shelves)
+                        { "game:clutter*", 0.0f },
+                        // Snow layers - ignored for occlusion (too thin)
+                        { "game:snowlayer-*", 0.0f },
+                        // Path blocks - flat ground surface, solid bottom face but shouldn't occlude
+                        { "game:woodenpath-*", 0.0f },
+                        // Baskets and traps - small open containers on the ground
+                        { "game:basket*", 0.0f },
+                        // Shelves - open furniture (not bookshelves which are denser)
+                        { "game:shelf-*", 0.0f },
+                        // Firepits
+                        { "game:firepit-*", 0.0f },
+                        // Tool racks
+                        { "game:toolrack-*", 0.0f },
+                        // Torch holders, lanterns, candles — wall decorations
+                        { "game:torchholder-*", 0.0f },
+                        { "game:lantern-*", 0.0f },
+                        { "game:candle-*", 0.0f },
+                        // Signs — thin flat panels
+                        { "game:sign-*", 0.0f },
+                        // Anvils — override for testing, unsure if to keep?
+                        { "game:anvil-*", 0.0f },
+                        // Ingot piles, plate piles — flat ground stacks
+                        { "game:ingotpile-*", 0.0f },
+                        { "game:platepile-*", 0.0f },
+                        // Support beams — narrow wooden frames
+                        { "game:supportbeam-*", 0.0f },
+                        // Stationary baskets
+                        { "game:stationarybasket-*", 0.0f },
+                        // Ground storage (flat piles)
+                        { "game:groundstorage*", 0.0f },
+                        // Placed grass
+                        { "game:placeddrygrass-*", 0.0f },
+                        { "game:drygrass-*", 0.0f },
                         // Wildgrass mod — mod sets SideSolid on grass blocks,
                         // causing them to take the solid fast path with occ=1.0.
                         // Override to near-zero so they behave like normal foliage.
                         { "wildgrass:*", 0.02f },
+                        // Stone paths — flat ground surface like wooden paths
+                        { "game:stonepath*", 0.0f },
+                        // Mechanical power — multiblock placeholder blocks
+                        { "game:mpmultiblockwood*", 0.0f },
                         // Structural plant blocks — thatch/sod roofing and hay bales
                         // VS classifies these as BlockMaterial.Plant (0.02) but they're
                         // dense packed building materials that should block sound/rain.
@@ -383,8 +375,6 @@ namespace soundphysicsadapted
                     },
                     TreatAsFullCube = new List<string>
                     {
-                        // Leaded glass panes fill most of the block - skip expensive AABB testing
-                        "game:glasspane-leaded-*",
                         // ALL slanted roofing: collision boxes are sloped geometry that
                         // diagonal DDA rays frequently miss. Treat as full cube so the
                         // block's occlusion value (override or material) is always applied.

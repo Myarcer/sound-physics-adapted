@@ -96,14 +96,7 @@ namespace soundphysicsadapted
                     $"height={height} (no shift needed)");
             }
 
-            // --- Block-corner centering ---
-            // VS block entities (beehives, forges, querns, etc.) often provide sound
-            // positions at integer block coordinates (the block's min corner). This causes
-            // asymmetric occlusion: rays originate from a corner instead of the block center,
-            // so walking around one side unmuffles immediately while the other side requires
-            // seeing most of the block. Shift to block center (+0.5) when all axes are at
-            // or very near integer values.
-            soundPos = CenterBlockCornerPosition(soundPos, code);
+            // --- Future: add other multi-block adjustments here ---
 
             return soundPos;
         }
@@ -216,43 +209,6 @@ namespace soundphysicsadapted
             // This clears floor-level obstacles (chests, barrels) that a geometric
             // center shift (+0.5 for height=2) would still clip at short range.
             return (float)(height - 1);
-        }
-
-        /// <summary>
-        /// Detects sound positions sitting at block-corner integer coordinates and
-        /// shifts them to block center (+0.5 per axis). VS block entities often
-        /// provide their BlockPos as the sound position without centering.
-        /// Only triggers when all three axes are within CORNER_TOLERANCE of an integer.
-        /// </summary>
-        private static readonly Vec3d _centeredPos = new Vec3d();
-        private const double CORNER_TOLERANCE = 0.01;
-
-        private static Vec3d CenterBlockCornerPosition(Vec3d pos, string blockCode)
-        {
-            double fracX = pos.X - Math.Floor(pos.X);
-            double fracY = pos.Y - Math.Floor(pos.Y);
-            double fracZ = pos.Z - Math.Floor(pos.Z);
-
-            bool xCorner = fracX < CORNER_TOLERANCE || fracX > (1.0 - CORNER_TOLERANCE);
-            bool yCorner = fracY < CORNER_TOLERANCE || fracY > (1.0 - CORNER_TOLERANCE);
-            bool zCorner = fracZ < CORNER_TOLERANCE || fracZ > (1.0 - CORNER_TOLERANCE);
-
-            if (xCorner && yCorner && zCorner)
-            {
-                _centeredPos.Set(
-                    Math.Floor(pos.X) + 0.5,
-                    Math.Floor(pos.Y) + 0.5,
-                    Math.Floor(pos.Z) + 0.5
-                );
-
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"[SoundAdjust] Block-center fix: '{blockCode}' " +
-                    $"({pos.X:F2},{pos.Y:F2},{pos.Z:F2}) -> ({_centeredPos.X:F2},{_centeredPos.Y:F2},{_centeredPos.Z:F2})");
-
-                return _centeredPos;
-            }
-
-            return pos;
         }
     }
 }

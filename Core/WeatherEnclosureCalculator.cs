@@ -10,10 +10,14 @@ namespace soundphysicsadapted
     /// Calculates weather enclosure using two complementary metrics derived from
     /// AAA game audio principles (Wwise obstruction vs occlusion separation):
     ///
-    /// 1. Sky Coverage (heightmap sampling, ~50 points, radius 8):
-    ///    "What fraction of the sky above me is blocked by structure?"
+    /// 1. Sky Coverage (heightmap sampling + DDA verification, ~312 points, radius 12):
+    ///    "What fraction of the sky above me is blocked by solid structure?"
     ///    Drives VOLUME of ambient weather bed.
     ///    One opening doesn't collapse the entire room's coverage.
+    ///    Heightmap pre-filters covered columns, then vertical DDA ray confirms
+    ///    at least one IsSolidForOcclusion block exists above the player.
+    ///    Partial blocks (half slabs, ladders, glass panes) that register in the
+    ///    heightmap but aren't solid are correctly treated as exposed.
     ///
     /// 2. Occlusion Factor (multi-height DDA verification on exposed columns):
     ///    "Can I hear rain falling at ANY visible height in this column?"
@@ -34,7 +38,7 @@ namespace soundphysicsadapted
     /// Also outputs verified open-air rain positions for Phase 5B positional
     /// source clustering.
     ///
-    /// Performance: ~312 heightmap O(1) lookups + ~640 probe march O(1) + ~90 DDA rays ≈ 0.95ms every 100ms.
+    /// Performance: ~312 heightmap O(1) lookups + ~312 vertical DDA rays (1-12 blocks each) + ~640 probe march O(1) + ~90 DDA rays ≈ 1.2ms every 100ms.
     /// </summary>
     public class WeatherEnclosureCalculator : IDisposable
     {
@@ -75,18 +79,7 @@ namespace soundphysicsadapted
         // Columns that passed DDA are cached between cycles. On each cycle, re-verified
         // columns update their data; columns not found increment a fail counter.
         // Only removed after consecutive failures, not instantly.
-        // NOTE: Only applies to columns INSIDE the scan diamond that failed DDA
-        // (genuinely occluded). Columns outside the diamond persist via memory radius.
-        private const int MAX_CONSECUTIVE_FAILS = 10; // 10 cycles × 100ms = 1s grace for occluded
-
-        // ── Verified Memory Radius ──
-        // Columns that passed DDA at least once persist in cache as long as they're
-        // within this radius of the player, even after leaving the scan diamond.
-        // Only evicted by: distance > MEMORY_RADIUS, or block-change invalidation.
-        // This prevents cluster centroid jumps when the player walks and columns
-        // exit the scan diamond — the remembered columns keep centroids stable.
-        private const int MEMORY_RADIUS = 20;
-        private const float MEMORY_RADIUS_SQ = MEMORY_RADIUS * MEMORY_RADIUS;
+        private const int MAX_CONSECUTIVE_FAILS = 5;  // 5 cycles × 100ms = 500ms grace period
 
         // Step 3: Opening neighbor search — when no direct paths exist but nearby
         // blocked candidates suggest a thin wall, search neighboring columns to find
@@ -405,9 +398,32 @@ namespace soundphysicsadapted
 
                 if (ctx.PlayerY < rainHeight)
                 {
-                    // Player is BELOW the rain-blocking surface at this column -> covered
-                    coveredWeight += sp.Weight;
-                    ctx.Viz?.AddSample(sampleX, ctx.PlayerY, sampleZ, EnclosureDebugVisualizer.VizColor.Covered);
+                    // Heightmap says player is below rain-blocking surface.
+                    // Verify with vertical DDA: partial blocks (half slabs, ladders, glass panes)
+                    // register in the heightmap but don't actually provide solid coverage.
+                    if (VerifyColumnCoverage(ctx, sampleX, sampleZ, rainHeight))
+                    {
+                        coveredWeight += sp.Weight;
+                        ctx.Viz?.AddSample(sampleX, ctx.PlayerY, sampleZ, EnclosureDebugVisualizer.VizColor.Covered);
+                    }
+                    else
+                    {
+                        // Heightmap says covered but no solid block above — treat as exposed
+                        int yDiff = Math.Abs(rainHeight - ctx.PlayerY);
+                        if (yDiff <= MAX_Y_DIFF)
+                        {
+                            ctx.ExposedCandidates.Add(new ExposedCandidate
+                            {
+                                WorldX = sampleX,
+                                WorldZ = sampleZ,
+                                RainY = rainHeight,
+                                HorizontalDist = sp.Distance,
+                                Weight = sp.Weight
+                            });
+
+                            ctx.Viz?.AddSample(sampleX, ctx.PlayerY, sampleZ, EnclosureDebugVisualizer.VizColor.Exposed);
+                        }
+                    }
                 }
                 else
                 {
@@ -430,6 +446,40 @@ namespace soundphysicsadapted
             }
 
             SkyCoverage = totalWeight > 0f ? coveredWeight / totalWeight : 0f;
+        }
+
+        /// <summary>
+        /// Verify that a column actually has solid coverage above the player using a vertical DDA ray.
+        /// The heightmap reports this column as covered (rainHeight > playerY), but partial blocks
+        /// like ladders, half slabs, and glass panes register in the heightmap without truly blocking
+        /// weather. Casts a ray straight up to confirm at least one IsSolidForOcclusion block exists.
+        /// Does NOT skip the starting block — the player may be inside a half-slab wall's block space,
+        /// and skipping it would incorrectly report indoor positions as exposed.
+        /// </summary>
+        private static bool VerifyColumnCoverage(ScanContext ctx, int sampleX, int sampleZ, int rainHeight)
+        {
+            // Pure vertical ray: player Y up to rain height.
+            // Very cheap — only steps Y axis, typically 1-12 blocks.
+            Vec3d from = new Vec3d(sampleX + 0.5, ctx.PlayerEarPos.Y - 0.5, sampleZ + 0.5);
+            Vec3d to = new Vec3d(sampleX + 0.5, rainHeight + 1.0, sampleZ + 0.5);
+
+            bool foundSolid = false;
+            DDABlockTraversal.Traverse(from, to, ctx.BlockAccessor, (ref DDABlockTraversal.TraversalContext ddaCtx) =>
+            {
+                Block block = ddaCtx.Block;
+                if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
+                    return false;
+
+                if (BlockClassification.IsSolidForOcclusion(block))
+                {
+                    foundSolid = true;
+                    return true; // Stop — confirmed solid coverage
+                }
+
+                return false;
+            }, skipFirst: false);
+
+            return foundSolid;
         }
 
         /// <summary>
@@ -531,7 +581,7 @@ namespace soundphysicsadapted
                     {
                         WorldPos = result.BestRainPos,
                         EntryPos = result.BestEntryPoint,
-                        Occlusion = result.BestOcclusion,
+                        Occlusion = result.BestOcclusion + result.BestInteractableOcclusion,
                         Distance = (float)result.BestRainPos.DistanceTo(ctx.PlayerEarPos),
                         ColumnX = candidate.WorldX,
                         ColumnZ = candidate.WorldZ,
@@ -594,6 +644,7 @@ namespace soundphysicsadapted
         private struct PathResult
         {
             public float BestOcclusion;
+            public float BestInteractableOcclusion;
             public Vec3d BestRainPos;
             public Vec3d BestEntryPoint;
             public float BestHeight;
@@ -630,8 +681,9 @@ namespace soundphysicsadapted
             Vec3d firstRainPos = new Vec3d(candidate.WorldX + 0.5, firstSampleY, candidate.WorldZ + 0.5);
 
             Vec3d firstEntryPoint;
+            float firstInteractable;
             float firstOcclusion = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                firstRainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out firstEntryPoint);
+                firstRainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out firstEntryPoint, out firstInteractable);
 
             // Early out: first ray already clear
             if (firstOcclusion < threshold)
@@ -639,6 +691,7 @@ namespace soundphysicsadapted
                 return new PathResult
                 {
                     BestOcclusion = firstOcclusion,
+                    BestInteractableOcclusion = firstInteractable,
                     BestRainPos = firstRainPos,
                     BestEntryPoint = firstEntryPoint,
                     BestHeight = firstSampleY
@@ -646,6 +699,7 @@ namespace soundphysicsadapted
             }
 
             float bestOcclusion = firstOcclusion;
+            float bestInteractable = firstInteractable;
             Vec3d bestRainPos = firstRainPos;
             Vec3d bestEntryPoint = firstEntryPoint;
             float bestHeight = firstSampleY;
@@ -662,8 +716,9 @@ namespace soundphysicsadapted
                     Vec3d samplePos = new Vec3d(candidate.WorldX + 0.5, sampleY, candidate.WorldZ + 0.5);
 
                     Vec3d sampleEntryPoint;
+                    float sampleInteractable;
                     float sampleOcclusion = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                        samplePos, ctx.PlayerEarPos, ctx.BlockAccessor, out sampleEntryPoint);
+                        samplePos, ctx.PlayerEarPos, ctx.BlockAccessor, out sampleEntryPoint, out sampleInteractable);
 
                     if (ctx.DebugWeather)
                     {
@@ -675,6 +730,7 @@ namespace soundphysicsadapted
                     if (sampleOcclusion < bestOcclusion)
                     {
                         bestOcclusion = sampleOcclusion;
+                        bestInteractable = sampleInteractable;
                         bestRainPos = samplePos;
                         bestEntryPoint = sampleEntryPoint;
                         bestHeight = sampleY;
@@ -696,8 +752,9 @@ namespace soundphysicsadapted
                     );
 
                     Vec3d elevatedEntryPoint;
+                    float elevatedInteractable;
                     float pathOcclusion = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                        rainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out elevatedEntryPoint);
+                        rainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out elevatedEntryPoint, out elevatedInteractable);
 
                     if (ctx.DebugWeather)
                     {
@@ -709,6 +766,7 @@ namespace soundphysicsadapted
                     if (pathOcclusion < bestOcclusion)
                     {
                         bestOcclusion = pathOcclusion;
+                        bestInteractable = elevatedInteractable;
                         bestRainPos = rainPos;
                         bestEntryPoint = elevatedEntryPoint;
                         bestHeight = COLUMN_SAMPLE_HEIGHTS[h];
@@ -723,6 +781,7 @@ namespace soundphysicsadapted
             return new PathResult
             {
                 BestOcclusion = bestOcclusion,
+                BestInteractableOcclusion = bestInteractable,
                 BestRainPos = bestRainPos,
                 BestEntryPoint = bestEntryPoint,
                 BestHeight = bestHeight
@@ -801,6 +860,7 @@ namespace soundphysicsadapted
                     }
 
                     float bestNeighborOcc = float.MaxValue;
+                    float bestNeighborInteractable = 0f;
                     Vec3d bestNeighborPos = null;
                     Vec3d bestNeighborEntry = null;
 
@@ -809,12 +869,14 @@ namespace soundphysicsadapted
                         Vec3d rainPos = new Vec3d(nx + 0.5, sampleYs[h], nz + 0.5);
 
                         Vec3d neighborEntryPoint;
+                        float neighborInteractable;
                         float pathOcc = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                            rainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out neighborEntryPoint);
+                            rainPos, ctx.PlayerEarPos, ctx.BlockAccessor, out neighborEntryPoint, out neighborInteractable);
 
                         if (pathOcc < bestNeighborOcc)
                         {
                             bestNeighborOcc = pathOcc;
+                            bestNeighborInteractable = neighborInteractable;
                             bestNeighborPos = rainPos;
                             bestNeighborEntry = neighborEntryPoint;
                         }
@@ -827,7 +889,7 @@ namespace soundphysicsadapted
                         {
                             WorldPos = bestNeighborPos,
                             EntryPos = bestNeighborEntry,
-                            Occlusion = bestNeighborOcc,
+                            Occlusion = bestNeighborOcc + bestNeighborInteractable,
                             Distance = (float)bestNeighborPos.DistanceTo(ctx.PlayerEarPos),
                             ColumnX = nx,
                             ColumnZ = nz,
@@ -959,8 +1021,9 @@ namespace soundphysicsadapted
                         Vec3d rainSourcePos = new Vec3d(bx + 0.5, rainH + 1.01, bz + 0.5);
 
                         Vec3d entryPoint;
+                        float probeInteractable;
                         float pathOcc = OcclusionCalculator.CalculateWeatherPathOcclusionWithEntry(
-                            rainSourcePos, ctx.PlayerEarPos, ctx.BlockAccessor, out entryPoint);
+                            rainSourcePos, ctx.PlayerEarPos, ctx.BlockAccessor, out entryPoint, out probeInteractable);
 
                         if (ctx.DebugWeather)
                         {
@@ -975,7 +1038,7 @@ namespace soundphysicsadapted
                             {
                                 WorldPos = rainSourcePos,
                                 EntryPos = entryPoint,
-                                Occlusion = pathOcc,
+                                Occlusion = pathOcc + probeInteractable,
                                 Distance = (float)rainSourcePos.DistanceTo(ctx.PlayerEarPos),
                                 ColumnX = bx,
                                 ColumnZ = bz,
@@ -1051,31 +1114,17 @@ namespace soundphysicsadapted
                 }
             }
 
-            // Step B: Handle non-re-verified cached columns.
-            // Distinguish between columns INSIDE the scan diamond (genuinely failed DDA)
-            // and columns OUTSIDE the diamond (player walked away — memory persistence).
-            // Only increment fail count for inside-diamond failures.
+            // Step B: Increment fail count for cached columns not re-verified this cycle
             var keysToRemove = new List<(int, int)>();
             foreach (var kvp in openingCache)
             {
                 if (!kvp.Value.ReVerifiedThisCycle)
                 {
-                    // Check if this column is inside the current scan diamond
-                    int manhattanDist = Math.Abs(kvp.Key.x - ctx.PlayerX)
-                                      + Math.Abs(kvp.Key.z - ctx.PlayerZ);
-
-                    if (manhattanDist <= SCAN_RADIUS)
+                    kvp.Value.ConsecutiveFailCount++;
+                    if (kvp.Value.ConsecutiveFailCount > MAX_CONSECUTIVE_FAILS)
                     {
-                        // Inside diamond but NOT re-verified → DDA failed (genuinely occluded)
-                        kvp.Value.ConsecutiveFailCount++;
-                        if (kvp.Value.ConsecutiveFailCount > MAX_CONSECUTIVE_FAILS)
-                        {
-                            keysToRemove.Add(kvp.Key);
-                        }
+                        keysToRemove.Add(kvp.Key);
                     }
-                    // Outside diamond: memory persistence — don't increment fail count.
-                    // Column persists with last-known data until distance eviction
-                    // or block-change invalidation removes it.
                 }
             }
             for (int r = 0; r < keysToRemove.Count; r++)
@@ -1084,14 +1133,14 @@ namespace soundphysicsadapted
                 {
                     WeatherAudioManager.WeatherDebugLog(
                         $"  CACHE EVICT: column ({keysToRemove[r].Item1},{keysToRemove[r].Item2}) " +
-                        $"failed {MAX_CONSECUTIVE_FAILS} consecutive cycles (inside diamond)");
+                        $"failed {MAX_CONSECUTIVE_FAILS} consecutive cycles");
                 }
                 openingCache.Remove(keysToRemove[r]);
             }
 
             // Step C: Rebuild verifiedOpenings from the stable cache
-            // Distance eviction uses MEMORY_RADIUS (wider than scan diamond)
             verifiedOpenings.Clear();
+            float maxCacheDistSq = (SCAN_RADIUS + 4f) * (SCAN_RADIUS + 4f);
             var distanceKeysToRemove = new List<(int, int)>();
 
             foreach (var kvp in openingCache)
@@ -1099,7 +1148,7 @@ namespace soundphysicsadapted
                 var cached = kvp.Value;
                 double dx = cached.Data.WorldPos.X - ctx.PlayerEarPos.X;
                 double dz = cached.Data.WorldPos.Z - ctx.PlayerEarPos.Z;
-                if (dx * dx + dz * dz > MEMORY_RADIUS_SQ)
+                if (dx * dx + dz * dz > maxCacheDistSq)
                 {
                     distanceKeysToRemove.Add(kvp.Key);
                     continue;

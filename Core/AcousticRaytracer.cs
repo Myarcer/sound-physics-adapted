@@ -88,12 +88,6 @@ namespace soundphysicsadapted
         private static OpeningData[] _cacheableOpenings = new OpeningData[24];
         private static int _cacheableOpeningCount = 0;
 
-        // Public accessors for debug visualization capture
-        public static BouncePoint[] CacheableBouncePoints => _cacheableBouncePoints;
-        public static int CacheableBounceCount => _cacheableBounceCount;
-        public static OpeningData[] CacheableOpenings => _cacheableOpenings;
-        public static int CacheableOpeningCount => _cacheableOpeningCount;
-
         /// <summary>
         /// Cache-aware version of CalculateWithPaths.
         /// On top of the normal reverb + path calculation, captures BouncePoint[] and 
@@ -194,17 +188,6 @@ namespace soundphysicsadapted
                 Vec3d lastRayDir = rayDir;
                 BlockPos lastHitBlock = hit.Value.blockPos;
 
-                // Viz: capture ray segment (source → first hit) for all raytraced sounds
-                var vizInst = DebugVisualization.Instance;
-                bool vizCaptureRays = vizInst != null && vizInst.ShowRays;
-                if (vizCaptureRays)
-                {
-                    vizInst.CaptureRaySegment(
-                        soundPos.X, soundPos.Y, soundPos.Z,
-                        hit.Value.position.X, hit.Value.position.Y, hit.Value.position.Z,
-                        i, 0);
-                }
-
                 for (int bounce = 0; bounce < bounces; bounce++)
                 {
                     totalBouncePoints++;
@@ -212,11 +195,10 @@ namespace soundphysicsadapted
                     float reflectivity = GetBlockReflectivity(hit.Value.block, lastHitBlock, lastHitNormal, blockAccessor);
                     bounceReflectivity[bounce] += reflectivity;
 
-                    // Tiny epsilon offset along normal to prevent path-occlusion raycast
-                    // from re-hitting the source wall. SPR uses 0.001 for shared-airspace only.
-                    double bpX = lastHitPos.X + lastHitNormal.X * 0.01;
-                    double bpY = lastHitPos.Y + lastHitNormal.Y * 0.01;
-                    double bpZ = lastHitPos.Z + lastHitNormal.Z * 0.01;
+                    // Calculate bounce point offset from surface
+                    double bpX = lastHitPos.X + lastHitNormal.X * 0.15;
+                    double bpY = lastHitPos.Y + lastHitNormal.Y * 0.15;
+                    double bpZ = lastHitPos.Z + lastHitNormal.Z * 0.15;
 
                     _reusableBouncePoint.Set(bpX, bpY, bpZ);
 
@@ -289,15 +271,6 @@ namespace soundphysicsadapted
                         Vec3d newRayDir = Reflect(lastRayDir, lastHitNormal);
                         var nextHit = RaycastToSurface(lastHitPos, newRayDir, maxDistance, blockAccessor, lastHitBlock);
                         if (!nextHit.HasValue) break;
-
-                        // Viz: capture bounce ray segment
-                        if (vizCaptureRays)
-                        {
-                            vizInst.CaptureRaySegment(
-                                lastHitPos.X, lastHitPos.Y, lastHitPos.Z,
-                                nextHit.Value.position.X, nextHit.Value.position.Y, nextHit.Value.position.Z,
-                                i, bounce + 1);
-                        }
 
                         totalDistance += nextHit.Value.distance;
                         lastHitPos = nextHit.Value.position;
