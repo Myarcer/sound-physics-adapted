@@ -222,28 +222,30 @@ namespace soundphysicsadapted
             if (config == null || !config.Enabled)
                 return 0f;
 
-            return RunWeatherOcclusion(from, to, blockAccessor, config, doorTransparent: false, out _);
+            return RunWeatherOcclusion(from, to, blockAccessor, config, out _, out _);
         }
 
         /// <summary>
-        /// Weather-aware path occlusion with entry point tracking.
+        /// Weather-aware path occlusion with entry point and door occlusion tracking.
         /// Returns total occlusion along the path. Entry point is the last
         /// solid-to-air transition point (where sound enters player's space).
-        /// Doors are weather-transparent here: rain sources spawn behind closed doors,
-        /// and the 5B tracking system handles sound occlusion independently.
+        /// doorOcclusion reports how much of the total came from door/gate blocks,
+        /// allowing callers to compute spawn occlusion (total - door) for 5B decisions
+        /// while using full occlusion for Layer 1 OcclusionFactor.
         /// </summary>
         public static float CalculateWeatherPathOcclusionWithEntry(
             Vec3d from, Vec3d to, IBlockAccessor blockAccessor,
-            out Vec3d entryPoint)
+            out Vec3d entryPoint, out float doorOcclusion)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
             if (config == null || !config.Enabled)
             {
                 entryPoint = null;
+                doorOcclusion = 0f;
                 return 0f;
             }
 
-            return RunWeatherOcclusion(from, to, blockAccessor, config, doorTransparent: true, out entryPoint);
+            return RunWeatherOcclusion(from, to, blockAccessor, config, out entryPoint, out doorOcclusion);
         }
 
         /// <summary>
@@ -478,7 +480,7 @@ namespace soundphysicsadapted
         /// No verbose debug logging — weather casts hundreds of rays per tick.
         /// Tracks last occluding-to-air transition for entry point detection.
         /// </summary>
-        private static float RunWeatherOcclusion(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, SoundPhysicsConfig config, bool doorTransparent, out Vec3d entryPoint)
+        private static float RunWeatherOcclusion(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, SoundPhysicsConfig config, out Vec3d entryPoint, out float doorOcclusion)
         {
             double dx = to.X - from.X;
             double dy = to.Y - from.Y;
@@ -487,6 +489,7 @@ namespace soundphysicsadapted
             if (length < 0.001)
             {
                 entryPoint = null;
+                doorOcclusion = 0f;
                 return 0f;
             }
 
@@ -496,6 +499,7 @@ namespace soundphysicsadapted
             double ndz = dz / length;
 
             float occlusionAccum = 0f;
+            float doorOcclusionAccum = 0f;
             bool previousBlockWasOccluding = false;
             int entryX = 0, entryY = 0, entryZ = 0;
             bool hasEntryPoint = false;
@@ -546,21 +550,6 @@ namespace soundphysicsadapted
                     return false;
 
                 float blockOcclusion = 0f;
-
-                // DOOR/GATE CHECK (spawn path only): doors are weather-transparent
-                // for 5B SPAWNING so rain sources appear behind closed doors.
-                // Layer 1 stereo weather skips this — doors must occlude normally there.
-                // Must run BEFORE solid-face fast path — ME gate spacers have solid faces.
-                if (doorTransparent && IsDoorOrGateBlock(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
-                {
-                    if (previousBlockWasOccluding)
-                    {
-                        entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
-                        hasEntryPoint = true;
-                    }
-                    previousBlockWasOccluding = false;
-                    return false; // Continue — treat as air for weather spawning
-                }
 
                 // FAST PATH (95%+ of blocks): Solid-face check is purely cached array lookups.
                 // Runs FIRST to skip all expensive checks for stone, dirt, wood, etc.
@@ -620,23 +609,11 @@ namespace soundphysicsadapted
                             }
                         }
 
-                        if (hasOverride && doorTransparent)
+                        if (hasOverride)
                         {
-                            // 5B spawn path only: doors/gates/trapdoors are weather-transparent
-                            // so rain sources spawn behind closed doors. AudioPhysicsSystem
-                            // handles the actual sound occlusion independently.
-                            if (previousBlockWasOccluding)
-                            {
-                                entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
-                                hasEntryPoint = true;
-                            }
-                            previousBlockWasOccluding = false;
-                            return false;
-                        }
-                        else if (hasOverride)
-                        {
-                            // Layer 1 path: override blocks apply their configured occlusion
-                            // directly, skip AABB ray test (same as sound DDA door-closed path).
+                            // Override blocks (doors, gates, carpet, etc.): apply configured
+                            // occlusion directly, skip AABB ray test. Same as sound DDA
+                            // door-closed path. Door contribution tracked separately below.
                             blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
                         }
                         else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
@@ -672,6 +649,11 @@ namespace soundphysicsadapted
                 if (blockOcclusion > 0)
                 {
                     occlusionAccum += blockOcclusion;
+                    // Track door/gate contribution separately so callers can compute
+                    // spawn occlusion (total - door) for 5B while using full occlusion
+                    // for Layer 1 OcclusionFactor.
+                    if (IsDoorOrGateBlock(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                        doorOcclusionAccum += blockOcclusion;
                     previousBlockWasOccluding = true;
 
                     if (occlusionAccum >= config.MaxOcclusion)
@@ -691,6 +673,7 @@ namespace soundphysicsadapted
             }, skipFirst: skipFirstBlock, maxSteps: maxDDASteps);
 
             entryPoint = hasEntryPoint ? new Vec3d(entryX + 0.5, entryY + 0.5, entryZ + 0.5) : null;
+            doorOcclusion = doorOcclusionAccum;
             return stopped ? config.MaxOcclusion : occlusionAccum;
         }
 
@@ -853,20 +836,35 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Check if a block is a door/gate/trapdoor/drawbridge/portcullis by code pattern.
+        /// Lightweight string check — no BlockEntity lookups, no config pattern matching.
+        /// Used by weather DDA to track door occlusion separately from wall occlusion.
+        /// </summary>
+        private static bool IsDoorTypeByCode(Block block)
+        {
+            string path = block.Code?.Path;
+            if (path == null) return false;
+            // Covers: door-*, metaldoor-*, trapdoor-* (contains "door")
+            //         *gate* (fencegate, wicketgate, gate3x3, etc.)
+            //         drawbridge*, portcullis*
+            return path.Contains("door") || path.Contains("gate") ||
+                   path.Contains("drawbridge") || path.Contains("portcullis");
+        }
+
+        /// <summary>
         /// Check if a block is a door/gate/trapdoor (open OR closed).
-        /// Used by weather DDA to make ALL doors weather-transparent for spawning,
-        /// regardless of open/closed state. The 5B tracking system handles sound
-        /// occlusion independently via AudioPhysicsSystem.
+        /// Used by weather DDA to track door occlusion contribution.
+        /// Uses code-based detection (NOT HasBlockOverride) so only actual
+        /// door/gate blocks are counted, not carpet/leaves/etc.
+        /// Also handles multiblock spacers whose controller is a door.
         /// </summary>
         private static bool IsDoorOrGateBlock(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
         {
-            var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
-
-            // Check if this block itself has a config override (doors, gates, trapdoors)
-            if (matConfig != null && matConfig.HasBlockOverride(block))
+            // Direct check: block code contains door/gate patterns
+            if (IsDoorTypeByCode(block))
                 return true;
 
-            // Check if this is a multiblock spacer whose controller has a config override
+            // Check if this is a multiblock spacer whose controller is a door/gate
             string path = block.Code?.Path;
             if (path != null && path.StartsWith("multiblock-", StringComparison.Ordinal))
             {
@@ -886,7 +884,7 @@ namespace soundphysicsadapted
                     if (controller != null && controller.Id != 0 &&
                         !(controller.Code?.Path?.StartsWith("multiblock-", StringComparison.Ordinal) == true))
                     {
-                        if (matConfig != null && matConfig.HasBlockOverride(controller))
+                        if (IsDoorTypeByCode(controller))
                             return true;
                     }
                 }
