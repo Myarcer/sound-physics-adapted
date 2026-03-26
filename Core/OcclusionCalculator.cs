@@ -222,28 +222,28 @@ namespace soundphysicsadapted
             if (config == null || !config.Enabled)
                 return 0f;
 
-            return RunWeatherOcclusion(from, to, blockAccessor, config, doorTransparent: false, out _);
+            return RunWeatherOcclusion(from, to, blockAccessor, config, doorTransparent: false, out _, out _);
         }
 
         /// <summary>
         /// Weather-aware path occlusion with entry point tracking.
-        /// Returns total occlusion along the path. Entry point is the last
-        /// solid-to-air transition point (where sound enters player's space).
-        /// Doors are weather-transparent here: rain sources spawn behind closed doors,
-        /// and the 5B tracking system handles sound occlusion independently.
+        /// Returns total occlusion along the path (door-transparent for spawn detection).
+        /// doorInclOcclusion returns the same path's occlusion WITH closed doors counted,
+        /// for Layer 1 ambient muffling decisions.
         /// </summary>
         public static float CalculateWeatherPathOcclusionWithEntry(
             Vec3d from, Vec3d to, IBlockAccessor blockAccessor,
-            out Vec3d entryPoint)
+            out Vec3d entryPoint, out float doorInclOcclusion)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
             if (config == null || !config.Enabled)
             {
                 entryPoint = null;
+                doorInclOcclusion = 0f;
                 return 0f;
             }
 
-            return RunWeatherOcclusion(from, to, blockAccessor, config, doorTransparent: true, out entryPoint);
+            return RunWeatherOcclusion(from, to, blockAccessor, config, doorTransparent: true, out entryPoint, out doorInclOcclusion);
         }
 
         /// <summary>
@@ -478,8 +478,10 @@ namespace soundphysicsadapted
         /// No verbose debug logging — weather casts hundreds of rays per tick.
         /// Tracks last occluding-to-air transition for entry point detection.
         /// </summary>
-        private static float RunWeatherOcclusion(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, SoundPhysicsConfig config, bool doorTransparent, out Vec3d entryPoint)
+        private static float RunWeatherOcclusion(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, SoundPhysicsConfig config, bool doorTransparent, out Vec3d entryPoint, out float doorInclOcclusion)
         {
+            doorInclOcclusion = 0f;
+
             double dx = to.X - from.X;
             double dy = to.Y - from.Y;
             double dz = to.Z - from.Z;
@@ -496,6 +498,10 @@ namespace soundphysicsadapted
             double ndz = dz / length;
 
             float occlusionAccum = 0f;
+            // Dual accumulator: tracks occlusion including closed doors for Layer 1.
+            // When doorTransparent=true, the main accumulator skips ALL doors (for spawn detection),
+            // but doorInclAccum counts closed doors (for Layer 1 ambient muffling).
+            float doorInclAccum = 0f;
             bool previousBlockWasOccluding = false;
             int entryX = 0, entryY = 0, entryZ = 0;
             bool hasEntryPoint = false;
@@ -553,6 +559,15 @@ namespace soundphysicsadapted
                 // Must run BEFORE solid-face fast path — ME gate spacers have solid faces.
                 if (doorTransparent && IsDoorOrGateBlock(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
                 {
+                    // Dual accumulator: closed doors count for Layer 1 muffling
+                    if (!IsDoorOpen(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                    {
+                        float doorOcc = BlockClassification.GetBlockOcclusion(block, config);
+                        if (doorOcc <= 0)
+                            doorOcc = 0.8f; // Fallback for doors without material config
+                        doorInclAccum += doorOcc;
+                    }
+
                     if (previousBlockWasOccluding)
                     {
                         entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
@@ -625,6 +640,15 @@ namespace soundphysicsadapted
                             // 5B spawn path only: doors/gates/trapdoors are weather-transparent
                             // so rain sources spawn behind closed doors. AudioPhysicsSystem
                             // handles the actual sound occlusion independently.
+                            // Dual accumulator: closed doors count for Layer 1 muffling
+                            if (!IsDoorOpen(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                            {
+                                float doorOcc = BlockClassification.GetBlockOcclusion(block, config);
+                                if (doorOcc <= 0)
+                                    doorOcc = 0.8f;
+                                doorInclAccum += doorOcc;
+                            }
+
                             if (previousBlockWasOccluding)
                             {
                                 entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
@@ -691,7 +715,9 @@ namespace soundphysicsadapted
             }, skipFirst: skipFirstBlock, maxSteps: maxDDASteps);
 
             entryPoint = hasEntryPoint ? new Vec3d(entryX + 0.5, entryY + 0.5, entryZ + 0.5) : null;
-            return stopped ? config.MaxOcclusion : occlusionAccum;
+            float mainResult = stopped ? config.MaxOcclusion : occlusionAccum;
+            doorInclOcclusion = Math.Min(mainResult + doorInclAccum, config.MaxOcclusion);
+            return mainResult;
         }
 
         /// <summary>
