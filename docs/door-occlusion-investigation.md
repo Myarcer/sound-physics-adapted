@@ -1,7 +1,7 @@
 # Door/Gate Occlusion Investigation
 
 **Date**: 2026-03-25 (updated 2026-03-26)  
-**Status**: Active investigation — diagnostic logging deployed  
+**Status**: Root cause confirmed — `RayHitsAnyCollisionBox` misses thin door panels on ~22% of rays  
 
 ## Problem
 
@@ -77,13 +77,77 @@ DDA door-hit: game:door-solid-aged occ=0,80     # every ray hits
 4B-Path: off=0,7m bOcc=0,83 paths=16/16 perm=0  # all paths "clear"
 ```
 
+## Diagnostic Log Analysis (2026-03-26)
+
+### Data Set
+- **95,293** total DOOR-DIAG entries from `client-debug.log`
+  - 59,911 from weather occlusion (DOOR-DIAG-WX)
+  - 35,382 from sound occlusion (DOOR-DIAG)
+
+### Block Types Observed (vanilla only, ignoring Medieval Expansion multiblocks)
+
+| Block Code | DDA Hits | DDA Pass-Through | Hit Rate |
+|---|---|---|---|
+| `game:door-solid-aged` | 7,257 | — | — |
+| `game:door-2x2gate-larch` | 1,406 | — | — |
+| `game:door-sleek-windowed-walnut` | 389 | — | — |
+| `game:metaldoor-sleek-windowed-iron` | 284 | — | — |
+| **All vanilla doors combined** | **4,656** | **1,334** | **77.7%** |
+
+When doors ARE hit: every hit logs `occ=0,80` (the correct override value).
+
+### Multiblock Collision Box Results
+
+| Multiblock Code | Boxes | Count |
+|---|---|---|
+| `game:multiblock-monolithic-0-p1-p1` | **boxes=-1 (null)** | 37,462 |
+| `game:multiblock-monolithic-n1-p1-p1` | **boxes=-1 (null)** | 16,445 |
+| `game:multiblock-monolithic-0-p1-0` | boxes=1 (valid) | 21,535 |
+| `game:multiblock-monolithic-n1-p1-0` | boxes=1 (valid) | 8,283 |
+
+**Pattern**: Multiblock codes with `p1` in the **last** position (e.g., `0-p1-p1`, `n1-p1-p1`) return **null collision boxes** — confirms Hypothesis A from investigation. These are 2x2 gate upper-rear blocks where `BlockMultiblock.Handle()` fails to resolve the door controller's `BEBehaviorDoor.ColSelBoxes`. Codes with `0` in the last position (e.g., `0-p1-0`) DO resolve successfully.
+
+### Door Collision Box Dimensions (German locale, commas as decimals)
+
+Doors correctly report thin panels rotated per facing:
+- Z-aligned: `(0,00, 0,00, -0,00)-(1,00, 1,00, 0,12)` — 12% depth on Z axis
+- X-aligned: `(0,00, 0,00, -0,00)-(0,12, 1,00, 1,00)` — 12% depth on X axis
+- Z-far: `(0,00, 0,00, 0,88)-(1,00, 1,00, 1,00)` — 12% depth, far side
+- Gates: `(-0,00, 0,00, 0,00)-(1,00, 1,00, 0,13)` — 13% depth
+
+### Key Trace Pattern (every vanilla door in the log)
+```
+DDA hit: game:debarkedlog-aged-ud at (512074,3,511994) occ=0,60 total=0,60
+DOOR-DIAG: game:door-solid-aged id=11090 ... boxes=1 box0=(0,00,0,00,-0,00)-(1,00,1,00,0,12)
+DDA pass-through: game:door-solid-aged at (512073,3,511994) (ray misses geometry)
+DOOR-DIAG: game:multiblock-monolithic-0-p1-0 id=79 ... boxes=1 box0=(0,00,0,00,-0,00)-(1,00,1,00,0,12)
+DDA pass-through: game:multiblock-monolithic-0-p1-0 at (512073,4,511994) (ray misses geometry)
+```
+
+The wall frame (`debarkedlog-aged-ud`) contributes 0.60 occlusion, then both the bottom door and top multiblock half are **visited but pass through** — the thin 0.12-block panel fails `RayHitsAnyCollisionBox()`.
+
+### 4B-LPF Downstream Values
+Sounds through door walls show `dOcc=0,60` (wall only), not `dOcc=1,40` (wall + door 0.80). The door's occlusion contribution is effectively zero for the ~22% of rays that miss.
+
+### Confirmed Root Cause
+
+**`RayHitsAnyCollisionBox` slab test fails for thin door panels (~3/16 block thick).** The DDA steps into the door's grid cell, but the ray may enter/exit the 1×1×1 cell through a face that doesn't geometrically intersect the 0.12-thick panel sitting against one edge of the cell. This is correct ray-AABB math — the panel really is that thin, and from oblique angles the ray genuinely misses it.
+
+**The fix**: For blocks with a `BlockOverride` in `MaterialSoundConfig`, skip the AABB intersection test and apply their configured occlusion directly when the DDA visits their cell. These blocks have intentional override values that should always apply when the ray enters their cell, regardless of whether the ray's exact path clips the thin geometry. This matches real-world acoustics — a closed door blocks sound even if you could peek through a tiny gap at an angle.
+
+### Why Previous Revert Was Wrong
+
+Bug 3's AABB bypass was reverted because `4B-LPF` showed `bOcc=0,57` instead of the expected 0.80, which was attributed to path probes finding clear routes. But Bug 4 testing proved path probes are NOT the cause (identical values with probes disabled). The real reason `bOcc` was 0.57 is that the path system's blend ratio weights direct occlusion with boundary opening calculations. With the AABB bypass giving correct `dOcc=0.80+`, the LPF will be proportionally correct.
+
 ## Next Steps
 
 1. ~~Investigate path probe clarity~~ — RULED OUT (same values with repositioning off)
-2. Trace the full pipeline from DDA hit → final LPF application with logging to find where door occlusion is lost
-3. Check if the reverted `IsOpenInteractable` check is causing DDA to skip door blocks
-4. Verify override value actually reaches `OcclusionToFilter` and isn't overwritten
-5. Check EMA smoothing behavior — is it keeping stale low values from before door was closed?
+2. ~~Trace the full pipeline from DDA hit → final LPF application~~ — **DONE**: Ray-AABB miss is the confirmed cause
+3. ~~Check if the reverted `IsOpenInteractable` check is causing DDA to skip door blocks~~ — **No**: DDA visits doors, the blocks are logged
+4. ~~Verify override value actually reaches `OcclusionToFilter`~~ — **Yes**: When ray hits, occ=0.80 correctly applied
+5. ~~Check EMA smoothing behavior~~ — Not the primary cause; direct occlusion `dOcc` is already wrong
+6. **IMPLEMENT FIX**: Skip `RayHitsAnyCollisionBox` for blocks with `HasBlockOverride()`, apply override occlusion directly
+7. **Multiblock null boxes**: Investigate why `p1`-suffix multiblocks return null collision boxes (separate from door panel miss issue — likely `BlockMultiblock.Handle()` chain failure for non-adjacent offsets)
 
 ---
 
