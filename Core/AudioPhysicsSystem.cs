@@ -702,15 +702,29 @@ namespace soundphysicsadapted
                 // (the stone-throw panning bug: 40 bounce rays outvoted 1 direct path → 16° shift).
                 bool skipRepositioning = occlusion < 0.3f;
 
+                // OPTION E: Ambient volume sounds (beehives, water, lava) skip probes entirely.
+                // VS plays these as dynamic bounding-box volumes whose position tracks the player
+                // (nearest point on bbox). This lands at block boundaries that produce bogus probe
+                // results (e.g. 14 open / 0 perm through a wall). The direct ray correctly reads
+                // occlusion (occ=1.00 through stone), so use that with EMA smoothing.
+                // Reverb still applies (computed above). Repositioning is meaningless for volumes
+                // since VS already handles spatial placement via the bounding box clamping.
+                // Note: probes still run inside the raytracer (reverb shares the same call) but
+                // pathResult is discarded here. Acceptable perf cost for ambient sound rarity.
+                bool isAmbientVolume = sound.Params?.SoundType == EnumSoundType.Ambient;
+                if (isAmbientVolume)
+                    skipRepositioning = true;
+
                 if (skipRepositioning)
                 {
-                    // Clear LOS: sound stays at original position.
+                    // Clear LOS or ambient volume: sound stays at original position.
                     AudioRenderer.ResetSoundPosition(sound, soundPos);
 
                     // SMOOTH TRANSITION: When switching from occluded→clear, don't snap
                     // the filter. Instead, EMA-smooth toward the direct occlusion value.
                     // This prevents the audible brightness pop when crossing the occ<0.3
                     // threshold (filter could jump 2-3x in one tick otherwise).
+                    // For ambient volumes, this gives smooth occlusion as player moves around walls.
                     if (cache.HasSmoothedOcc && cache.SmoothedBlendedOcc > occlusion + 0.3f)
                     {
                         // Still converging from previous occlusion — smooth toward clear
@@ -732,12 +746,21 @@ namespace soundphysicsadapted
 
                     // Clear LOS with occlusion near 0.3 threshold = near acoustic boundary.
                     // Values above 0.15 suggest growing foliage/obstruction — keep update interval high.
-                    cache.NearAcousticBoundary = occlusion > 0.15f;
+                    // Ambient volumes always get responsive updates (position changes every tick).
+                    cache.NearAcousticBoundary = isAmbientVolume || occlusion > 0.15f;
 
                     if (updatedThisTick == 0)
                     {
-                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[4B-LOS] occ={occlusion:F2}<0.3 filt={directFilter:F3} (no repos)");
+                        if (isAmbientVolume)
+                        {
+                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                                $"[4B-AMBIENT] occ={occlusion:F2} filt={directFilter:F3} (direct ray only, probe skip)");
+                        }
+                        else
+                        {
+                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                                $"[4B-LOS] occ={occlusion:F2}<0.3 filt={directFilter:F3} (no repos)");
+                        }
                     }
                 }
                 else if (pathResult.HasValue)
