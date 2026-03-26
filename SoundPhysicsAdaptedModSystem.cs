@@ -605,6 +605,9 @@ namespace soundphysicsadapted
 
                 // Phase 5A: Weather sound suppression patches
                 WeatherSoundPatches.ApplyPatches(harmony, api);
+
+                // Ambient sound bbox face-sampling patches (beehive/water occlusion fix)
+                AmbientSoundPatches.ApplyPatches(harmony, api);
             }
             catch (Exception ex)
             {
@@ -1183,6 +1186,9 @@ namespace soundphysicsadapted
 
             // Clear mono downmix cache
             MonoDownmixManager.ClearCache();
+
+            // Clear ambient face-sampling data
+            AmbientSoundPatches.Clear();
 
             // Unpatch Harmony
             harmony?.UnpatchAll(HARMONY_ID);

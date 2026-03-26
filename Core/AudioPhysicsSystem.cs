@@ -530,7 +530,48 @@ namespace soundphysicsadapted
             // NOTE: Sound occlusion uses OcclusionCalculator.Calculate() (multi-ray with voting).
             // All blocks (including doors) are treated uniformly — AABB collision geometry
             // determines occlusion naturally. No special door handling.
-            float occlusion = OcclusionCalculator.Calculate(soundPos, playerPos, blockAccessor);
+
+            // AMBIENT FACE SAMPLING: For ambient volume sounds (beehives, water, lava),
+            // VS repositions the sound to the nearest bbox surface — which may land on an
+            // occluded face while other faces have clear LOS. Sample all player-facing face
+            // centers and use the least-occluded one as the acoustic origin for DDA.
+            bool isAmbientVolume = sound.Params?.SoundType == EnumSoundType.Ambient;
+            Vec3d acousticPos = soundPos;
+
+            if (isAmbientVolume)
+            {
+                var candidates = AmbientSoundPatches.GetFaceCandidates(sound, out int candidateCount);
+                if (candidates != null && candidateCount > 0)
+                {
+                    // Screen candidates with cheap single-ray DDA.
+                    // Pick the face with the clearest path to the player.
+                    float bestOcc = float.MaxValue;
+                    Vec3d bestPos = soundPos;
+
+                    for (int i = 0; i < candidateCount; i++)
+                    {
+                        float candOcc = OcclusionCalculator.CalculatePathOcclusion(
+                            candidates[i], playerPos, blockAccessor);
+                        if (candOcc < bestOcc)
+                        {
+                            bestOcc = candOcc;
+                            bestPos = candidates[i];
+                            if (bestOcc <= 0f) break; // fully clear, no point checking more
+                        }
+                    }
+
+                    acousticPos = bestPos;
+
+                    if (updatedThisTick == 0)
+                    {
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"[AMBIENT-FACE] {soundName} tested {candidateCount} faces, bestOcc={bestOcc:F2} " +
+                            $"pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
+                    }
+                }
+            }
+
+            float occlusion = OcclusionCalculator.Calculate(acousticPos, playerPos, blockAccessor);
             float directFilter = occlusion <= 0 ? 1.0f : OcclusionCalculator.OcclusionToFilter(occlusion);
 
             // Interval compensation factor for EMA smoothing below.
@@ -704,14 +745,11 @@ namespace soundphysicsadapted
 
                 // OPTION E: Ambient volume sounds (beehives, water, lava) skip probes entirely.
                 // VS plays these as dynamic bounding-box volumes whose position tracks the player
-                // (nearest point on bbox). This lands at block boundaries that produce bogus probe
-                // results (e.g. 14 open / 0 perm through a wall). The direct ray correctly reads
-                // occlusion (occ=1.00 through stone), so use that with EMA smoothing.
-                // Reverb still applies (computed above). Repositioning is meaningless for volumes
-                // since VS already handles spatial placement via the bounding box clamping.
-                // Note: probes still run inside the raytracer (reverb shares the same call) but
-                // pathResult is discarded here. Acceptable perf cost for ambient sound rarity.
-                bool isAmbientVolume = sound.Params?.SoundType == EnumSoundType.Ambient;
+                // (nearest point on bbox). Face-sampling (above) picks the best acoustic origin
+                // from all player-facing bbox faces, so the direct ray already has the correct
+                // occlusion. Probes still run inside the raytracer (reverb shares the same call)
+                // but pathResult is discarded here.
+                // isAmbientVolume is detected earlier for face-sampling.
                 if (isAmbientVolume)
                     skipRepositioning = true;
 
@@ -753,8 +791,10 @@ namespace soundphysicsadapted
                     {
                         if (isAmbientVolume)
                         {
+                            bool usedFace = acousticPos != soundPos;
                             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[4B-AMBIENT] occ={occlusion:F2} filt={directFilter:F3} (direct ray only, probe skip)");
+                                $"[4B-AMBIENT] occ={occlusion:F2} filt={directFilter:F3} " +
+                                $"({(usedFace ? "face-sampled" : "vanilla pos")}, probe skip)");
                         }
                         else
                         {
@@ -1026,7 +1066,10 @@ namespace soundphysicsadapted
                     _cleanupRemoveList.Add(kvp.Key);
             }
             foreach (var key in _cleanupRemoveList)
+            {
                 soundCache.Remove(key);
+                AmbientSoundPatches.RemoveSound(key);
+            }
         }
 
         /// <summary>
