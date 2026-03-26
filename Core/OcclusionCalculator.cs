@@ -357,7 +357,7 @@ namespace soundphysicsadapted
 
                         if (hasOverride)
                         {
-                            if (IsDoorOpen(blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                            if (IsDoorOpen(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
                             {
                                 // Door/trapdoor is open — treat as air, zero occlusion
                                 if (verboseLog) ddaTrace.Append($"  DDA door-open: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (open, pass-through)\n");
@@ -588,7 +588,7 @@ namespace soundphysicsadapted
 
                         if (hasOverride)
                         {
-                            if (IsDoorOpen(blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                            if (IsDoorOpen(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
                             {
                                 // Open door — weather-transparent
                                 if (previousBlockWasOccluding)
@@ -714,21 +714,28 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Check if a door/trapdoor at this position is currently open.
-        /// Returns true if the block has a BEBehaviorDoor or BEBehaviorTrapDoor
-        /// with Opened == true. Returns false if no door behavior found (safe
-        /// default: assume closed, apply occlusion).
+        /// Check if a door/trapdoor/gate at this position is currently open.
+        /// First checks BEBehaviorDoor / BEBehaviorTrapDoor (vanilla doors).
+        /// Falls back to block code path check for "opened" / "-open-" which
+        /// handles Medieval Expansion gates and other mods that encode state
+        /// in block code variants rather than BlockEntity behaviors.
         /// </summary>
-        private static bool IsDoorOpen(IBlockAccessor blockAccessor, int x, int y, int z)
+        private static bool IsDoorOpen(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
         {
             var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0));
-            if (be == null) return false;
+            if (be != null)
+            {
+                var doorBeh = be.GetBehavior<BEBehaviorDoor>();
+                if (doorBeh != null) return doorBeh.Opened;
 
-            var doorBeh = be.GetBehavior<BEBehaviorDoor>();
-            if (doorBeh != null) return doorBeh.Opened;
+                var trapBeh = be.GetBehavior<BEBehaviorTrapDoor>();
+                if (trapBeh != null) return trapBeh.Opened;
+            }
 
-            var trapBeh = be.GetBehavior<BEBehaviorTrapDoor>();
-            if (trapBeh != null) return trapBeh.Opened;
+            // Fallback: check block code for open state (ME gates, modded doors)
+            string path = block.Code?.Path;
+            if (path != null && (path.Contains("opened") || path.Contains("-open-")))
+                return true;
 
             return false;
         }
