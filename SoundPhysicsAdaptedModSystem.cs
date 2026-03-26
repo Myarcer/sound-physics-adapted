@@ -51,6 +51,9 @@ namespace soundphysicsadapted
         private static WeatherAudioManager weatherManager;
         private long weatherTimerId = 0;
 
+        // Debug visualization (IRenderer wireframe)
+        private static DebugVisualization debugViz;
+
         // === WORLD READINESS GATE ===
         // Prevents tick handlers and Harmony patches from running expensive raycasts
         // before the world is fully loaded. Without this, DDA raycasts against an
@@ -266,19 +269,85 @@ namespace soundphysicsadapted
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v3: added decorative block overrides (toolrack, torchholder, lantern, anvil, etc.)");
                     }
 
-                    // Version 4 migration: remove glass panes from TreatAsFullCube.
-                    // Glass panes are partial blocks that shouldn't be treated as full cubes.
-                    // The new DDA-verified sky coverage scan properly handles partial blocks,
-                    // so the workaround is no longer needed.
+                    // Version 4 migration: knapping/clayforming surfaces + loose ground items
+                    // These thin interactive surfaces have block-wide collision boxes that rays
+                    // easily hit, applying stone material occlusion (~0.95) despite being acoustically
+                    // transparent. Loose stones/flints/ores are tiny ground scatter.
                     if (materialConfig.Version < 4)
                     {
+                        var overrides = materialConfig.Occlusion.BlockOverrides;
+                        if (overrides != null)
+                        {
+                            var craftSurfaceOverrides = new System.Collections.Generic.Dictionary<string, float>
+                            {
+                                { "game:knappingsurface*", 0.0f },
+                                { "game:clayforming*", 0.0f },
+                                { "game:loosestones-*", 0.0f },
+                                { "game:looseflints-*", 0.0f },
+                                { "game:looseores-*", 0.0f }
+                            };
+                            foreach (var kvp in craftSurfaceOverrides)
+                            {
+                                if (!overrides.ContainsKey(kvp.Key))
+                                    overrides[kvp.Key] = kvp.Value;
+                            }
+                        }
+
+                        materialConfig.Version = 4;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v4: added knapping/clayforming surface + loose ground item overrides");
+                    }
+
+                    // Version 5 migration: fix door/gate override patterns
+                    // Old patterns required state suffix ("door-*-closed-*") that VS doors
+                    // don't have (e.g. "door-solid-aged"). Replace with broad prefixes.
+                    // Open/closed is now handled by collision geometry, not code matching.
+                    if (materialConfig.Version < 5)
+                    {
+                        var overrides = materialConfig.Occlusion.BlockOverrides;
+                        if (overrides != null)
+                        {
+                            // Remove broken state-specific patterns
+                            overrides.Remove("game:door-*-closed-*");
+                            overrides.Remove("game:door-*-opened-*");
+                            overrides.Remove("game:trapdoor-*-closed-*");
+                            overrides.Remove("game:trapdoor-*-opened-*");
+                            // Add broad patterns matching actual VS block codes
+                            if (!overrides.ContainsKey("game:door-*"))
+                                overrides["game:door-*"] = 0.8f;
+                            if (!overrides.ContainsKey("game:metaldoor-*"))
+                                overrides["game:metaldoor-*"] = 0.9f;
+                            if (!overrides.ContainsKey("game:trapdoor-*"))
+                                overrides["game:trapdoor-*"] = 0.7f;
+                            if (!overrides.ContainsKey("game:*gate*"))
+                                overrides["game:*gate*"] = 0.8f;
+                        }
+
+                        materialConfig.Version = 5;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v5: fixed door/gate override patterns (broad prefix match)");
+                    }
+
+                    // Version 6 migration: Medieval Expansion gate/portcullis/drawbridge overrides
+                    // + remove glasspane-leaded from TreatAsFullCube (thin geometry, normal AABB is fine)
+                    if (materialConfig.Version < 6)
+                    {
+                        var overrides = materialConfig.Occlusion.BlockOverrides;
+                        if (overrides != null)
+                        {
+                            if (!overrides.ContainsKey("medievalexpansion:gate*"))
+                                overrides["medievalexpansion:gate*"] = 0.8f;
+                            if (!overrides.ContainsKey("medievalexpansion:portcullis*"))
+                                overrides["medievalexpansion:portcullis*"] = 0.85f;
+                            if (!overrides.ContainsKey("medievalexpansion:drawbridge*"))
+                                overrides["medievalexpansion:drawbridge*"] = 0.8f;
+                        }
+
                         if (materialConfig.Occlusion.TreatAsFullCube != null)
                         {
                             materialConfig.Occlusion.TreatAsFullCube.RemoveAll(p => p.Contains("glasspane"));
                         }
 
-                        materialConfig.Version = 4;
-                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v4: removed glass panes from TreatAsFullCube (DDA sky coverage handles partial blocks)");
+                        materialConfig.Version = 6;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v6: added Medieval Expansion overrides, removed glasspane from TreatAsFullCube");
                     }
                 }
                 // Always re-save to add any new properties from updates
@@ -560,6 +629,9 @@ namespace soundphysicsadapted
 
                 // Phase 5A: Weather sound suppression patches
                 WeatherSoundPatches.ApplyPatches(harmony, api);
+
+                // Ambient sound bbox face-sampling patches (beehive/water occlusion fix)
+                AmbientSoundPatches.ApplyPatches(harmony, api);
             }
             catch (Exception ex)
             {
@@ -645,6 +717,9 @@ namespace soundphysicsadapted
                     weatherManager = null;
                 }
             }
+
+            // Initialize debug visualization (IRenderer wireframe)
+            debugViz = new DebugVisualization(api);
 
             // Register debug commands
             RegisterCommands(api);
@@ -759,6 +834,7 @@ namespace soundphysicsadapted
         private void RegisterCommands(ICoreClientAPI api)
         {
             api.ChatCommands.Create("soundphysics")
+                .WithRootAlias("sp")
                 .WithDescription("Sound Physics Adapted commands")
                 .BeginSubCommand("debug")
                     .WithDescription("Toggle master debug mode (gates all sub-debug flags)")
@@ -1000,16 +1076,70 @@ namespace soundphysicsadapted
                         return TextCommandResult.Success($"[SoundPhysicsAdapted] Weather debug: {(config.DebugWeather ? "ON" : "OFF")}{gate}");
                     })
                 .EndSubCommand()
-                .BeginSubCommand("weather-viz")
-                    .WithDescription("Toggle weather DDA visualization (block highlights showing detection pipeline)")
+                .BeginSubCommand("viz")
+                    .WithDescription("Toggle debug visualizations.\n" +
+                        "Modes: bounces | rays | occlusion | reposition | weather | openings | off\n" +
+                        "bounces cycles: reflectivity \u2192 reverb slots \u2192 off\n" +
+                        "No argument = show status of all modes")
+                    .WithArgs(api.ChatCommands.Parsers.OptionalWord("mode"))
                     .HandleWith((args) =>
                     {
-                        config.DebugWeatherVisualization = !config.DebugWeatherVisualization;
-                        api.StoreModConfig(config, "soundphysicsadapted.json");
-                        string legend = config.DebugWeatherVisualization
-                            ? "\nSky: Blue=covered Yellow=exposed | Paths: White=confirmed DimOrange=over-budget Red=blocked Orange=partial Cyan=neighbor | Audio: Magenta=source"
-                            : "";
-                        return TextCommandResult.Success($"[SoundPhysicsAdapted] Weather visualization: {(config.DebugWeatherVisualization ? "ON" : "OFF")}{legend}");
+                        var viz = DebugVisualization.Instance;
+                        if (viz == null)
+                            return TextCommandResult.Error("[SPA] Visualization system not initialized");
+
+                        string mode = (args.Parsers[0].IsMissing) ? null : (string)args[0];
+
+                        if (mode == null)
+                        {
+                        {
+                            string bounceLabel = viz.BounceColorMode switch
+                            {
+                                1 => "ON (reflectivity)",
+                                2 => "ON (reverb slots)",
+                                _ => "off"
+                            };
+                            return TextCommandResult.Success(
+                                $"[SPA] Viz modes:\n" +
+                                $"  bounces: {bounceLabel}\n" +
+                                $"  rays: {(viz.ShowRays ? "ON" : "off")}\n" +
+                                $"  occlusion: {(viz.ShowOcclusion ? "ON" : "off")}\n" +
+                                $"  reposition: {(viz.ShowReposition ? "ON" : "off")}\n" +
+                                $"  openings: {(viz.ShowOpenings ? "ON" : "off")}\n" +
+                                $"  weather: {(config.DebugWeatherVisualization ? "ON" : "off")}");
+                        }
+                        }
+
+                        switch (mode.ToLower())
+                        {
+                            case "bounces":
+                                viz.BounceColorMode = (viz.BounceColorMode + 1) % 3;
+                                string bLabel = viz.BounceColorMode switch { 1 => "ON (reflectivity)", 2 => "ON (reverb slots)", _ => "OFF" };
+                                return TextCommandResult.Success($"[SPA] Bounce viz: {bLabel}");
+                            case "rays":
+                                viz.ShowRays = !viz.ShowRays;
+                                return TextCommandResult.Success($"[SPA] Ray path viz: {(viz.ShowRays ? "ON" : "OFF")}");
+                            case "occlusion":
+                                viz.ShowOcclusion = !viz.ShowOcclusion;
+                                return TextCommandResult.Success($"[SPA] Occlusion path viz: {(viz.ShowOcclusion ? "ON" : "OFF")}");
+                            case "reposition":
+                                viz.ShowReposition = !viz.ShowReposition;
+                                return TextCommandResult.Success($"[SPA] Reposition viz: {(viz.ShowReposition ? "ON" : "OFF")}");
+                            case "weather":
+                                config.DebugWeatherVisualization = !config.DebugWeatherVisualization;
+                                return TextCommandResult.Success($"[SPA] Weather viz: {(config.DebugWeatherVisualization ? "ON" : "OFF")}" +
+                                    (config.DebugWeatherVisualization ? "\nSky: Blue=covered Yellow=exposed | Paths: White=confirmed Red=blocked | Audio: Magenta=source" : ""));
+                            case "openings":
+                                viz.ShowOpenings = !viz.ShowOpenings;
+                                return TextCommandResult.Success($"[SPA] Opening probe viz: {(viz.ShowOpenings ? "ON" : "OFF")}");
+                            case "off":
+                            case "clear":
+                                viz.ClearAll();
+                                config.DebugWeatherVisualization = false;
+                                return TextCommandResult.Success("[SPA] All visualizations OFF");
+                            default:
+                                return TextCommandResult.Error($"Unknown viz mode: {mode}\nValid: bounces | rays | occlusion | reposition | weather | openings | off");
+                        }
                     })
                 .EndSubCommand();
         }
@@ -1068,6 +1198,10 @@ namespace soundphysicsadapted
             weatherManager?.Dispose();
             weatherManager = null;
 
+            // Dispose debug visualization
+            debugViz?.Dispose();
+            debugViz = null;
+
             // Dispose all per-sound filters
             AudioRenderer.Dispose();
 
@@ -1076,6 +1210,9 @@ namespace soundphysicsadapted
 
             // Clear mono downmix cache
             MonoDownmixManager.ClearCache();
+
+            // Clear ambient face-sampling data
+            AmbientSoundPatches.Clear();
 
             // Unpatch Harmony
             harmony?.UnpatchAll(HARMONY_ID);

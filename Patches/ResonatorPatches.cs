@@ -187,7 +187,7 @@ namespace soundphysicsadapted.Patches
         private static readonly object TrackPlayedMarker = new object();
         
         /// <summary>
-        /// Flag to swap next StartTrack sound type from MusicGlitchunaffected to AmbientGlitchunaffected.
+        /// Flag to swap next StartTrack sound type from MusicGlitchunaffected to Ambient.
         /// Set by StartMusicPrefix, consumed by StartTrackSoundTypePrefix, safety-cleared by StartMusicPostfix.
         /// Moves the resonator from the Music volume slider to the Ambient volume slider.
         /// </summary>
@@ -344,7 +344,7 @@ namespace soundphysicsadapted.Patches
         }
 
         /// <summary>
-        /// Patches ClientCoreAPI.StartTrack to swap MusicGlitchunaffected → AmbientGlitchunaffected
+        /// Patches ClientCoreAPI.StartTrack to swap MusicGlitchunaffected → Ambient
         /// when the resonator flag is set. This moves the resonator from the Music volume slider
         /// to the Ambient volume slider without changing any other logic.
         /// </summary>
@@ -419,15 +419,17 @@ namespace soundphysicsadapted.Patches
         }
 
         /// <summary>
-        /// Prefix for ClientCoreAPI.StartTrack — swaps MusicGlitchunaffected to AmbientGlitchunaffected
+        /// Prefix for ClientCoreAPI.StartTrack — swaps MusicGlitchunaffected to Ambient
         /// when triggered by resonator's StartMusic. This moves the resonator audio from the Music
         /// volume slider to the Ambient volume slider, while vanilla music remains on the Music slider.
+        /// Using plain Ambient (not AmbientGlitchunaffected) so the Option E ambient volume sound
+        /// detection treats the resonator consistently with other ambient block sounds.
         /// </summary>
         public static void StartTrackSoundTypePrefix(ref EnumSoundType __2)
         {
             if (NextStartTrackUseAmbient && __2 == EnumSoundType.MusicGlitchunaffected)
             {
-                __2 = EnumSoundType.AmbientGlitchunaffected;
+                __2 = EnumSoundType.Ambient;
                 NextStartTrackUseAmbient = false;
             }
         }
@@ -466,7 +468,7 @@ namespace soundphysicsadapted.Patches
                 // sound. SoundStartPrefix sees isNonPositional and returns early without registering
                 // in activeFilters. This makes the sound invisible to the occlusion AND underwater pipeline.
                 // Fix: register it here on first tick, after we've set the position.
-                // Note: SoundType is AmbientGlitchunaffected (patched from MusicGlitchunaffected)
+                // Note: SoundType is Ambient (patched from MusicGlitchunaffected)
                 // so volume is controlled by the Ambient slider, not the Music slider.
                 if (!AudioRenderer.IsRegistered(sound))
                 {
@@ -1129,7 +1131,7 @@ namespace soundphysicsadapted.Patches
             // Detect natural track completion:
             // The resonator still thinks it's playing (IsPlaying=true) but the actual
             // audio has stopped or been disposed. This happens because we swap the sound
-            // type to AmbientGlitchunaffected (bypassing the Music engine's completion
+            // type to Ambient (bypassing the Music engine's completion
             // callback), or on vanilla servers where track completion state is stale.
             if (__instance.IsPlaying && trackHasPlayed.TryGetValue(__instance, out _))
             {

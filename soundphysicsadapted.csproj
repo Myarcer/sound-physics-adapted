@@ -57,6 +57,10 @@
       <HintPath>lib\VSSurvivalMod.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="VSEssentials">
+      <HintPath>lib\VSEssentials.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="protobuf-net">
       <HintPath>lib\protobuf-net.dll</HintPath>
       <Private>false</Private>

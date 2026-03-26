@@ -187,9 +187,10 @@ namespace soundphysicsadapted
         private const float MERGE_RADIUS = 3.0f;
         private const float MERGE_RADIUS_SQ = MERGE_RADIUS * MERGE_RADIUS;
 
-        // Hysteresis for removal: opening must be this far beyond scan radius to be removed
-        // Prevents flicker at scan boundary
-        private const float REMOVAL_DISTANCE_PADDING = 4f;
+        // Hysteresis for removal: opening must be this far beyond scan radius to be removed.
+        // Must match or exceed WeatherEnclosureCalculator.MEMORY_RADIUS - SCAN_RADIUS
+        // so tracked openings survive as long as the cache feeds them clusters.
+        private const float REMOVAL_DISTANCE_PADDING = 8f;
 
         /// <summary>
         /// Maximum DDA occlusion for a member column to count as "still open" in the
@@ -344,21 +345,20 @@ namespace soundphysicsadapted
                     // When player walks back into cave, DDA can't reach overhead
                     // columns anymore → members drop to 1. Without peak hold,
                     // volume would crash instantly. Peak decays slowly instead.
-                    // Asymmetric smoothing: fast attack, slow linear decay.
-                    // Snap up immediately when more members found.
-                    // Decay slowly (1.5 members/sec) to prevent abrupt volume drops
-                    // when DDA finds fewer columns (player moving away from overhead openings).
+                    // Asymmetric EMA smoothing: fast attack, slow decay.
+                    // Both directions use exponential smoothing to absorb member
+                    // flicker from DDA verification noise (small objects, angle changes).
+                    // Snap-up would cause sawtooth volume when members oscillate 4→3→4→3.
                     if (cluster.MemberCount >= tracked.SmoothedClusterWeight)
                     {
-                        // Fast attack: snap to new higher value
-                        tracked.SmoothedClusterWeight = cluster.MemberCount;
+                        // Fast attack: 50% per tick → 90% convergence in ~200ms
+                        tracked.SmoothedClusterWeight += (cluster.MemberCount - tracked.SmoothedClusterWeight) * 0.5f;
                     }
                     else
                     {
-                        // Slow linear decay: 0.15/tick at ~10Hz = 1.5 members/sec
-                        tracked.SmoothedClusterWeight = Math.Max(
-                            tracked.SmoothedClusterWeight - 0.15f,
-                            (float)cluster.MemberCount);
+                        // Slow decay: 6% per tick at ~10Hz → ~4s to converge
+                        // Absorbs transient member drops from DDA angle changes / small objects
+                        tracked.SmoothedClusterWeight += (cluster.MemberCount - tracked.SmoothedClusterWeight) * 0.06f;
                     }
                     tracked.LastKnownOcclusion = cluster.AverageOcclusion;
                     tracked.LastVerifiedTimeMs = gameTimeMs;
@@ -824,14 +824,22 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Check if a block is structurally solid (not air, plant, or leaves).
+        /// Check if a block is structurally solid (not air, plant, or leaves,
+        /// and has collision geometry). Blocks without collision boxes (wooden paths,
+        /// decorative items, toolracks) can't physically block rain columns.
         /// Used by structural integrity checks to determine if an opening column is blocked.
         /// </summary>
         private static bool IsBlockSolid(Block block)
         {
-            return block.BlockMaterial != EnumBlockMaterial.Air
-                && block.BlockMaterial != EnumBlockMaterial.Plant
-                && block.BlockMaterial != EnumBlockMaterial.Leaves;
+            if (block.BlockMaterial == EnumBlockMaterial.Air
+                || block.BlockMaterial == EnumBlockMaterial.Plant
+                || block.BlockMaterial == EnumBlockMaterial.Leaves)
+                return false;
+
+            // No collision geometry = walkthrough block (paths, decorative items).
+            // These don't physically block rain.
+            var collBoxes = block.CollisionBoxes;
+            return collBoxes != null && collBoxes.Length > 0;
         }
 
         /// <summary>

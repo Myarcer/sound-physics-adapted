@@ -4,6 +4,39 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-03-26
+
+### Fixed
+- Door occlusion — closed doors now properly muffle sound; open doors are fully transparent; thin panels that miss AABB ray tests get override-based occlusion directly
+- Weather DDA door separation — dual-accumulator separates Layer 1 ambient muffling (doors count) from 5B spawn detection (doors transparent), so rain sources spawn behind closed doors but still muffle correctly
+- DDA partial-block destination — player inside a partial block (slab, ladder, etc.) no longer gets blanket skip; AABB check determines actual occlusion contribution
+- DDA sky coverage — step-back test replaces legacy heuristic, preventing false sky readings through solid overhangs
+- Glass pane TreatAsFullCube migration — glass panes no longer promoted to full-cube occlusion during config version upgrade
+
+## [0.2.0] - 2026-03-25
+
+### Added
+- Direct path gain (AL_LOWPASS_GAIN) — SPR-style gain formula for more natural wall muffling alongside frequency filtering
+- Debug visualization — `.soundphysics viz` / `.sp viz` shows occlusion rays, bounce paths, and reverb slots as colored wireframes
+- Diffraction HF darkening — sounds around corners lose treble proportional to diffraction angle
+- Auto-scaled foliage occlusion — bushes and foliage scale by actual block volume instead of flat overrides
+- Weather column memory — verified rain/wind columns persist and only recheck on block changes
+
+### Fixed
+- Linux EFX compatibility — probes real auxiliary send count, remaps reverb for 2-send devices
+- Reverb filter gain — SetLowpassGainHF was clobbering direct gain on reverb sends
+- Knapping/crafting occlusion — knapping surfaces, loose stones, flints, ores, clayforming no longer block sound
+- Beams in weather — treated as weather-transparent instead of blocking rain sources
+- Positional sources playing as stereo on rejoin — warmup unified with IsWorldReady so spatial audio is applied correctly
+- Sound repositioning wobble — EMA smoothing on target damps dual-path oscillation
+- Stale sound cleanup — orphaned sources detected and removed
+- Bounce offset accuracy — normal offset 0.15 to 0.01
+
+### Performance
+- All Harmony patch hooks gated behind IsWorldReady startup check
+- Small decorative objects auto-detected instead of hardcoded overrides
+- DDA debug logs batched per ray
+
 ## [0.1.9.0] - 2026-03-22
 
 ### Added

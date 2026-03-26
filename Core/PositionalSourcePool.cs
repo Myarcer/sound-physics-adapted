@@ -44,6 +44,7 @@ namespace soundphysicsadapted
             public bool Active;              // Whether this slot is in use
             public float TargetVolume;       // What we're fading toward
             public float CurrentVolume;      // What's currently set (for smooth fading)
+            public Vec3f LastAppliedPos;     // Last position sent to OpenAL (dead zone filter)
         }
 
         private readonly ICoreClientAPI capi;
@@ -83,6 +84,20 @@ namespace soundphysicsadapted
 
         /// <summary>Volume below which a source is considered silent and can be stopped.</summary>
         public float MinVolume { get; set; } = 0.005f;
+
+        /// <summary>
+        /// Volume below which a fading-out slot can be evicted for reuse.
+        /// Sources above this threshold are left to fade naturally, preventing
+        /// audible hard-cuts when a new opening needs a slot.
+        /// </summary>
+        private const float EVICTION_VOLUME_THRESHOLD = 0.02f;
+
+        /// <summary>
+        /// Minimum squared distance an OpenAL source must move before SetPosition
+        /// is called. Prevents panning jitter from sub-block centroid micro-shifts.
+        /// 0.25 = 0.5 blocks minimum movement.
+        /// </summary>
+        private const float POSITION_UPDATE_MIN_DIST_SQ = 0.25f;
 
         /// <summary>
         /// Direct DDA occlusion above this = sound is inaudible.
@@ -210,10 +225,14 @@ namespace soundphysicsadapted
 
                         if (slot.Sound != null && slot.Sound.IsPlaying)
                         {
-                            slot.Sound.SetPosition(new Vec3f(
-                                (float)pos.X,
-                                (float)pos.Y,
-                                (float)pos.Z));
+                            // Dead zone: only update OpenAL position if moved significantly.
+                            // Prevents panning jitter from sub-block centroid micro-shifts.
+                            var newPos3f = new Vec3f((float)pos.X, (float)pos.Y, (float)pos.Z);
+                            if (slot.LastAppliedPos == null || PositionDistSq(newPos3f, slot.LastAppliedPos) > POSITION_UPDATE_MIN_DIST_SQ)
+                            {
+                                slot.Sound.SetPosition(newPos3f);
+                                slot.LastAppliedPos = newPos3f;
+                            }
                         }
 
                         openingAssigned[o] = true;
@@ -244,7 +263,11 @@ namespace soundphysicsadapted
                         bestSlot = s;
                         break;
                     }
-                    if (slot.TargetVolume <= 0f && slot.CurrentVolume < lowestVolume)
+                    // Only evict fading-out slots that are nearly silent.
+                    // Sources above EVICTION_VOLUME_THRESHOLD fade naturally,
+                    // preventing audible hard-cuts on slot reassignment.
+                    if (slot.TargetVolume <= 0f && slot.CurrentVolume < EVICTION_VOLUME_THRESHOLD
+                        && slot.CurrentVolume < lowestVolume)
                     {
                         lowestVolume = slot.CurrentVolume;
                         bestSlot = s;
@@ -463,7 +486,7 @@ namespace soundphysicsadapted
                     // bounce rays has low effective occlusion even when direct
                     // DDA is very high (wall between player and source).
                     float occ = audioPhysics.GetEffectiveOcclusion(slot.Sound);
-                    if (occ < 0) return true; // Not yet in cache = just spawned, assume audible
+                    if (occ < 0) return false; // Sound not in cache — unregistered or stale, not audible
                     bool audible = occ <= AudibilityOccThreshold;
 
                     var cfg = SoundPhysicsAdaptedModSystem.Config;
@@ -508,6 +531,15 @@ namespace soundphysicsadapted
         // ════════════════════════════════════════════════════════════════
         // Source Lifecycle
         // ════════════════════════════════════════════════════════════════
+
+        /// <summary>Squared distance between two Vec3f positions.</summary>
+        private static float PositionDistSq(Vec3f a, Vec3f b)
+        {
+            float dx = a.X - b.X;
+            float dy = a.Y - b.Y;
+            float dz = a.Z - b.Z;
+            return dx * dx + dy * dy + dz * dz;
+        }
 
         private float CalculateVolume(TrackedOpening opening, float intensity, float multiplier)
         {
@@ -561,7 +593,16 @@ namespace soundphysicsadapted
         /// </summary>
         private void EnsureSourcePlaying(PositionalSource slot)
         {
-            if (slot.Sound != null && slot.Sound.IsPlaying) return;
+            if (slot.Sound != null && slot.Sound.IsPlaying)
+            {
+                // Sound exists and playing — but check if it's actually registered
+                // for occlusion processing. Unregistered sounds have N/A occlusion,
+                // can't be tracked, and become immortal. Recreate them.
+                if (AudioRenderer.IsRegistered(slot.Sound)) return;
+
+                WeatherAudioManager.WeatherDebugLog(
+                    $"[5B-{debugTag}] Stale unregistered source trackId={slot.TrackingId}, recreating");
+            }
             if (AssetResolver == null) return;
 
             if (slot.Sound != null)
@@ -601,6 +642,10 @@ namespace soundphysicsadapted
                 if (slot.Sound != null)
                 {
                     slot.Sound.Start();
+                    slot.LastAppliedPos = new Vec3f(
+                        (float)slot.WorldPos.X,
+                        (float)slot.WorldPos.Y,
+                        (float)slot.WorldPos.Z);
 
                     int channels = -1;
                     try { channels = slot.Sound.Channels; } catch { }
@@ -633,6 +678,7 @@ namespace soundphysicsadapted
             slot.Active = false;
             slot.CurrentVolume = 0f;
             slot.TargetVolume = 0f;
+            slot.LastAppliedPos = null;
         }
 
         /// <summary>Set all active sources to fade out gracefully.</summary>
@@ -723,7 +769,8 @@ namespace soundphysicsadapted
 
                 float directOcc = audioPhysics?.GetSoundOcclusion(slot.Sound) ?? -1f;
                 float effectiveOcc = audioPhysics?.GetEffectiveOcclusion(slot.Sound) ?? -1f;
-                bool audible = effectiveOcc >= 0 ? effectiveOcc <= AudibilityOccThreshold : true;
+                bool registered = AudioRenderer.IsRegistered(slot.Sound);
+                bool audible = effectiveOcc >= 0 ? effectiveOcc <= AudibilityOccThreshold : false;
                 string directStr = directOcc >= 0 ? $"{directOcc:F2}" : "N/A";
                 string effectiveStr = effectiveOcc >= 0 ? $"{effectiveOcc:F2}" : "N/A";
 
@@ -731,7 +778,7 @@ namespace soundphysicsadapted
                     $"  [{debugTag}] Slot[{i}] id={slot.TrackingId} " +
                     $"pos=({slot.WorldPos?.X:F0},{slot.WorldPos?.Y:F0},{slot.WorldPos?.Z:F0}) " +
                     $"vol={slot.CurrentVolume:F3}/{slot.TargetVolume:F3} " +
-                    $"directOcc={directStr} effOcc={effectiveStr} audible={audible} " +
+                    $"directOcc={directStr} effOcc={effectiveStr} audible={audible} reg={registered} " +
                     $"playing={slot.Sound?.IsPlaying ?? false} " +
                     $"posMode={(PositionSelector != null ? "wind" : "default")}");
             }

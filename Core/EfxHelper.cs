@@ -18,6 +18,7 @@ namespace soundphysicsadapted
         private static MethodInfo alGetErrorMethod;
         private static Type filterFloatType;
         private static Type filterIntegerType;
+        private static object lowpassGainValue;
         private static object lowpassGainHFValue;
         private static object filterTypeValue;
 
@@ -81,6 +82,18 @@ namespace soundphysicsadapted
                     api.Logger.Warning("[EfxHelper] FilterFloat or FilterInteger enum not found");
                     return false;
                 }
+
+                // Get LowpassGain enum value (overall volume through filter)
+                try
+                {
+                    lowpassGainValue = Enum.Parse(filterFloatType, "LowpassGain");
+                }
+                catch
+                {
+                    // Try numeric value (LowpassGain = 1 in OpenAL spec)
+                    lowpassGainValue = Enum.ToObject(filterFloatType, 1);
+                }
+                api.Logger.Debug($"[EfxHelper] LowpassGain value: {lowpassGainValue}");
 
                 // Get LowpassGainHF enum value
                 try
@@ -233,6 +246,9 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Configure filter as lowpass with given GAINHF value.
+        /// Also sets AL_LOWPASS_GAIN (overall volume attenuation) using SPR formula:
+        /// directGain = pow(gainHF, 0.1) — gentle overall volume reduction that
+        /// preserves low-frequency content while reducing perceived loudness through walls.
         /// </summary>
         public static bool ConfigureLowpass(int filterId, float gainHF)
         {
@@ -242,7 +258,6 @@ namespace soundphysicsadapted
             try
             {
                 // Set filter type to lowpass (value = 1)
-                // We need to find and call Filter(int, FilterInteger, int)
                 var efxType = filterFloatMethod.DeclaringType;
                 var filterIntMethod = efxType.GetMethod("Filter",
                     BindingFlags.Public | BindingFlags.Static,
@@ -259,7 +274,11 @@ namespace soundphysicsadapted
                     SoundPhysicsAdaptedModSystem.DebugLog($"[EfxHelper] WARNING: filterIntMethod is NULL - cannot set filter type!");
                 }
 
-                // Set LowpassGainHF
+                // Set AL_LOWPASS_GAIN — overall volume attenuation (SPR: pow(cutoff, 0.1))
+                float directGain = (float)Math.Pow(Math.Max(gainHF, 0.0001f), 0.1);
+                filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainValue, directGain });
+
+                // Set AL_LOWPASS_GAINHF — high-frequency cutoff
                 filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainHFValue, gainHF });
                 return true;
             }
@@ -271,7 +290,8 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Update filter's LowpassGainHF value.
+        /// Update filter's LowpassGainHF and LowpassGain values.
+        /// Sets both high-frequency cutoff AND overall gain attenuation.
         /// </summary>
         public static bool SetLowpassGainHF(int filterId, float gainHF)
         {
@@ -283,6 +303,11 @@ namespace soundphysicsadapted
 
             try
             {
+                // Set AL_LOWPASS_GAIN — overall volume attenuation (SPR: pow(cutoff, 0.1))
+                float directGain = (float)Math.Pow(Math.Max(gainHF, 0.0001f), 0.1);
+                filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainValue, directGain });
+
+                // Set AL_LOWPASS_GAINHF — high-frequency cutoff
                 filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainHFValue, gainHF });
                 return true;
             }
@@ -373,6 +398,7 @@ namespace soundphysicsadapted
         private static object _auxSendFilterValue;  // ALSource3i.AuxiliarySendFilter enum value
         private static object _effectSlotEffectValue;  // EffectSlotInteger.Effect enum value (0x0001)
         private static bool _reverbInitialized = false;
+        private static int _auxSendErrorCount = 0;
 
         // ============================================================
         // PHASE 4B STAGE 2: AL Source Management (for permeated sources)
@@ -778,16 +804,75 @@ namespace soundphysicsadapted
         {
             if (!InitializeReverbReflection()) return 0;
 
+            // Probe actual max sends by trying a test connection on a temp source.
+            // OpenAL Soft on Linux typically supports 2, Windows 4.
             try
             {
-                // ALC_MAX_AUXILIARY_SENDS = 0x20003
-                // Need to get current device first
-                // For simplicity, return a reasonable default
-                // VS typically supports 4 aux sends
-                return 4;
+                // Create a temporary source to probe with
+                var alType = _source3iMethod?.DeclaringType;
+                if (alType == null || _source3iMethod == null)
+                {
+                    SoundPhysicsAdaptedModSystem.Log("[EfxHelper] Cannot probe aux sends (no AL.Source3i) - assuming 2");
+                    return 2;
+                }
+
+                var genSourceMethod = alType.GetMethod("GenSource",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                    null, Type.EmptyTypes, null);
+                if (genSourceMethod == null)
+                {
+                    SoundPhysicsAdaptedModSystem.Log("[EfxHelper] Cannot probe aux sends (no AL.GenSource) - assuming 2");
+                    return 2;
+                }
+
+                int testSource = (int)genSourceMethod.Invoke(null, null);
+                if (testSource <= 0)
+                {
+                    SoundPhysicsAdaptedModSystem.Log("[EfxHelper] Cannot probe aux sends (GenSource failed) - assuming 2");
+                    return 2;
+                }
+
+                object paramValue = _auxSendFilterValue ?? (object)0x20006;
+                int maxSends = 0;
+
+                for (int send = 0; send < 4; send++)
+                {
+                    GetALError(); // clear
+                    // Try connecting send index to null slot (0) with no filter (0)
+                    _source3iMethod.Invoke(null, new object[] { testSource, paramValue, 0, send, 0 });
+                    int err = GetALError();
+                    if (err == 0)
+                        maxSends = send + 1;
+                    else
+                        break; // sends are contiguous, first failure = limit
+                }
+
+                // Delete temp source
+                var deleteSourceMethod = alType.GetMethod("DeleteSource",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static,
+                    null, new Type[] { typeof(int) }, null);
+                if (deleteSourceMethod != null)
+                    deleteSourceMethod.Invoke(null, new object[] { testSource });
+                else
+                {
+                    // Try ref int signature
+                    var deleteRefMethod = alType.GetMethod("DeleteSource",
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    if (deleteRefMethod != null)
+                    {
+                        var parms = deleteRefMethod.GetParameters();
+                        if (parms.Length == 1 && parms[0].ParameterType.IsByRef)
+                            deleteRefMethod.Invoke(null, new object[] { testSource });
+                    }
+                }
+
+                if (maxSends < 1) maxSends = 1; // at least 1 if EFX init succeeded
+                SoundPhysicsAdaptedModSystem.Log($"[EfxHelper] Probed max auxiliary sends: {maxSends}");
+                return maxSends;
             }
-            catch
+            catch (Exception ex)
             {
+                SoundPhysicsAdaptedModSystem.Log($"[EfxHelper] Aux send probe failed ({ex.Message}) - assuming 2");
                 return 2; // Safe fallback
             }
         }
@@ -1142,7 +1227,13 @@ namespace soundphysicsadapted
                 int err = GetALError();
                 if (err != 0)
                 {
-                    SoundPhysicsAdaptedModSystem.Log($"[EfxHelper] ConnectSourceToAuxSlot OpenAL ERROR {err}: src={source}, slot={slot}, send={sendIndex}, filter={filter}");
+                    // Rate-limit error logging to avoid log spam (e.g. 4000+ lines on Linux with 2 sends)
+                    _auxSendErrorCount++;
+                    if (_auxSendErrorCount <= 5 || (_auxSendErrorCount % 500 == 0))
+                    {
+                        SoundPhysicsAdaptedModSystem.Log($"[EfxHelper] ConnectSourceToAuxSlot OpenAL ERROR {err}: src={source}, slot={slot}, send={sendIndex}, filter={filter}" +
+                            (_auxSendErrorCount > 5 ? $" (repeated {_auxSendErrorCount} times total)" : ""));
+                    }
                 }
                 // Success - no log needed (fires every reverb connection)
             }
@@ -1174,7 +1265,10 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Set filter gain and HF cutoff.
+        /// Set filter gain and HF cutoff for reverb send filters.
+        /// Sets AL_LOWPASS_GAIN (overall volume) and AL_LOWPASS_GAINHF (HF cutoff) independently.
+        /// NOTE: Does NOT call SetLowpassGainHF() because that method also writes AL_LOWPASS_GAIN
+        /// using the directGain formula, which would overwrite our explicit gain value.
         /// </summary>
         public static void SetFilterGains(int filter, float gain, float gainHF)
         {
@@ -1182,29 +1276,14 @@ namespace soundphysicsadapted
 
             try
             {
-                // Set LowpassGain (0x0001)
-                var efxType = filterFloatMethod?.DeclaringType;
-                if (efxType != null)
+                // Set AL_LOWPASS_GAIN — explicit reverb send gain (NOT the pow(gainHF,0.1) formula)
+                if (lowpassGainValue != null)
                 {
-                    // Try to find LowpassGain enum value
-                    object lowpassGain = null;
-                    try
-                    {
-                        lowpassGain = Enum.Parse(filterFloatType, "LowpassGain");
-                    }
-                    catch
-                    {
-                        lowpassGain = Enum.ToObject(filterFloatType, 1); // LowpassGain = 1
-                    }
-
-                    if (lowpassGain != null)
-                    {
-                        filterFloatMethod.Invoke(null, new object[] { filter, lowpassGain, gain });
-                    }
+                    filterFloatMethod.Invoke(null, new object[] { filter, lowpassGainValue, gain });
                 }
 
-                // Set LowpassGainHF
-                SetLowpassGainHF(filter, gainHF);
+                // Set AL_LOWPASS_GAINHF — high-frequency cutoff
+                filterFloatMethod.Invoke(null, new object[] { filter, lowpassGainHFValue, gainHF });
             }
             catch (Exception ex)
             {

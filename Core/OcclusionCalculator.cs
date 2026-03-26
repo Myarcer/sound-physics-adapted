@@ -214,8 +214,7 @@ namespace soundphysicsadapted
         /// <summary>
         /// Weather-aware path occlusion. Handles both solid-face blocks AND partial
         /// blocks (doors, trapdoors, chiseled blocks) via AABB collision box checks.
-        /// Returns COMBINED occlusion (structural + interactable). Used by thunder/opening tracker
-        /// where doors should still count as blocking.
+        /// Returns total occlusion along the path.
         /// </summary>
         public static float CalculateWeatherPathOcclusion(Vec3d from, Vec3d to, IBlockAccessor blockAccessor)
         {
@@ -223,30 +222,28 @@ namespace soundphysicsadapted
             if (config == null || !config.Enabled)
                 return 0f;
 
-            float structural = RunWeatherOcclusion(from, to, blockAccessor, config, out _, out float interactable);
-            return structural + interactable;
+            return RunWeatherOcclusion(from, to, blockAccessor, config, doorTransparent: false, out _, out _);
         }
 
         /// <summary>
         /// Weather-aware path occlusion with entry point tracking.
-        /// Returns STRUCTURAL occlusion only (walls, floors ÔÇö not doors/trapdoors).
-        /// Interactable occlusion (doors, trapdoors) returned separately via out param.
-        /// This allows WeatherEnclosureCalculator to spawn sources through closed doors
-        /// (using structural for threshold) while still applying door muffling.
+        /// Returns total occlusion along the path (door-transparent for spawn detection).
+        /// doorInclOcclusion returns the same path's occlusion WITH closed doors counted,
+        /// for Layer 1 ambient muffling decisions.
         /// </summary>
         public static float CalculateWeatherPathOcclusionWithEntry(
             Vec3d from, Vec3d to, IBlockAccessor blockAccessor,
-            out Vec3d entryPoint, out float interactableOcclusion)
+            out Vec3d entryPoint, out float doorInclOcclusion)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
             if (config == null || !config.Enabled)
             {
                 entryPoint = null;
-                interactableOcclusion = 0f;
+                doorInclOcclusion = 0f;
                 return 0f;
             }
 
-            return RunWeatherOcclusion(from, to, blockAccessor, config, out entryPoint, out interactableOcclusion);
+            return RunWeatherOcclusion(from, to, blockAccessor, config, doorTransparent: true, out entryPoint, out doorInclOcclusion);
         }
 
         /// <summary>
@@ -304,10 +301,20 @@ namespace soundphysicsadapted
             bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
+
                 if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
                     return false; // Continue
 
                 float blockOcclusion = 0f;
+
+                // OPEN DOOR/GATE CHECK: must run BEFORE solid-face fast path.
+                // ME gate spacers have solid faces that would take the fast path and occlude.
+                // Multiblock door spacers also need controller resolution here.
+                if (IsOpenDoorOrGate(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                {
+                    if (verboseLog) ddaTrace.Append($"  DDA door-open: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (open, pass-through)\n");
+                    return false; // Continue — treat as air
+                }
 
                 // FAST PATH (95%+ of blocks): Solid-face check is purely cached array lookups.
                 // Runs FIRST to skip all expensive checks below for stone, dirt, wood, etc.
@@ -327,25 +334,10 @@ namespace soundphysicsadapted
                 else
                 {
                     // NON-SOLID BLOCK PATH: Only ~5% of DDA-visited blocks reach here.
-                    // Doors, fences, trapdoors, multiblock spacers, foliage, etc.
+                    // Doors, fences, trapdoors, foliage, etc.
+                    // No special-casing — AABB collision geometry determines occlusion.
 
-                    // OPEN DOOR/GATE CHECK: cached per block ID — very cheap.
-                    // Doors/gates with "opened" in their code path are fully transparent.
-                    if (BlockClassification.IsOpenInteractable(block))
-                    {
-                        if (verboseLog) ddaTrace.Append($"  DDA open-gate skip: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z})\n");
-                        return false; // Continue — treat as air
-                    }
-
-                    // MULTIBLOCK SPACER CHECK: prefix cached per block ID.
-                    // Only blocks starting with "multiblock-" do the expensive controller lookup.
-                    if (BlockClassification.IsMultiblockDoorSpacer(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
-                    {
-                        if (verboseLog) ddaTrace.Append($"  DDA multiblock-door-spacer skip: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z})\n");
-                        return false; // Continue — treat as air
-                    }
-
-                    // PARTIAL BLOCK PATH: doors, fences, trapdoors, etc.
+                    // PARTIAL BLOCK PATH: fences, doors, trapdoors, chiseled blocks, etc.
                     // Check if ray actually intersects the block's collision geometry.
                     collisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
                     var collisionBoxes = block.GetCollisionBoxes(blockAccessor, collisionCheckPos);
@@ -353,24 +345,51 @@ namespace soundphysicsadapted
                     {
                         // No collision geometry — foliage path.
                         // Blocks you walk through: leaves, flowers, grass, paintings, etc.
-                        // Still looks up material/override occlusion so dense foliage
-                        // (leaves, berry bushes) provides some muffling while thin
-                        // decorative items (paintings, signs) can be overridden to 0.
+                        // Material/override occlusion scaled by selection box volume so
+                        // small decorative items auto-reduce without needing overrides.
                         blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                        if (blockOcclusion > 0 && verboseLog)
+                        if (blockOcclusion > 0)
                         {
-                            ddaTrace.Append($"  DDA foliage: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2}\n");
+                            blockOcclusion *= GetFoliageVolumeScale(block);
+                            if (verboseLog)
+                            {
+                                ddaTrace.Append($"  DDA foliage: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F3}\n");
+                            }
                         }
-                    }
-                    else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
-                    {
-                        // Ray misses collision geometry (e.g. open door panel on the side)
-                        if (verboseLog) ddaTrace.Append($"  DDA pass-through: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (ray misses geometry)\n");
                     }
                     else
                     {
-                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                        blockOcclusion *= GetPartialBlockVolumeScale(block, blockAccessor, ctx.X, ctx.Y, ctx.Z, collisionBoxes);
+                        // Check if this is a door/gate with a configured override.
+                        // Thin door panels (~0.12 block) cause RayHitsAnyCollisionBox to miss
+                        // ~22% of rays at oblique angles. For override blocks, skip the AABB
+                        // test entirely and apply the override directly — but only when closed.
+                        var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
+                        bool hasOverride = matConfig != null && matConfig.HasBlockOverride(block);
+
+                        if (hasOverride)
+                        {
+                            if (IsDoorOpen(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                            {
+                                // Door/trapdoor is open — treat as air, zero occlusion
+                                if (verboseLog) ddaTrace.Append($"  DDA door-open: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (open, pass-through)\n");
+                            }
+                            else
+                            {
+                                // Closed door/gate — apply override directly, skip AABB
+                                blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                                if (verboseLog) ddaTrace.Append($"  DDA door-closed: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2} (override, skip AABB)\n");
+                            }
+                        }
+                        else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
+                        {
+                            // Ray misses collision geometry (e.g. fence post gap)
+                            if (verboseLog) ddaTrace.Append($"  DDA pass-through: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (ray misses geometry)\n");
+                        }
+                        else
+                        {
+                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                            blockOcclusion *= GetPartialBlockVolumeScale(block, blockAccessor, ctx.X, ctx.Y, ctx.Z, collisionBoxes);
+                        }
                     }
                 }
 
@@ -446,24 +465,23 @@ namespace soundphysicsadapted
         /// <summary>
         /// Weather-aware DDA: hybrid fast-path with AABB collision checks for partial blocks.
         /// 
-        /// Uses DUAL ACCUMULATORS:
-        /// - structuralOcclusion (return value): walls, floors, solid blocks, non-interactable partials.
-        ///   Used for spawn threshold decisions ÔÇö doors don't prevent source spawning.
-        /// - interactableOcclusion (out param): doors, trapdoors (state-changing blocks).
-        ///   Applied as muffling on spawned sources. Drops to 0 when door opens.
+        /// Single accumulator — all blocks (walls, doors, fences, etc.) contribute equally.
+        /// No special door handling — AABB collision geometry determines occlusion naturally.
+        /// Open doors have no collision boxes → zero occlusion. Closed doors hit AABB → occlude.
         /// 
         /// Processing order per block:
-        /// 1. Solid-face blocks (full cubes, slabs, stairs): structural occlusion.
-        /// 2. Liquids: structural occlusion.
-        /// 3. Interactable partial blocks (doors, trapdoors): interactable occlusion.
-        /// 4. Other partial blocks (chiseled, fences): structural occlusion via AABB check.
-        /// 5. Air/plants with no collision: non-occluding.
+        /// 1. Solid-face blocks (full cubes, slabs, stairs): direct occlusion.
+        /// 2. Liquids: direct occlusion.
+        /// 3. Partial blocks (doors, fences, chiseled): AABB ray intersection check.
+        /// 4. Air/plants with no collision: non-occluding.
         /// 
-        /// No verbose debug logging ÔÇö weather casts hundreds of rays per tick.
+        /// No verbose debug logging — weather casts hundreds of rays per tick.
         /// Tracks last occluding-to-air transition for entry point detection.
         /// </summary>
-        private static float RunWeatherOcclusion(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, SoundPhysicsConfig config, out Vec3d entryPoint, out float interactableOcclusion)
+        private static float RunWeatherOcclusion(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, SoundPhysicsConfig config, bool doorTransparent, out Vec3d entryPoint, out float doorInclOcclusion)
         {
+            doorInclOcclusion = 0f;
+
             double dx = to.X - from.X;
             double dy = to.Y - from.Y;
             double dz = to.Z - from.Z;
@@ -471,7 +489,6 @@ namespace soundphysicsadapted
             if (length < 0.001)
             {
                 entryPoint = null;
-                interactableOcclusion = 0f;
                 return 0f;
             }
 
@@ -480,8 +497,11 @@ namespace soundphysicsadapted
             double ndy = dy / length;
             double ndz = dz / length;
 
-            float structuralAccum = 0f;
-            float interactableAccum = 0f;
+            float occlusionAccum = 0f;
+            // Dual accumulator: tracks occlusion including closed doors for Layer 1.
+            // When doorTransparent=true, the main accumulator skips ALL doors (for spawn detection),
+            // but doorInclAccum counts closed doors (for Layer 1 ambient muffling).
+            float doorInclAccum = 0f;
             bool previousBlockWasOccluding = false;
             int entryX = 0, entryY = 0, entryZ = 0;
             bool hasEntryPoint = false;
@@ -501,10 +521,19 @@ namespace soundphysicsadapted
             int steppedZ = (int)Math.Floor(from.Z - ndz * 0.1);
             bool skipFirstBlock = (startX == steppedX && startY == steppedY && startZ == steppedZ);
 
+            // Destination block skip: all weather rays converge on playerEarPos.
+            // Sub-blocks at the player's feet (ladders, half-slabs) have collision
+            // volume >= 0.15 and would occlude EVERY ray, spiking OcclusionFactor.
+            // The block the player is standing inside shouldn't occlude sound TO them.
+            int destX = (int)Math.Floor(to.X);
+            int destY = (int)Math.Floor(to.Y);
+            int destZ = (int)Math.Floor(to.Z);
+
             int maxDDASteps = config.MaxDDASteps;
             bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
+
                 if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
                 {
                     // Air — track transition
@@ -517,8 +546,40 @@ namespace soundphysicsadapted
                     return false;
                 }
 
+                // Skip destination block only for fully-solid blocks (player inside a wall).
+                // Partial geometry (half-slabs, ladders) falls through to AABB intersection
+                // below, which correctly determines if the ray actually passes through the
+                // solid geometry. This fixes: player entering a wall half-slab block →
+                // ray from outside correctly accumulates slab occlusion instead of bypassing it.
+                if (ctx.X == destX && ctx.Y == destY && ctx.Z == destZ
+                    && BlockClassification.IsSolidForOcclusion(block))
+                    return false;
+
                 float blockOcclusion = 0f;
-                bool isInteractable = false;
+
+                // DOOR/GATE CHECK (spawn path only): doors are weather-transparent
+                // for 5B SPAWNING so rain sources appear behind closed doors.
+                // Layer 1 stereo weather skips this — doors must occlude normally there.
+                // Must run BEFORE solid-face fast path — ME gate spacers have solid faces.
+                if (doorTransparent && IsDoorOrGateBlock(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                {
+                    // Dual accumulator: closed doors count for Layer 1 muffling
+                    if (!IsDoorOpen(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                    {
+                        float doorOcc = BlockClassification.GetBlockOcclusion(block, config);
+                        if (doorOcc <= 0)
+                            doorOcc = 0.8f; // Fallback for doors without material config
+                        doorInclAccum += doorOcc;
+                    }
+
+                    if (previousBlockWasOccluding)
+                    {
+                        entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                        hasEntryPoint = true;
+                    }
+                    previousBlockWasOccluding = false;
+                    return false; // Continue — treat as air for weather spawning
+                }
 
                 // FAST PATH (95%+ of blocks): Solid-face check is purely cached array lookups.
                 // Runs FIRST to skip all expensive checks for stone, dirt, wood, etc.
@@ -534,78 +595,118 @@ namespace soundphysicsadapted
                 else
                 {
                     // NON-SOLID BLOCK PATH: Only ~5% of DDA-visited blocks reach here.
+                    // Doors, fences, trapdoors, chiseled blocks, foliage, etc.
+                    // No special-casing — AABB collision geometry determines occlusion.
 
-                    // OPEN DOOR/GATE CHECK: cached per block ID — very cheap.
-                    if (BlockClassification.IsOpenInteractable(block))
-                    {
-                        // Treat same as air — track occlusion-to-open transition
-                        if (previousBlockWasOccluding)
-                        {
-                            entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
-                            hasEntryPoint = true;
-                        }
-                        previousBlockWasOccluding = false;
-                        return false;
-                    }
-
-                    // MULTIBLOCK SPACER CHECK: prefix cached per block ID.
-                    // Only blocks starting with "multiblock-" do the expensive controller lookup.
-                    if (BlockClassification.IsMultiblockDoorSpacer(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
-                    {
-                        if (previousBlockWasOccluding)
-                        {
-                            entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
-                            hasEntryPoint = true;
-                        }
-                        previousBlockWasOccluding = false;
-                        return false;
-                    }
-
-                    // SIMPLIFIED PARTIAL BLOCK PATH for weather:
-                    // Skip AABB ray intersection and volume scaling entirely.
-                    // Rain doesn't pass through fences/glass — apply material occlusion
-                    // directly if the block has any collision geometry.
-                    // Doors/trapdoors still get interactable treatment (separate accumulator).
-                    // Blocks with no collision (foliage, decorative) use material/override
-                    // occlusion which is typically 0.0 via block overrides.
                     collisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
                     var collisionBoxes = block.GetCollisionBoxes(blockAccessor, collisionCheckPos);
 
                     if (collisionBoxes != null && collisionBoxes.Length > 0)
                     {
-                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                        isInteractable = BlockClassification.IsWeatherInteractable(block);
+                        // Door/gate override: check BEFORE volume filter — thin door panels
+                        // (vol ~0.12) would be rejected by the 0.15 threshold below.
+                        var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
+                        bool hasOverride = matConfig != null && matConfig.HasBlockOverride(block);
+
+                        if (!hasOverride)
+                        {
+                            // Check max cross-sectional face area — skip tiny blocks (beams, rails, etc.)
+                            // Uses face area instead of volume so thin-but-solid panels (glass panes,
+                            // slabs) aren't rejected. A pane has face area 1.0 but volume 0.12.
+                            float maxFace = 0f;
+                            for (int cb = 0; cb < collisionBoxes.Length; cb++)
+                            {
+                                var box = collisionBoxes[cb];
+                                float sx = box.X2 - box.X1;
+                                float sy = box.Y2 - box.Y1;
+                                float sz = box.Z2 - box.Z1;
+                                float fXY = sx * sy, fXZ = sx * sz, fYZ = sy * sz;
+                                float best = fXY > fXZ ? fXY : fXZ;
+                                if (fYZ > best) best = fYZ;
+                                if (best > maxFace) maxFace = best;
+                            }
+
+                            if (maxFace < 0.15f)
+                            {
+                                // Tiny cross-section — weather-transparent (beams, pillars, rails)
+                                if (previousBlockWasOccluding)
+                                {
+                                    entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                                    hasEntryPoint = true;
+                                }
+                                previousBlockWasOccluding = false;
+                                return false;
+                            }
+                        }
+
+                        if (hasOverride && doorTransparent)
+                        {
+                            // 5B spawn path only: doors/gates/trapdoors are weather-transparent
+                            // so rain sources spawn behind closed doors. AudioPhysicsSystem
+                            // handles the actual sound occlusion independently.
+                            // Dual accumulator: closed doors count for Layer 1 muffling
+                            if (!IsDoorOpen(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
+                            {
+                                float doorOcc = BlockClassification.GetBlockOcclusion(block, config);
+                                if (doorOcc <= 0)
+                                    doorOcc = 0.8f;
+                                doorInclAccum += doorOcc;
+                            }
+
+                            if (previousBlockWasOccluding)
+                            {
+                                entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                                hasEntryPoint = true;
+                            }
+                            previousBlockWasOccluding = false;
+                            return false;
+                        }
+                        else if (hasOverride)
+                        {
+                            // Layer 1 path: override blocks apply their configured occlusion
+                            // directly, skip AABB ray test (same as sound DDA door-closed path).
+                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                        }
+                        else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
+                        {
+                            // Ray misses geometry — pass through empty part of sub-block
+                            if (previousBlockWasOccluding)
+                            {
+                                entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                                hasEntryPoint = true;
+                            }
+                            previousBlockWasOccluding = false;
+                            return false;
+                        }
+                        else
+                        {
+                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                        }
                     }
                     else
                     {
-                        // No collision geometry — foliage, decorative items.
-                        // Still look up material/override so dense foliage (leaves)
-                        // provides muffling while decorative items (paintings) are 0.
-                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
+                        // No collision geometry — foliage, decorative items, open doors.
+                        // Weather-transparent.
+                        if (previousBlockWasOccluding)
+                        {
+                            entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                            hasEntryPoint = true;
+                        }
+                        previousBlockWasOccluding = false;
+                        return false;
                     }
                 }
 
                 if (blockOcclusion > 0)
                 {
-                    if (isInteractable)
-                    {
-                        // Door/trapdoor: accumulate separately (doesn't affect spawn threshold)
-                        // Don't set previousBlockWasOccluding ÔÇö entry point tracks through doors
-                        interactableAccum += blockOcclusion;
-                    }
-                    else
-                    {
-                        // Structural block: accumulates toward spawn threshold
-                        structuralAccum += blockOcclusion;
-                        previousBlockWasOccluding = true;
+                    occlusionAccum += blockOcclusion;
+                    previousBlockWasOccluding = true;
 
-                        if (structuralAccum >= config.MaxOcclusion)
-                            return true; // Stop
-                    }
+                    if (occlusionAccum >= config.MaxOcclusion)
+                        return true; // Stop
                 }
                 else
                 {
-                    // Non-occluding block (open door, grass, etc.) ÔÇö track transition
                     if (previousBlockWasOccluding)
                     {
                         entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
@@ -618,14 +719,40 @@ namespace soundphysicsadapted
             }, skipFirst: skipFirstBlock, maxSteps: maxDDASteps);
 
             entryPoint = hasEntryPoint ? new Vec3d(entryX + 0.5, entryY + 0.5, entryZ + 0.5) : null;
-            interactableOcclusion = interactableAccum;
-            return stopped ? config.MaxOcclusion : structuralAccum;
+            float mainResult = stopped ? config.MaxOcclusion : occlusionAccum;
+            doorInclOcclusion = Math.Min(mainResult + doorInclAccum, config.MaxOcclusion);
+            return mainResult;
+        }
+
+        /// <summary>
+        /// Get a volume-based occlusion scale for no-collision (foliage) blocks.
+        /// Uses selection box volume as a proxy for physical presence.
+        /// Returns fillRatio directly (not sqrt) — walkthrough blocks occlude
+        /// proportional to their fill, not structural presence.
+        /// </summary>
+        private static float GetFoliageVolumeScale(Block block)
+        {
+            var selBoxes = block.SelectionBoxes;
+            if (selBoxes == null || selBoxes.Length == 0)
+                return 0f; // No geometry at all — fully transparent
+
+            float totalVol = 0f;
+            for (int i = 0; i < selBoxes.Length; i++)
+            {
+                var b = selBoxes[i];
+                totalVol += (b.X2 - b.X1) * (b.Y2 - b.Y1) * (b.Z2 - b.Z1);
+            }
+            return Math.Min(totalVol, 1f);
         }
 
         /// <summary>
         /// Get a volume-based occlusion scale factor for partial/chiseled blocks.
         /// Chiseled blocks: uses VolumeRel from BlockEntityMicroBlock (pre-computed voxel ratio).
         /// Other AABB blocks: estimates fill from collision box volumes.
+        /// Uses max cross-sectional face area for regular blocks (thin-but-solid panels
+        /// like glass panes occlude fully, while lattice/fence geometry scales down).
+        /// For chiseled blocks, uses sideAlmostSolid (any face ≥87.5% filled → full scale,
+        /// otherwise falls back to VolumeRel for lattice shapes).
         /// Returns sqrt(fillRatio) clamped to [0.1, 1.0].
         /// </summary>
         private static float GetPartialBlockVolumeScale(Block block, IBlockAccessor blockAccessor,
@@ -638,23 +765,182 @@ namespace soundphysicsadapted
                 var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0)) as BlockEntityMicroBlock;
                 if (be != null)
                 {
-                    fillRatio = be.VolumeRel;
+                    // If any face is almost solid, this is a wall/slab shape — full occlusion scale
+                    bool anySolid = false;
+                    for (int i = 0; i < 6; i++)
+                    {
+                        if (be.sideAlmostSolid[i]) { anySolid = true; break; }
+                    }
+                    fillRatio = anySolid ? 1f : be.VolumeRel;
                 }
             }
             else if (collisionBoxes != null && collisionBoxes.Length > 0)
             {
-                // Estimate fill from collision box volumes (already fetched, no extra cost)
-                float totalVolume = 0f;
+                // Use max cross-sectional face area across all collision boxes.
+                // A thin panel spanning the full block face (1×1) gets scale ~1.0,
+                // while a fence post (0.25×0.25) correctly scales down.
+                float maxFaceArea = 0f;
                 for (int i = 0; i < collisionBoxes.Length; i++)
                 {
                     var box = collisionBoxes[i];
-                    totalVolume += (box.X2 - box.X1) * (box.Y2 - box.Y1) * (box.Z2 - box.Z1);
+                    float sx = box.X2 - box.X1;
+                    float sy = box.Y2 - box.Y1;
+                    float sz = box.Z2 - box.Z1;
+                    float faceXY = sx * sy;
+                    float faceXZ = sx * sz;
+                    float faceYZ = sy * sz;
+                    float best = faceXY > faceXZ ? faceXY : faceXZ;
+                    if (faceYZ > best) best = faceYZ;
+                    if (best > maxFaceArea) maxFaceArea = best;
                 }
-                fillRatio = Math.Min(totalVolume, 1f);
+                fillRatio = Math.Min(maxFaceArea, 1f);
             }
 
             float scale = (float)Math.Sqrt(fillRatio);
             return Math.Max(scale, 0.1f);
+        }
+
+        /// <summary>
+        /// Check if a door/trapdoor/gate at this position is currently open.
+        /// First checks BEBehaviorDoor / BEBehaviorTrapDoor (vanilla doors).
+        /// Falls back to block code path check for "opened" / "-open-" which
+        /// handles Medieval Expansion gates and other mods that encode state
+        /// in block code variants rather than BlockEntity behaviors.
+        /// </summary>
+        private static bool IsDoorOpen(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
+        {
+            var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0));
+            if (be != null)
+            {
+                var doorBeh = be.GetBehavior<BEBehaviorDoor>();
+                if (doorBeh != null) return doorBeh.Opened;
+
+                var trapBeh = be.GetBehavior<BEBehaviorTrapDoor>();
+                if (trapBeh != null) return trapBeh.Opened;
+            }
+
+            // Fallback: check block code for open state (ME gates, modded doors)
+            string path = block.Code?.Path;
+            if (path != null && (path.Contains("opened") || path.Contains("-open-")))
+                return true;
+
+            return false;
+        }
+
+        // Pooled BlockPos for multiblock controller lookup in DDA (avoid alloc per call)
+        private static readonly BlockPos _mbControllerPos = new BlockPos(0, 0, 0, 0);
+
+        /// <summary>
+        /// Check if a block should be treated as air because it's an open door/gate.
+        /// Handles three cases:
+        /// 1. Direct door/gate blocks with HasBlockOverride + IsDoorOpen (vanilla + ME)
+        /// 2. ME gate spacer blocks with solid faces that bypass the non-solid path
+        /// 3. Multiblock spacers whose controller is an open door/gate
+        /// Must run BEFORE IsSolidForOcclusion — ME gate spacers have solid faces.
+        /// </summary>
+        private static bool IsOpenDoorOrGate(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
+        {
+            var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
+
+            // Check if this block itself is an open door/gate with a config override
+            if (matConfig != null && matConfig.HasBlockOverride(block))
+            {
+                if (IsDoorOpen(block, blockAccessor, x, y, z))
+                    return true;
+            }
+
+            // Check if this is a multiblock spacer whose controller is an open door/gate
+            string path = block.Code?.Path;
+            if (path != null && path.StartsWith("multiblock-", StringComparison.Ordinal))
+            {
+                var variant = block.Variant;
+                if (variant != null &&
+                    variant.TryGetValue("dx", out string dxStr) &&
+                    variant.TryGetValue("dy", out string dyStr) &&
+                    variant.TryGetValue("dz", out string dzStr))
+                {
+                    int cdx = ParseVariantOffset(dxStr);
+                    int cdy = ParseVariantOffset(dyStr);
+                    int cdz = ParseVariantOffset(dzStr);
+
+                    _mbControllerPos.Set(x - cdx, y - cdy, z - cdz);
+                    Block controller = blockAccessor.GetBlock(_mbControllerPos);
+
+                    if (controller != null && controller.Id != 0 &&
+                        !(controller.Code?.Path?.StartsWith("multiblock-", StringComparison.Ordinal) == true))
+                    {
+                        if (matConfig != null && matConfig.HasBlockOverride(controller))
+                        {
+                            if (IsDoorOpen(controller, blockAccessor,
+                                _mbControllerPos.X, _mbControllerPos.InternalY, _mbControllerPos.Z))
+                                return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Check if a block is a door/gate/trapdoor (open OR closed).
+        /// Used by weather DDA to make ALL doors weather-transparent for spawning,
+        /// regardless of open/closed state. The 5B tracking system handles sound
+        /// occlusion independently via AudioPhysicsSystem.
+        /// </summary>
+        private static bool IsDoorOrGateBlock(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
+        {
+            var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
+
+            // Check if this block itself has a config override (doors, gates, trapdoors)
+            if (matConfig != null && matConfig.HasBlockOverride(block))
+                return true;
+
+            // Check if this is a multiblock spacer whose controller has a config override
+            string path = block.Code?.Path;
+            if (path != null && path.StartsWith("multiblock-", StringComparison.Ordinal))
+            {
+                var variant = block.Variant;
+                if (variant != null &&
+                    variant.TryGetValue("dx", out string dxStr) &&
+                    variant.TryGetValue("dy", out string dyStr) &&
+                    variant.TryGetValue("dz", out string dzStr))
+                {
+                    int cdx = ParseVariantOffset(dxStr);
+                    int cdy = ParseVariantOffset(dyStr);
+                    int cdz = ParseVariantOffset(dzStr);
+
+                    _mbControllerPos.Set(x - cdx, y - cdy, z - cdz);
+                    Block controller = blockAccessor.GetBlock(_mbControllerPos);
+
+                    if (controller != null && controller.Id != 0 &&
+                        !(controller.Code?.Path?.StartsWith("multiblock-", StringComparison.Ordinal) == true))
+                    {
+                        if (matConfig != null && matConfig.HasBlockOverride(controller))
+                            return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Parses a VS multiblock variant offset string.
+        /// "0" -> 0, "p1" -> +1, "n1" -> -1, "p2" -> +2, etc.
+        /// </summary>
+        private static int ParseVariantOffset(string s)
+        {
+            if (string.IsNullOrEmpty(s) || s == "0") return 0;
+            if (s.StartsWith("n", StringComparison.Ordinal))
+            {
+                if (int.TryParse(s.AsSpan(1), out int val)) return -val;
+            }
+            else if (s.StartsWith("p", StringComparison.Ordinal))
+            {
+                if (int.TryParse(s.AsSpan(1), out int val)) return val;
+            }
+            return 0;
         }
 
         /// <summary>

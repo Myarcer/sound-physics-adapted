@@ -32,23 +32,13 @@ namespace soundphysicsadapted
         // 0 = not cached, 1 = has solid faces, 2 = no solid faces
         private static readonly byte[] hasMultipleSolidFacesCache = new byte[BLOCK_CACHE_SIZE];
 
-        // Cache for IsWeatherInteractable (doors, trapdoors — state-changing blocks)
-        // 0 = not cached, 1 = is interactable, 2 = is NOT interactable
-        private static readonly byte[] isWeatherInteractableCache = new byte[BLOCK_CACHE_SIZE];
 
-        // Cache for IsOpenInteractable (door/gate in opened state — skip collision)
-        // 0 = not cached, 1 = is open interactable, 2 = is NOT
-        private static readonly byte[] isOpenInteractableCache = new byte[BLOCK_CACHE_SIZE];
 
         // Cache for IsChiseledBlock (custom voxel geometry — needs AABB path)
         // 0 = not cached, 1 = is chiseled, 2 = is NOT chiseled
         private static readonly byte[] isChiseledBlockCache = new byte[BLOCK_CACHE_SIZE];
 
-        // Cache for IsMultiblockPrefix (block code starts with "multiblock-")
-        // 0 = not cached, 1 = is multiblock prefix, 2 = is NOT
-        // This eliminates the expensive string check + blockAccessor.GetBlock controller
-        // lookup for the 99%+ of blocks that are NOT multiblock spacers.
-        private static readonly byte[] isMultiblockPrefixCache = new byte[BLOCK_CACHE_SIZE];
+
 
         // Cache for IsSolidForOcclusion (composite: !chiseled && (fullCube || multipleSolid || treatAsFull))
         // 0 = not cached, 1 = is solid, 2 = is NOT solid
@@ -56,8 +46,7 @@ namespace soundphysicsadapted
         // calling IsChiseledBlock + IsFullCube + HasMultipleSolidFaces + ShouldTreatAsFullCube every time.
         private static readonly byte[] isSolidForOcclusionCache = new byte[BLOCK_CACHE_SIZE];
 
-        // Pooled BlockPos for IsMultiblockDoorSpacer controller lookup (avoids alloc per call)
-        private static readonly BlockPos _multiblockControllerPos = new BlockPos(0, 0, 0, 0);
+
 
         /// <summary>
         /// Clear all block caches. Call when config reloads or materials change.
@@ -67,10 +56,7 @@ namespace soundphysicsadapted
             Array.Clear(blockOcclusionCached, 0, BLOCK_CACHE_SIZE);
             Array.Clear(treatAsFullCubeCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(hasMultipleSolidFacesCache, 0, BLOCK_CACHE_SIZE);
-            Array.Clear(isWeatherInteractableCache, 0, BLOCK_CACHE_SIZE);
-            Array.Clear(isOpenInteractableCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isChiseledBlockCache, 0, BLOCK_CACHE_SIZE);
-            Array.Clear(isMultiblockPrefixCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isSolidForOcclusionCache, 0, BLOCK_CACHE_SIZE);
             cachedOcclusionPerSolidBlock = -1f;
         }
@@ -321,171 +307,6 @@ namespace soundphysicsadapted
                 return false;
 
             return true;
-        }
-
-        /// <summary>
-        /// Check if a block is a weather-interactable (can change state to open/close).
-        /// Doors and trapdoors are transparent for weather source SPAWNING but still
-        /// contribute their occlusion for MUFFLING. This allows rain sources to exist
-        /// behind closed doors with appropriate occlusion applied.
-        /// Cached per block ID for hot-path performance.
-        /// </summary>
-        public static bool IsWeatherInteractable(Block block)
-        {
-            if (block == null) return false;
-
-            int blockId = block.Id;
-            if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
-            {
-                byte cached = isWeatherInteractableCache[blockId];
-                if (cached != 0)
-                    return cached == 1;
-
-                bool result = CheckWeatherInteractable(block);
-                isWeatherInteractableCache[blockId] = result ? (byte)1 : (byte)2;
-                return result;
-            }
-
-            return CheckWeatherInteractable(block);
-        }
-
-        private static bool CheckWeatherInteractable(Block block)
-        {
-            // --- Behavior check (universal, works for ALL mods) ---
-            // Any block using VS door/trapdoor mechanics will have these behaviors.
-            var behaviors = block.BlockBehaviors;
-            if (behaviors != null && behaviors.Length > 0)
-            {
-                for (int i = 0; i < behaviors.Length; i++)
-                {
-                    string typeName = behaviors[i].GetType().Name;
-                    if (typeName == "BlockBehaviorDoor" || typeName == "BlockBehaviorTrapDoor")
-                        return true;
-                }
-            }
-
-            // --- Fallback: block code substring check ---
-            // Catches edge cases where mods don't use standard behaviors
-            // but follow naming conventions (e.g. "gate3x3", "portcullis").
-            string path = block.Code?.Path;
-            if (path == null) return false;
-
-            return path.Contains("door") || path.Contains("gate") || path.Contains("portcullis");
-        }
-
-        /// <summary>
-        /// Check if a door/gate/trapdoor block is in the opened state.
-        /// Modded multi-block gates (e.g., Medieval Expansion) use "spacer" blocks
-        /// that retain collision boxes even when the gate is opened. This check lets
-        /// the DDA skip collision testing and treat them as pass-through.
-        /// Cached per block ID (each opened/closed variant has a unique ID).
-        /// </summary>
-        public static bool IsOpenInteractable(Block block)
-        {
-            if (block == null) return false;
-
-            int blockId = block.Id;
-            if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
-            {
-                byte cached = isOpenInteractableCache[blockId];
-                if (cached != 0)
-                    return cached == 1;
-
-                bool result = CheckOpenInteractable(block);
-                isOpenInteractableCache[blockId] = result ? (byte)1 : (byte)2;
-                return result;
-            }
-
-            return CheckOpenInteractable(block);
-        }
-
-        private static bool CheckOpenInteractable(Block block)
-        {
-            if (!IsWeatherInteractable(block)) return false;
-            string path = block.Code?.Path;
-            if (path == null) return false;
-            // VS door/gate variants encode state: "door-oak-opened-north", "gate3x3-spacer-oak-opened-north"
-            return path.Contains("opened") || path.Contains("-open-");
-        }
-
-        /// <summary>
-        /// Check if a block is a multiblock spacer belonging to a door/gate controller.
-        /// Vanilla 2x3 gates and similar multi-block doors use BlockMultiblock placeholders
-        /// ("multiblock-monolithic-*") for their upper blocks. These spacers have no collision
-        /// geometry of their own but still have a non-Air material, causing phantom occlusion
-        /// in the DDA. Resolving to the controller lets us skip the spacer entirely — the
-        /// actual door panel collision lives on the controller block position.
-        ///
-        /// PERF: The "multiblock-" prefix check is cached per block ID. Only blocks that
-        /// pass this fast prefix gate do the expensive blockAccessor.GetBlock controller lookup.
-        /// This eliminates ~99% of calls at the cache check level (2.6ms avg → ~0ms for non-multiblocks).
-        /// Controller lookup is safe even if the door block is replaced/deleted — GetBlock returns
-        /// air (Id==0) which fails the null/Id check and returns false.
-        /// </summary>
-        public static bool IsMultiblockDoorSpacer(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
-        {
-            // FAST PATH: Cached prefix check eliminates 99%+ of blocks immediately
-            int blockId = block.Id;
-            if (blockId >= 0 && blockId < BLOCK_CACHE_SIZE)
-            {
-                byte cached = isMultiblockPrefixCache[blockId];
-                if (cached == 2) return false; // Cached: NOT a multiblock prefix
-                if (cached == 0)
-                {
-                    // Cache miss — check prefix once, cache forever
-                    string path = block.Code?.Path;
-                    bool isMultiblock = path != null && path.StartsWith("multiblock-", StringComparison.Ordinal);
-                    isMultiblockPrefixCache[blockId] = isMultiblock ? (byte)1 : (byte)2;
-                    if (!isMultiblock) return false;
-                }
-                // cached == 1: IS a multiblock prefix, fall through to controller check
-            }
-            else
-            {
-                // Block ID out of cache range — direct check
-                string path = block.Code?.Path;
-                if (path == null || !path.StartsWith("multiblock-", StringComparison.Ordinal)) return false;
-            }
-
-            // Only multiblock- prefixed blocks reach here (~1% of DDA-visited blocks)
-            // Parse variant offsets to find the controller block position
-            var variant = block.Variant;
-            if (variant == null) return false;
-
-            string dxStr, dyStr, dzStr;
-            if (!variant.TryGetValue("dx", out dxStr) ||
-                !variant.TryGetValue("dy", out dyStr) ||
-                !variant.TryGetValue("dz", out dzStr))
-                return false;
-
-            int cdx = ParseVariantOffset(dxStr);
-            int cdy = ParseVariantOffset(dyStr);
-            int cdz = ParseVariantOffset(dzStr);
-
-            // Controller = spacer position - offset
-            // Safe if door was destroyed: GetBlock returns air (Id==0), caught below
-            _multiblockControllerPos.Set(x - cdx, y - cdy, z - cdz);
-            Block controller = blockAccessor.GetBlock(_multiblockControllerPos);
-
-            if (controller == null || controller.Id == 0) return false;
-
-            string controllerPath = controller.Code?.Path;
-            if (controllerPath != null && controllerPath.StartsWith("multiblock-", StringComparison.Ordinal)) return false;
-
-            return IsWeatherInteractable(controller);
-        }
-
-        /// <summary>
-        /// Parse a VS multiblock variant offset string.
-        /// "0" -> 0, "p1" -> +1, "n1" -> -1, "p2" -> +2, etc.
-        /// </summary>
-        private static int ParseVariantOffset(string s)
-        {
-            if (string.IsNullOrEmpty(s) || s == "0") return 0;
-            if (s.StartsWith("n", StringComparison.Ordinal) && int.TryParse(s.Substring(1), out int nv)) return -nv;
-            if (s.StartsWith("p", StringComparison.Ordinal) && int.TryParse(s.Substring(1), out int pv)) return pv;
-            if (int.TryParse(s, out int v)) return v;
-            return 0;
         }
 
         /// <summary>
