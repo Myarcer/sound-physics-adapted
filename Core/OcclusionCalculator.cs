@@ -558,29 +558,33 @@ namespace soundphysicsadapted
 
                     if (collisionBoxes != null && collisionBoxes.Length > 0)
                     {
-                        // Check total collision volume — skip tiny blocks (beams, rails, etc.)
-                        float totalVol = 0f;
-                        for (int cb = 0; cb < collisionBoxes.Length; cb++)
-                        {
-                            var box = collisionBoxes[cb];
-                            totalVol += (box.X2 - box.X1) * (box.Y2 - box.Y1) * (box.Z2 - box.Z1);
-                        }
-
-                        if (totalVol < 0.15f)
-                        {
-                            // Tiny collision volume — weather-transparent (beams, pillars, rails)
-                            if (previousBlockWasOccluding)
-                            {
-                                entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
-                                hasEntryPoint = true;
-                            }
-                            previousBlockWasOccluding = false;
-                            return false;
-                        }
-
-                        // Door/gate override: skip AABB test for thin panels, query open state
+                        // Door/gate override: check BEFORE volume filter — thin door panels
+                        // (vol ~0.12) would be rejected by the 0.15 threshold below.
                         var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
                         bool hasOverride = matConfig != null && matConfig.HasBlockOverride(block);
+
+                        if (!hasOverride)
+                        {
+                            // Check total collision volume — skip tiny blocks (beams, rails, etc.)
+                            float totalVol = 0f;
+                            for (int cb = 0; cb < collisionBoxes.Length; cb++)
+                            {
+                                var box = collisionBoxes[cb];
+                                totalVol += (box.X2 - box.X1) * (box.Y2 - box.Y1) * (box.Z2 - box.Z1);
+                            }
+
+                            if (totalVol < 0.15f)
+                            {
+                                // Tiny collision volume — weather-transparent (beams, pillars, rails)
+                                if (previousBlockWasOccluding)
+                                {
+                                    entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
+                                    hasEntryPoint = true;
+                                }
+                                previousBlockWasOccluding = false;
+                                return false;
+                            }
+                        }
 
                         if (hasOverride)
                         {
