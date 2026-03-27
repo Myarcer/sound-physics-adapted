@@ -290,7 +290,8 @@ namespace soundphysicsadapted
                 // Oneshot sounds like footsteps/impacts must not be deferred or they'll play wrong.
                 bool isOverdue = cache.LastRaycastTimeMs == 0 || timeSinceRaycast >= FORCE_REFRESH_MS;
 
-                if (cache.LastPlayerPos != null && cache.LastSoundPos != null && !isOverdue)
+                bool staticCacheEnabled = config?.EnableStaticSoundCache ?? true;
+                if (staticCacheEnabled && cache.LastPlayerPos != null && cache.LastSoundPos != null && !isOverdue)
                 {
                     double playerMoved = playerPos.DistanceTo(cache.LastPlayerPos);
                     double soundMoved = soundPos.DistanceTo(cache.LastSoundPos);

@@ -709,6 +709,15 @@ namespace soundphysicsadapted
         public int MaxConcurrentSounds { get; set; } = 40;
 
         /// <summary>
+        /// Enable static sound cache (skip raycasts when player and sound haven't moved).
+        /// When true: sounds are only recalculated when something moves or changes.
+        /// When false: sounds always recalculate when their interval is due, regardless of movement.
+        /// Disabling reduces performance but ensures immediate response to all world changes.
+        /// Block break/place and door interactions always bypass this cache automatically.
+        /// </summary>
+        public bool EnableStaticSoundCache { get; set; } = true;
+
+        /// <summary>
         /// Fade duration in seconds when a sound is throttled (evicted) or unthrottled (admitted).
         /// Instead of abrupt silence, sounds smoothly fade to/from minimum volume.
         /// Prevents audible mute/unmute clicks when sounds near the budget threshold oscillate.

@@ -11,6 +11,12 @@ namespace soundphysicsadapted
     /// </summary>
     public class MaterialSoundConfig
     {
+        /// <summary>
+        /// Current material config version. Any saved config below this is regenerated from defaults.
+        /// Bump this when changing defaults that should apply to all users.
+        /// </summary>
+        public const int CurrentVersion = 8;
+
         /// <summary>Config version for migration</summary>
         public int Version { get; set; } = 1;
 
@@ -287,7 +293,7 @@ namespace soundphysicsadapted
         {
             return new MaterialSoundConfig
             {
-                Version = 7,
+                Version = CurrentVersion,
                 Occlusion = new OcclusionSection
                 {
                     Materials = new Dictionary<string, float>
