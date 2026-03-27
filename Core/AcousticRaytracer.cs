@@ -420,6 +420,14 @@ namespace soundphysicsadapted
             float sendCutoff2 = occludedCutoff * (1f - weight2) + weight2;
             float sendCutoff3 = occludedCutoff * (1f - weight3) + weight3;
 
+            // SPR-style reverb send volume attenuation by occlusion.
+            // sendCutoff filters HF (darkness), this reduces overall volume (quietness).
+            // pow(cutoff, 0.1) is gentle: cutoff=0.05 → 0.74 (26% quieter).
+            sendGain0 *= MathF.Pow(Math.Max(sendCutoff0, 0.001f), 0.1f);
+            sendGain1 *= MathF.Pow(Math.Max(sendCutoff1, 0.001f), 0.1f);
+            sendGain2 *= MathF.Pow(Math.Max(sendCutoff2, 0.001f), 0.1f);
+            sendGain3 *= MathF.Pow(Math.Max(sendCutoff3, 0.001f), 0.1f);
+
             var reverbResult = new ReverbResult(sendGain0, sendGain1, sendGain2, sendGain3,
                                                 sendCutoff0, sendCutoff1, sendCutoff2, sendCutoff3);
 
