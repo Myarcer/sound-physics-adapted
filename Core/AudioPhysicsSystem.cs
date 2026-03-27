@@ -827,127 +827,73 @@ namespace soundphysicsadapted
                     }
 
                     // Occluded: full path resolution with opening probes.
-                    // Position shifts toward openings, LPF uses blended occlusion.
+                    // Position shifts toward openings, LPF uses DIRECT occlusion (SPR-style).
+                    // bOcc is fundamentally broken for LPF — see LPF_INVESTIGATION.md Issue #2.
                     bool applied = allPermeated || AudioRenderer.ApplySoundPath(sound, pathResult.Value, soundPos);
 
                     if (applied)
                     {
-                        float blendedOcc = (float)pathResult.Value.BlendedOcclusion;
                         float airspaceRatio = pathResult.Value.SharedAirspaceRatio;
 
-                        // PATH CLARITY: Use open path ratio, not sharedAirspaceRatio.
-                        // sharedAirspaceRatio is from sound-source fibonacci rays (wrong for this).
-                        // Open path ratio comes from actual probe rays that found clear paths.
-                        int openPaths = pathResult.Value.PathCount;
-                        int totalPaths = pathResult.Value.TotalPathCount;
-                        float pathClarity = totalPaths > 0 ? (float)openPaths / totalPaths : 0f;
+                        // SPR-STYLE LPF: Direct occlusion drives the filter. Always.
+                        // Shared airspace floor prevents over-muffling of repositioned sounds.
+                        // bOcc (probe-path occlusion) is NOT used — it's self-defeatingly biased
+                        // toward zero due to permeation weighting (see LPF_INVESTIGATION.md).
 
-                        // SPR-STYLE FLOOR: Two competing floors, take the MORE FAVORABLE (lower):
-                        // 1. ISSUE 1 FIX: Shared airspace floor (SPR-style) - based on ray success, NOT wall thickness
-                        //    SPR: floor = sqrt(sharedAirspaceRatio) * 0.2
-                        //    Independent of wall thickness - only depends on how many rays found clear paths.
-                        // 2. Clarity floor: Based on path clarity — high clarity = many clear paths
-                        //    Higher clarity → lower floor → allows more recovery.
-
-                        // Shared airspace floor (SPR formula)
-                        float sharedAirspaceFilterFloor = MathF.Sqrt(airspaceRatio) * 0.2f;
-                        sharedAirspaceFilterFloor = Math.Max(sharedAirspaceFilterFloor, 0.01f); // Avoid log(0)
-                        float blockAbsorption = SoundPhysicsAdaptedModSystem.Config?.BlockAbsorption ?? 1.0f;
-                        float absorptionCoeff = blockAbsorption * 3.0f; // SPR-matching multiplier
-                        float sharedAirspaceFloor = -MathF.Log(sharedAirspaceFilterFloor) / absorptionCoeff;
-
-                        // Convert clarity floor to occlusion scale
-                        // clarity floor filter = sqrt(pathClarity) * 0.35 (slightly higher than SPR's 0.2)
-                        // Our filter formula: filter = exp(-occ * blockAbsorption)
-                        // So: occ = -ln(filter) / blockAbsorption
-                        float clarityFilterFloor = MathF.Sqrt(pathClarity) * 0.35f;
-                        clarityFilterFloor = Math.Max(clarityFilterFloor, 0.01f); // Avoid log(0)
-                        float clarityOccFloor = -MathF.Log(clarityFilterFloor) / absorptionCoeff;
-
-                        // Take the MORE FAVORABLE (lower) ceiling — caps max occlusion
-                        // SPR intent: prevent repositioned sounds from being TOO muffled
-                        float occlusionFloor = Math.Min(sharedAirspaceFloor, clarityOccFloor);
-
-                        if (blendedOcc > occlusionFloor)
-                        {
-                            blendedOcc = occlusionFloor;
-                        }
+                        // SPR: directCutoff = max(directCutoff, sqrt(sharedAirspace) * 0.2)
+                        float sharedAirspaceFloor = MathF.Sqrt(airspaceRatio) * 0.2f;
 
                         // ACOUSTIC BOUNDARY DETECTION:
-                        // Track shared airspace to detect when player is near the edge between
-                        // "fully occluded" and "shared airspace". Low airspace (0.05-0.5) means
-                        // we're right at a corner/doorway — any step changes everything.
-                        // High airspace (>0.5) = well into shared space, stable.
-                        // Zero airspace = fully behind wall, also stable (until player moves).
-                        // The boundary zone is where it matters most.
                         cache.LastSharedAirspaceRatio = airspaceRatio;
                         cache.NearAcousticBoundary = (airspaceRatio > 0.02f && airspaceRatio < 0.5f)
-                            || (airspaceRatio < 0.02f && cache.SmoothedBlendedOcc < 3.0f);
+                            || (airspaceRatio < 0.02f && occlusion < 3.0f);
 
-                        // ADAPTIVE EMA SMOOTHING:
-                        // Large changes = crossing acoustic boundary → converge fast
-                        // Small changes = probe ray jitter → smooth heavily (prevent flutter)
-                        //
-                        // Alpha values chosen for 50ms tick rate (boundary sounds):
-                        //   α=0.70 → converges in ~3 ticks (150ms) for huge changes
-                        //   α=0.55 → converges in ~4 ticks (200ms) for big changes
-                        //   α=0.40 → converges in ~5 ticks (250ms) for medium changes
-                        //   α=0.25 → slow convergence for jitter suppression
-                        //
-                        // Capped at 0.70 to prevent single-tick filter jumps that cause
-                        // audible pops (LPF has no internal smoothing in OpenAL).
-                        float delta = cache.HasSmoothedOcc ? Math.Abs(blendedOcc - cache.SmoothedBlendedOcc) : 0f;
-                        float occSmoothFactor = delta > 3.0f ? 0.70f   // huge jump (wall→clear): ~150ms
-                                              : delta > 1.5f ? 0.55f   // big change (rounding corner): ~200ms
-                                              : delta > 0.5f ? 0.40f   // medium change: ~250ms
-                                              : 0.25f;                 // small jitter: smooth
+                        // EMA SMOOTHING on direct occlusion for smooth transitions.
+                        // Without smoothing, direct occlusion can jump when multi-ray
+                        // sampling hits slightly different blocks between ticks.
+                        float targetOcc = occlusion;
+                        float delta = cache.HasSmoothedOcc ? Math.Abs(targetOcc - cache.SmoothedBlendedOcc) : 0f;
+                        float occSmoothFactor = delta > 3.0f ? 0.70f
+                                              : delta > 1.5f ? 0.55f
+                                              : delta > 0.5f ? 0.40f
+                                              : 0.25f;
 
-                        // Weather sources (rain/wind heard through openings) get heavier
-                        // smoothing to prevent LPF wobble from decorative objects
-                        // (toolracks, torchhholders) intermittently entering/exiting the
-                        // DDA ray path as the player moves laterally under a porch.
                         if (soundName != null && soundName.Contains("weather/"))
                         {
-                            occSmoothFactor *= 0.5f;  // Double convergence time
+                            occSmoothFactor *= 0.5f;
                         }
 
-                        // Compensate for update interval (far sounds update less often).
-                        // Without this, a far sound at 500ms interval with α=0.25 takes
-                        // ~6s to converge vs ~0.6s for a close sound at 50ms — 10x slower.
                         if (intervalRatio > 1f)
                             occSmoothFactor = 1f - MathF.Pow(1f - occSmoothFactor, intervalRatio);
 
                         if (cache.HasSmoothedOcc)
                         {
-                            cache.SmoothedBlendedOcc += (blendedOcc - cache.SmoothedBlendedOcc) * occSmoothFactor;
+                            cache.SmoothedBlendedOcc += (targetOcc - cache.SmoothedBlendedOcc) * occSmoothFactor;
                         }
                         else
                         {
-                            cache.SmoothedBlendedOcc = blendedOcc;
+                            cache.SmoothedBlendedOcc = targetOcc;
                             cache.HasSmoothedOcc = true;
                         }
                         float smoothedOcc = cache.SmoothedBlendedOcc;
 
-                        float pathFilter = smoothedOcc <= 0 ? 1.0f
+                        // Direct filter from smoothed occlusion
+                        float smoothedDirectFilter = smoothedOcc <= 0 ? 1.0f
                             : OcclusionCalculator.OcclusionToFilter(smoothedOcc);
+
+                        // SPR-style: airspace floor prevents over-muffling
+                        finalFilter = Math.Max(smoothedDirectFilter, sharedAirspaceFloor);
 
                         // DIFFRACTION ANGLE DARKENING:
                         // Sounds bending around corners lose HF proportional to bend angle.
-                        // RepositionOffset / distance ≈ sin(diffraction angle).
-                        // At 0° bend (direct) → no extra darkening. At 90° bend → up to 30% HF loss.
-                        // This bridges the brightness gap between "almost clear" and "hard around corner",
-                        // making the occluded→clear transition smoother (gradual HF recovery as player
-                        // rounds the corner and the bend angle decreases).
                         float reposOffset = (float)pathResult.Value.RepositionOffset;
                         float bendRatio = distance > 0.1f ? Math.Clamp(reposOffset / distance, 0f, 1f) : 0f;
                         float diffractionDarkening = 1f - bendRatio * 0.3f;
-                        pathFilter *= diffractionDarkening;
-
-                        finalFilter = pathFilter;
+                        finalFilter *= diffractionDarkening;
 
                         if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[4B-LPF] dOcc={occlusion:F2} bOcc={blendedOcc:F2} smooth={smoothedOcc:F2} filt={pathFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} clarity={pathClarity:P0} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
+                                $"[4B-LPF] dOcc={occlusion:F2} smooth={smoothedOcc:F2} filt={finalFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
                     }
 
                     if (updatedThisTick == 0 && pathResult.Value.RepositionOffset > 0.1)
