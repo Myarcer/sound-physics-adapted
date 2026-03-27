@@ -280,8 +280,9 @@ namespace soundphysicsadapted
             int sCellY = (int)Math.Floor(soundPos.Y / SOUND_CELL_SIZE);
             int sCellZ = (int)Math.Floor(soundPos.Z / SOUND_CELL_SIZE);
             string distLabel = distance > FAR_DISTANCE ? "far" : "near";
-            SoundPhysicsAdaptedModSystem.DebugLog(
-                $"[CELL-CACHE] STORE cell=({sCellX},{sCellY},{sCellZ}) bounces={bounceCount} openings={openingCount} dist={distance:F0} ({distLabel})");
+            if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                SoundPhysicsAdaptedModSystem.DebugLog(
+                    $"[CELL-CACHE] STORE cell=({sCellX},{sCellY},{sCellZ}) bounces={bounceCount} openings={openingCount} dist={distance:F0} ({distLabel})");
 
             // LRU check
             if (cells.Count > MAX_CELLS)
@@ -330,8 +331,9 @@ namespace soundphysicsadapted
             {
                 foreach (var key in toRemove)
                     cells.Remove(key);
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"[CELL-CACHE] INVALIDATE {toRemove.Count} entries near ({targetCellX},{targetCellY},{targetCellZ}) reason=block_change");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"[CELL-CACHE] INVALIDATE {toRemove.Count} entries near ({targetCellX},{targetCellY},{targetCellZ}) reason=block_change");
             }
         }
 

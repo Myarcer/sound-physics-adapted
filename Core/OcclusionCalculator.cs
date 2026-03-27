@@ -1,4 +1,4 @@
-﻿using Vintagestory.API.Common;
+using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 using Vintagestory.GameContent;
 using System;
@@ -55,8 +55,9 @@ namespace soundphysicsadapted
             // EARLY EXIT: If center ray hits max occlusion, no need for offset rays
             if (centerOcclusion >= config.MaxOcclusion)
             {
-                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                    $"Occlusion calc: dist={distance:F1} center=MAX (early exit)");
+                if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                        $"Occlusion calc: dist={distance:F1} center=MAX (early exit)");
                 return config.MaxOcclusion;
             }
 
@@ -65,8 +66,9 @@ namespace soundphysicsadapted
             {
                 // Center is blocked - this is the primary occlusion value
                 float result = Math.Min(centerOcclusion, config.MaxOcclusion);
-                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                    $"Occlusion calc: dist={distance:F1} center={centerOcclusion:F2} (blocked)");
+                if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                        $"Occlusion calc: dist={distance:F1} center={centerOcclusion:F2} (blocked)");
                 return result;
             }
 
@@ -81,8 +83,9 @@ namespace soundphysicsadapted
                 int endBX = (int)Math.Floor(playerPos.X);
                 int endBY = (int)Math.Floor(playerPos.Y);
                 int endBZ = (int)Math.Floor(playerPos.Z);
-                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                    $"Occlusion calc: dist={distance:F1} center={centerOcclusion:F2} (clear, skip offset) DDA=({startBX},{startBY},{startBZ})->({endBX},{endBY},{endBZ})");
+                if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                        $"Occlusion calc: dist={distance:F1} center={centerOcclusion:F2} (clear, skip offset) DDA=({startBX},{startBY},{startBZ})->({endBX},{endBY},{endBZ})");
                 return centerOcclusion;
             }
 
@@ -91,8 +94,9 @@ namespace soundphysicsadapted
             if (variation <= 0f)
             {
                 // No offset rays, center is clear
-                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                    $"Occlusion calc: dist={distance:F1} center=clear (no variation)");
+                if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                        $"Occlusion calc: dist={distance:F1} center=clear (no variation)");
                 return centerOcclusion;
             }
 
@@ -131,8 +135,9 @@ namespace soundphysicsadapted
                         // we're clearly fully occluded - no need to check remaining rays
                         if (raysBlocked >= 6 && maxOffsetOcclusion >= config.MaxOcclusion * 0.95f)
                         {
-                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"Occlusion calc: dist={distance:F1} early exit at {raysBlocked} votes, max={maxOffsetOcclusion:F2}");
+                            if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                                    $"Occlusion calc: dist={distance:F1} early exit at {raysBlocked} votes, max={maxOffsetOcclusion:F2}");
                             return config.MaxOcclusion;
                         }
                     }
@@ -151,14 +156,16 @@ namespace soundphysicsadapted
                 // Use average occlusion of all rays
                 float avgOcclusion = totalOcclusion / totalRays;
                 float result = Math.Min(avgOcclusion, config.MaxOcclusion);
-                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                    $"Occlusion calc: dist={distance:F1} center=clear but {raysBlocked}/8 offset blocked, avg={avgOcclusion:F2}");
+                if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                        $"Occlusion calc: dist={distance:F1} center=clear but {raysBlocked}/8 offset blocked, avg={avgOcclusion:F2}");
                 return result;
             }
 
             // Center clear and not enough offset rays blocked = clear path
-            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                $"Occlusion calc: dist={distance:F1} center=clear, only {raysBlocked}/8 offset blocked");
+            if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                    $"Occlusion calc: dist={distance:F1} center=clear, only {raysBlocked}/8 offset blocked");
             return centerOcclusion;
         }
 

@@ -384,8 +384,9 @@ namespace soundphysicsadapted
                     string pathInfo = pathResult.HasValue
                         ? $"off={pathResult.Value.RepositionOffset:F1}m occ={pathResult.Value.AverageOcclusion:F2} open={pathResult.Value.PathCount} perm={pathResult.Value.PermeatedPathCount}"
                         : "null (LOS/cancelled)";
-                    SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[4B-Resolve] #{probeLogCount}: {pathInfo} directOcc={directOcclusion:F1}");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog(
+                            $"[4B-Resolve] #{probeLogCount}: {pathInfo} directOcc={directOcclusion:F1}");
                 }
             }
 
@@ -396,10 +397,11 @@ namespace soundphysicsadapted
                     ? $"reposDist={pathResult.Value.RepositionOffset:F1} avgOcc={pathResult.Value.AverageOcclusion:F2}"
                     : "noRepos";
 
-                SoundPhysicsAdaptedModSystem.ReverbDebugLog(
-                    $"REVERB+PATH: g0={sendGain0:F2} g1={sendGain1:F2} " +
-                    $"shared={sharedAirspaceCount}/{totalBouncePoints} ({sharedAirspaceRatio:P0}) " +
-                    $"direct={hasDirectAirspace} {pathInfo}");
+                if (SoundPhysicsAdaptedModSystem.IsReverbDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ReverbDebugLog(
+                        $"REVERB+PATH: g0={sendGain0:F2} g1={sendGain1:F2} " +
+                        $"shared={sharedAirspaceCount}/{totalBouncePoints} ({sharedAirspaceRatio:P0}) " +
+                        $"direct={hasDirectAirspace} {pathInfo}");
             }
 
             // SPR-style per-slot reverb cutoff: muffled reverb through walls instead of silence.
@@ -723,8 +725,9 @@ namespace soundphysicsadapted
 
                             if (probeLogCount < 20 && config.DebugSoundPaths)
                             {
-                                SoundPhysicsAdaptedModSystem.DebugLog(
-                                    $"[4B-Open] ({cx},{cy},{cz}) d={depth} air={adjacentAir} occ={totalOcclusion:F1} w={weight:F5}");
+                                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                                    SoundPhysicsAdaptedModSystem.DebugLog(
+                                        $"[4B-Open] ({cx},{cy},{cz}) d={depth} air={adjacentAir} occ={totalOcclusion:F1} w={weight:F5}");
                             }
 
                             // CAPTURE opening for cache
@@ -766,8 +769,9 @@ namespace soundphysicsadapted
 
             if (probeLogCount < 20 && openingsFound > 0 && config.DebugSoundPaths)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"[4B-Probe] {openingsFound} openings (12 probes, dedup={_openingDedup.Count})");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"[4B-Probe] {openingsFound} openings (12 probes, dedup={_openingDedup.Count})");
             }
         }
 

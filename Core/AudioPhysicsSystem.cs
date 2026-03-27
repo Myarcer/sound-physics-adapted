@@ -209,8 +209,9 @@ namespace soundphysicsadapted
 
             reverbCellCache?.Clear();
 
-            SoundPhysicsAdaptedModSystem.DebugLog(
-                $"ACOUSTICS: Cache invalidated ({soundCache.Count} entries, cell cache cleared)");
+            if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                SoundPhysicsAdaptedModSystem.DebugLog(
+                    $"ACOUSTICS: Cache invalidated ({soundCache.Count} entries, cell cache cleared)");
         }
 
         private void UpdateAllSounds(Vec3d playerPos, IBlockAccessor blockAccessor, long currentTimeMs)
@@ -381,7 +382,7 @@ namespace soundphysicsadapted
             totalActive = count;
             CleanupCache();
 
-            if (updatedThisTick > 0 || cachedThisTick > 0 || deferredThisTick > 0 || playerPosThisTick > 0)
+            if (SoundPhysicsAdaptedModSystem.IsDebugEnabled && (updatedThisTick > 0 || cachedThisTick > 0 || deferredThisTick > 0 || playerPosThisTick > 0))
             {
                 string cellCacheInfo = reverbCellCache != null ? $" cellHits={cellCacheHitsThisTick} cells={reverbCellCache.CellCount}" : "";
                 string throttleInfo = throttle != null ? $" throttle={throttle.ThrottledCount}" : "";
@@ -394,7 +395,7 @@ namespace soundphysicsadapted
 
             // Per-tick viz diagnostic: log when viz wanted data but no raytrace fired
             var vizTick = DebugVisualization.Instance;
-            if (vizTick != null && vizTick.AnyAcousticVizActive && config?.DebugMode == true && !vizTick.HasCapturedThisTick)
+            if (SoundPhysicsAdaptedModSystem.IsDebugEnabled && vizTick != null && vizTick.AnyAcousticVizActive && !vizTick.HasCapturedThisTick)
             {
                 SoundPhysicsAdaptedModSystem.DebugLog(
                     $"[VIZ-TICK] No capture this tick: updated={updatedThisTick} cached={cachedThisTick} skipped={skippedThisTick} total={totalActive}");
@@ -414,8 +415,9 @@ namespace soundphysicsadapted
             var (reverbResult, _) = AcousticRaytracer.CalculateWithPaths(playerPos, playerPos, blockAccessor, 0f);
             cachedPlayerReverb = reverbResult;
 
-            SoundPhysicsAdaptedModSystem.ReverbDebugLog(
-                $"[PLAYER-REVERB] g0={reverbResult.SendGain0:F2} g1={reverbResult.SendGain1:F2} g2={reverbResult.SendGain2:F2} g3={reverbResult.SendGain3:F2}");
+            if (SoundPhysicsAdaptedModSystem.IsReverbDebugEnabled)
+                SoundPhysicsAdaptedModSystem.ReverbDebugLog(
+                    $"[PLAYER-REVERB] g0={reverbResult.SendGain0:F2} g1={reverbResult.SendGain1:F2} g2={reverbResult.SendGain2:F2} g3={reverbResult.SendGain3:F2}");
         }
 
         /// <summary>
@@ -483,9 +485,10 @@ namespace soundphysicsadapted
                 if (cache.ThrottleTransitionCount >= 3 && !cache.ThrottleFrozen)
                 {
                     cache.ThrottleFrozen = true;
-                    SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[THROTTLE] Froze fade for {soundName} at {cache.ThrottleFade:F2} " +
-                        $"({cache.ThrottleTransitionCount} transitions in {(currentTimeMs - cache.ThrottleWindowStartMs) / 1000f:F1}s)");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog(
+                            $"[THROTTLE] Froze fade for {soundName} at {cache.ThrottleFade:F2} " +
+                            $"({cache.ThrottleTransitionCount} transitions in {(currentTimeMs - cache.ThrottleWindowStartMs) / 1000f:F1}s)");
                 }
             }
 
@@ -498,8 +501,9 @@ namespace soundphysicsadapted
                 cache.ThrottleWindowStartMs = currentTimeMs;
                 // ThrottleFade stays at current value — normal fade logic resumes
                 // from here, smoothly converging to the correct final state.
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"[THROTTLE] Unfroze fade for {soundName} (stable 5s, fade={cache.ThrottleFade:F2})");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"[THROTTLE] Unfroze fade for {soundName} (stable 5s, fade={cache.ThrottleFade:F2})");
             }
 
             // Compute how much to step the fade based on real elapsed time.
@@ -564,9 +568,10 @@ namespace soundphysicsadapted
 
                     if (updatedThisTick == 0)
                     {
-                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[AMBIENT-FACE] {soundName} tested {candidateCount} faces, bestOcc={bestOcc:F2} " +
-                            $"pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
+                        if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                                $"[AMBIENT-FACE] {soundName} tested {candidateCount} faces, bestOcc={bestOcc:F2} " +
+                                $"pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
                     }
                 }
             }
@@ -589,8 +594,9 @@ namespace soundphysicsadapted
 
             int debugSourceId = AudioRenderer.GetSourceId(sound);
 
-            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                $"[RAY] {soundName} d={distance:F1} occ={occlusion:F2} snd=({soundPos.X:F2},{soundPos.Y:F2},{soundPos.Z:F2}) plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2}) startBlk=({(int)Math.Floor(soundPos.X)},{(int)Math.Floor(soundPos.Y)},{(int)Math.Floor(soundPos.Z)})");
+            if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                    $"[RAY] {soundName} d={distance:F1} occ={occlusion:F2} snd=({soundPos.X:F2},{soundPos.Y:F2},{soundPos.Z:F2}) plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2}) startBlk=({(int)Math.Floor(soundPos.X)},{(int)Math.Floor(soundPos.Y)},{(int)Math.Floor(soundPos.Z)})");
 
             // Default to direct occlusion filter; path resolution may override below
             float finalFilter = directFilter;
@@ -623,8 +629,9 @@ namespace soundphysicsadapted
                         pathResult = AcousticRaytracer.ResolvePathFromCache(cellEntry, soundPos, playerPos, occlusion, config);
                         cellCacheHitsThisTick++;
 
-                        SoundPhysicsAdaptedModSystem.DebugLog(
-                            $"[CELL-CACHE] HIT uses={cellEntry.UseCount} age={currentTimeMs - cellEntry.CreatedTimeMs}ms");
+                        if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.DebugLog(
+                                $"[CELL-CACHE] HIT uses={cellEntry.UseCount} age={currentTimeMs - cellEntry.CreatedTimeMs}ms");
                     }
                     else if (canStore)
                     {
@@ -679,7 +686,7 @@ namespace soundphysicsadapted
                 int? validatedSourceId = AudioRenderer.GetValidatedSourceId(sound);
 
                 // DEBUG: Log which sound got which reverb result BEFORE applying
-                if (config.DebugMode && config.DebugReverb)
+                if (SoundPhysicsAdaptedModSystem.IsReverbDebugEnabled)
                 {
                     string srcDbg = validatedSourceId.HasValue ? validatedSourceId.Value.ToString() : "STALE";
                     SoundPhysicsAdaptedModSystem.ReverbDebugLog(
@@ -792,14 +799,16 @@ namespace soundphysicsadapted
                         if (isAmbientVolume)
                         {
                             bool usedFace = acousticPos != soundPos;
-                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[4B-AMBIENT] occ={occlusion:F2} filt={directFilter:F3} " +
-                                $"({(usedFace ? "face-sampled" : "vanilla pos")}, probe skip)");
+                            if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                                    $"[4B-AMBIENT] occ={occlusion:F2} filt={directFilter:F3} " +
+                                    $"({(usedFace ? "face-sampled" : "vanilla pos")}, probe skip)");
                         }
                         else
                         {
-                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[4B-LOS] occ={occlusion:F2}<0.3 filt={directFilter:F3} (no repos)");
+                            if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                                    $"[4B-LOS] occ={occlusion:F2}<0.3 filt={directFilter:F3} (no repos)");
                         }
                     }
                 }
@@ -935,14 +944,16 @@ namespace soundphysicsadapted
 
                         finalFilter = pathFilter;
 
-                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[4B-LPF] dOcc={occlusion:F2} bOcc={blendedOcc:F2} smooth={smoothedOcc:F2} filt={pathFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} clarity={pathClarity:P0} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
+                        if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                                $"[4B-LPF] dOcc={occlusion:F2} bOcc={blendedOcc:F2} smooth={smoothedOcc:F2} filt={pathFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} clarity={pathClarity:P0} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
                     }
 
                     if (updatedThisTick == 0 && pathResult.Value.RepositionOffset > 0.1)
                     {
-                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[4B-Path] off={pathResult.Value.RepositionOffset:F1}m bOcc={pathResult.Value.BlendedOcclusion:F2} paths={pathResult.Value.PathCount}/{pathResult.Value.TotalPathCount} perm={pathResult.Value.PermeatedPathCount}");
+                        if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                                $"[4B-Path] off={pathResult.Value.RepositionOffset:F1}m bOcc={pathResult.Value.BlendedOcclusion:F2} paths={pathResult.Value.PathCount}/{pathResult.Value.TotalPathCount} perm={pathResult.Value.PermeatedPathCount}");
                     }
                 }
                 else
@@ -1007,7 +1018,8 @@ namespace soundphysicsadapted
                     bool was = isOutdoors;
                     isOutdoors = smoothedOccl < 0.1f;
                     if (isOutdoors != was)
-                        SoundPhysicsAdaptedModSystem.DebugLog($"SKY PROBE (weather): {(isOutdoors ? "OUTDOORS" : "INDOORS")} (occl={smoothedOccl:F2})");
+                        if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.DebugLog($"SKY PROBE (weather): {(isOutdoors ? "OUTDOORS" : "INDOORS")} (occl={smoothedOccl:F2})");
                     return;
                 }
             }
@@ -1027,7 +1039,8 @@ namespace soundphysicsadapted
             bool was2 = isOutdoors;
             isOutdoors = (skyHits == SKY_PROBE_RAY_COUNT);
             if (isOutdoors != was2)
-                SoundPhysicsAdaptedModSystem.DebugLog($"SKY PROBE (fallback): {(isOutdoors ? "OUTDOORS" : "INDOORS")} ({skyHits}/{SKY_PROBE_RAY_COUNT})");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"SKY PROBE (fallback): {(isOutdoors ? "OUTDOORS" : "INDOORS")} ({skyHits}/{SKY_PROBE_RAY_COUNT})");
         }
 
         private bool RayHitsBlock(Vec3d origin, Vec3d dir, float maxDist, IBlockAccessor ba)

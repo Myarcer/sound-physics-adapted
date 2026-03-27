@@ -4,6 +4,7 @@ using Vintagestory.API.Server;
 using Vintagestory.API.MathTools;
 using System;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -1386,12 +1387,51 @@ namespace soundphysicsadapted
             RateLimitedLog(message);
         }
 
+        // ═══════════════════════════════════════════════════════════
+        // Zero-cost guard properties for caller-side debug log gating.
+        // C# evaluates $"..." interpolated strings at the call site BEFORE
+        // entering the method. Wrapping calls with these guards ensures
+        // the string is never built when debug is off. AggressiveInlining
+        // lets the JIT eliminate the entire branch.
+        // ═══════════════════════════════════════════════════════════
+
+        /// <summary>True when general debug logging is active.</summary>
+        public static bool IsDebugEnabled
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => config?.DebugMode == true && clientApi != null;
+        }
+
+        /// <summary>True when occlusion-specific debug logging is active.</summary>
+        public static bool IsOcclusionDebugEnabled
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => config?.DebugMode == true && config?.DebugOcclusion == true && clientApi != null;
+        }
+
+        /// <summary>True when reverb-specific debug logging is active.</summary>
+        public static bool IsReverbDebugEnabled
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => config?.DebugMode == true && config?.DebugReverb == true && clientApi != null;
+        }
+
+        /// <summary>True when resonator-specific debug logging is active.</summary>
+        public static bool IsResonatorDebugEnabled
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => config?.DebugMode == true && config?.DebugResonator == true && clientApi != null;
+        }
+
         /// <summary>
         /// Fast check for whether verbose DDA logging is active.
         /// Use to gate StringBuilder accumulation and avoid f-string allocations.
         /// </summary>
-        public static bool IsVerboseDebugEnabled =>
-            config?.DebugMode == true && config?.DebugOcclusion == true && config?.DebugVerbose == true && clientApi != null;
+        public static bool IsVerboseDebugEnabled
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => config?.DebugMode == true && config?.DebugOcclusion == true && config?.DebugVerbose == true && clientApi != null;
+        }
 
         /// <summary>
         /// Flush a batched verbose debug log (e.g. entire DDA ray trace).
