@@ -4,6 +4,11 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2.1] - 2026-03-27
+
+### Fixed
+- Pre-existing block entity sounds (querns, forges, beehives) that started during world loading were permanently invisible to the occlusion system — they played at full volume through any number of walls. Now queued during startup and retroactively registered with correct occlusion once warmup completes
+
 ## [0.2.2] - 2026-03-27
 
 ### Added
