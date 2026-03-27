@@ -42,7 +42,7 @@ namespace soundphysicsadapted
         /// Bump this when adding new migration blocks in MigrateConfig().
         /// Pre-migration configs (ConfigVersion == 0) are always wiped to fresh defaults.
         /// </summary>
-        private const int CurrentConfigVersion = 2;
+        private const int CurrentConfigVersion = 3;
         private static MaterialSoundConfig materialConfig;
         private static ICoreClientAPI clientApi;
         private static AudioPhysicsSystem acousticsManager;
@@ -1262,6 +1262,13 @@ namespace soundphysicsadapted
                 if (cfg.MaxSoundsPerTick >= 25) cfg.MaxSoundsPerTick = 10;
                 if (cfg.MaxOverdueSoundsPerTick >= 6) cfg.MaxOverdueSoundsPerTick = 3;
                 cfg.ConfigVersion = 2;
+            }
+            if (cfg.ConfigVersion < 3)
+            {
+                // v2→v3: Absorption ×3 fix means MaxOcclusion=4 is now overkill acoustically
+                // (exp(-12) ≈ 0%) but too low for user flexibility. Raise to 32 for headroom.
+                if (cfg.MaxOcclusion <= 4.0f) cfg.MaxOcclusion = 32.0f;
+                cfg.ConfigVersion = 3;
             }
             cfg.ConfigVersion = CurrentConfigVersion;
         }

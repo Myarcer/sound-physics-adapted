@@ -113,13 +113,12 @@ namespace soundphysicsadapted
         /// <summary>
         /// Maximum occlusion value (caps total block count).
         /// The DDA ray stops early once this threshold is reached.
-        /// With BlockAbsorption=1.0, filter = exp(-MaxOcclusion):
-        ///   4.0 = 1.8% volume (functionally inaudible)
-        ///   6.0 = 0.25% volume (hits MinLowPassFilter)
-        ///  10.0 = 0.005% (wastes DDA steps for zero perceptual benefit)
-        /// Default 4.0 provides full muffling while halving DDA cost vs old default of 10.
+        /// With BlockAbsorption=1.0 and ×3 internal multiplier, filter = exp(-MaxOcclusion * 3):
+        ///   4.0 = exp(-12) ≈ 0.0006% (effectively silent)
+        ///  32.0 = massive headroom for low-absorption configs
+        /// SPR defaults to 64. We use 32 — enough headroom while limiting DDA cost.
         /// </summary>
-        public float MaxOcclusion { get; set; } = 4.0f;
+        public float MaxOcclusion { get; set; } = 32.0f;
 
         /// <summary>
         /// Occlusion value per solid block
