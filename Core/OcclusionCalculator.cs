@@ -20,6 +20,23 @@ namespace soundphysicsadapted
     /// </summary>
     public static class OcclusionCalculator
     {
+        // === Shared State for RunOcclusion Visitor ===
+        // Alloc-free DDA traversal in single-threaded context
+        private static float _vOcclusionAccumulation;
+        private static int _vBlockHits;
+        private static bool _vVerboseLog;
+        private static StringBuilder _vDdaTrace;
+        private static SoundPhysicsConfig _vConfig;
+        private static IBlockAccessor _vBlockAccessor;
+        private static BlockPos _vCollisionCheckPos = new BlockPos(0, 0, 0, 0);
+        private static Vec3d _vFrom;
+        private static double _vNdx;
+        private static double _vNdy;
+        private static double _vNdz;
+        private static double _vLength;
+
+        private static readonly DDABlockTraversal.BlockVisitor _runOcclusionVisitor = RunOcclusionVisitor;
+
         /// <summary>
         /// Clear the block occlusion cache. Call when config reloads or materials change.
         /// Delegates to shared BlockClassification caches.
@@ -271,13 +288,6 @@ namespace soundphysicsadapted
             double ndy = dy / length;
             double ndz = dz / length;
 
-            // Mutable state captured by the visitor lambda
-            float occlusionAccumulation = 0f;
-            int blockHits = 0;
-
-            // Reusable BlockPos for collision box lookups (avoids allocation per block)
-            BlockPos collisionCheckPos = new BlockPos(0, 0, 0, 0);
-
             // SOURCE BLOCK vs WALL DETECTION (step-back test):
             // When VS places a sound on a block face, floor(from) can land on the source
             // block (-X/-Y/-Z faces: floor(N.00)=N=source) or adjacent air (+X/+Y/+Z faces:
@@ -304,124 +314,140 @@ namespace soundphysicsadapted
             bool verboseLog = SoundPhysicsAdaptedModSystem.IsVerboseDebugEnabled;
             StringBuilder ddaTrace = verboseLog ? new StringBuilder(512) : null;
 
+            _vOcclusionAccumulation = 0f;
+            _vBlockHits = 0;
+            _vVerboseLog = verboseLog;
+            _vDdaTrace = ddaTrace;
+            _vConfig = config;
+            _vBlockAccessor = blockAccessor;
+            _vFrom = from;
+            _vNdx = ndx;
+            _vNdy = ndy;
+            _vNdz = ndz;
+            _vLength = length;
+
             int maxDDASteps = config.MaxDDASteps;
-            bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
-            {
-                Block block = ctx.Block;
-
-                if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
-                    return false; // Continue
-
-                float blockOcclusion = 0f;
-
-                // OPEN DOOR/GATE CHECK: must run BEFORE solid-face fast path.
-                // ME gate spacers have solid faces that would take the fast path and occlude.
-                // Multiblock door spacers also need controller resolution here.
-                if (IsOpenDoorOrGate(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
-                {
-                    if (verboseLog) ddaTrace.Append($"  DDA door-open: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (open, pass-through)\n");
-                    return false; // Continue — treat as air
-                }
-
-                // FAST PATH (95%+ of blocks): Solid-face check is purely cached array lookups.
-                // Runs FIRST to skip all expensive checks below for stone, dirt, wood, etc.
-                if (BlockClassification.IsSolidForOcclusion(block))
-                {
-                    blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                }
-                else if (BlockClassification.IsLiquidMaterial(block))
-                {
-                    // LIQUID/LAVA PATH: No collision boxes but still muffles sound.
-                    blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                    if (blockOcclusion > 0 && verboseLog)
-                    {
-                        ddaTrace.Append($"  DDA liquid: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2}\n");
-                    }
-                }
-                else
-                {
-                    // NON-SOLID BLOCK PATH: Only ~5% of DDA-visited blocks reach here.
-                    // Doors, fences, trapdoors, foliage, etc.
-                    // No special-casing — AABB collision geometry determines occlusion.
-
-                    // PARTIAL BLOCK PATH: fences, doors, trapdoors, chiseled blocks, etc.
-                    // Check if ray actually intersects the block's collision geometry.
-                    collisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
-                    var collisionBoxes = block.GetCollisionBoxes(blockAccessor, collisionCheckPos);
-                    if (collisionBoxes == null || collisionBoxes.Length == 0)
-                    {
-                        // No collision geometry — foliage path.
-                        // Blocks you walk through: leaves, flowers, grass, paintings, etc.
-                        // Material/override occlusion scaled by selection box volume so
-                        // small decorative items auto-reduce without needing overrides.
-                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                        if (blockOcclusion > 0)
-                        {
-                            blockOcclusion *= GetFoliageVolumeScale(block);
-                            if (verboseLog)
-                            {
-                                ddaTrace.Append($"  DDA foliage: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F3}\n");
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // Check if this is a door/gate with a configured override.
-                        // Thin door panels (~0.12 block) cause RayHitsAnyCollisionBox to miss
-                        // ~22% of rays at oblique angles. For override blocks, skip the AABB
-                        // test entirely and apply the override directly — but only when closed.
-                        var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
-                        bool hasOverride = matConfig != null && matConfig.HasBlockOverride(block);
-
-                        if (hasOverride)
-                        {
-                            if (IsDoorOpen(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
-                            {
-                                // Door/trapdoor is open — treat as air, zero occlusion
-                                if (verboseLog) ddaTrace.Append($"  DDA door-open: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (open, pass-through)\n");
-                            }
-                            else
-                            {
-                                // Closed door/gate — apply override directly, skip AABB
-                                blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                                if (verboseLog) ddaTrace.Append($"  DDA door-closed: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2} (override, skip AABB)\n");
-                            }
-                        }
-                        else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
-                        {
-                            // Ray misses collision geometry (e.g. fence post gap)
-                            if (verboseLog) ddaTrace.Append($"  DDA pass-through: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (ray misses geometry)\n");
-                        }
-                        else
-                        {
-                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
-                            blockOcclusion *= GetPartialBlockVolumeScale(block, blockAccessor, ctx.X, ctx.Y, ctx.Z, collisionBoxes);
-                        }
-                    }
-                }
-
-                if (blockOcclusion > 0)
-                {
-                    occlusionAccumulation += blockOcclusion;
-                    blockHits++;
-
-                    if (verboseLog)
-                        ddaTrace.Append($"  DDA hit: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2} total={occlusionAccumulation:F2}\n");
-
-                    if (occlusionAccumulation >= config.MaxOcclusion)
-                    {
-                        if (verboseLog) ddaTrace.Append($"  Max occlusion reached after {blockHits} blocks\n");
-                        return true; // Stop traversal
-                    }
-                }
-
-                return false; // Continue
-            }, skipFirst: skipFirstBlock, maxSteps: maxDDASteps);
+            bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, _runOcclusionVisitor, skipFirst: skipFirstBlock, maxSteps: maxDDASteps);
+            
+            float occlusionAccumulation = _vOcclusionAccumulation;
 
             // Flush entire DDA trace as single log entry
             SoundPhysicsAdaptedModSystem.VerboseDebugBatch(ddaTrace);
 
             return stopped ? config.MaxOcclusion : occlusionAccumulation;
+        }
+
+        private static bool RunOcclusionVisitor(ref DDABlockTraversal.TraversalContext ctx)
+        {
+            Block block = ctx.Block;
+
+            if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
+                return false; // Continue
+
+            float blockOcclusion = 0f;
+
+            // OPEN DOOR/GATE CHECK: must run BEFORE solid-face fast path.
+            // ME gate spacers have solid faces that would take the fast path and occlude.
+            // Multiblock door spacers also need controller resolution here.
+            if (IsOpenDoorOrGate(block, _vBlockAccessor, ctx.X, ctx.Y, ctx.Z))
+            {
+                if (_vVerboseLog) _vDdaTrace.Append($"  DDA door-open: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (open, pass-through)\n");
+                return false; // Continue — treat as air
+            }
+
+            // FAST PATH (95%+ of blocks): Solid-face check is purely cached array lookups.
+            // Runs FIRST to skip all expensive checks below for stone, dirt, wood, etc.
+            if (BlockClassification.IsSolidForOcclusion(block))
+            {
+                blockOcclusion = BlockClassification.GetBlockOcclusion(block, _vConfig);
+            }
+            else if (BlockClassification.IsLiquidMaterial(block))
+            {
+                // LIQUID/LAVA PATH: No collision boxes but still muffles sound.
+                blockOcclusion = BlockClassification.GetBlockOcclusion(block, _vConfig);
+                if (blockOcclusion > 0 && _vVerboseLog)
+                {
+                    _vDdaTrace.Append($"  DDA liquid: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2}\n");
+                }
+            }
+            else
+            {
+                // NON-SOLID BLOCK PATH: Only ~5% of DDA-visited blocks reach here.
+                // Doors, fences, trapdoors, foliage, etc.
+                // No special-casing — AABB collision geometry determines occlusion.
+
+                // PARTIAL BLOCK PATH: fences, doors, trapdoors, chiseled blocks, etc.
+                // Check if ray actually intersects the block's collision geometry.
+                _vCollisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
+                var collisionBoxes = block.GetCollisionBoxes(_vBlockAccessor, _vCollisionCheckPos);
+                if (collisionBoxes == null || collisionBoxes.Length == 0)
+                {
+                    // No collision geometry — foliage path.
+                    // Blocks you walk through: leaves, flowers, grass, paintings, etc.
+                    // Material/override occlusion scaled by selection box volume so
+                    // small decorative items auto-reduce without needing overrides.
+                    blockOcclusion = BlockClassification.GetBlockOcclusion(block, _vConfig);
+                    if (blockOcclusion > 0)
+                    {
+                        blockOcclusion *= GetFoliageVolumeScale(block);
+                        if (_vVerboseLog)
+                        {
+                            _vDdaTrace.Append($"  DDA foliage: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F3}\n");
+                        }
+                    }
+                }
+                else
+                {
+                    // Check if this is a door/gate with a configured override.
+                    // Thin door panels (~0.12 block) cause RayHitsAnyCollisionBox to miss
+                    // ~22% of rays at oblique angles. For override blocks, skip the AABB
+                    // test entirely and apply the override directly — but only when closed.
+                    var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
+                    bool hasOverride = matConfig != null && matConfig.HasBlockOverride(block);
+
+                    if (hasOverride)
+                    {
+                        if (IsDoorOpen(block, _vBlockAccessor, ctx.X, ctx.Y, ctx.Z))
+                        {
+                            // Door/trapdoor is open — treat as air, zero occlusion
+                            if (_vVerboseLog) _vDdaTrace.Append($"  DDA door-open: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (open, pass-through)\n");
+                        }
+                        else
+                        {
+                            // Closed door/gate — apply override directly, skip AABB
+                            blockOcclusion = BlockClassification.GetBlockOcclusion(block, _vConfig);
+                            if (_vVerboseLog) _vDdaTrace.Append($"  DDA door-closed: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2} (override, skip AABB)\n");
+                        }
+                    }
+                    else if (!RayHitsAnyCollisionBox(_vFrom, _vNdx, _vNdy, _vNdz, _vLength, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
+                    {
+                        // Ray misses collision geometry (e.g. fence post gap)
+                        if (_vVerboseLog) _vDdaTrace.Append($"  DDA pass-through: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (ray misses geometry)\n");
+                    }
+                    else
+                    {
+                        blockOcclusion = BlockClassification.GetBlockOcclusion(block, _vConfig);
+                        blockOcclusion *= GetPartialBlockVolumeScale(block, _vBlockAccessor, ctx.X, ctx.Y, ctx.Z, collisionBoxes);
+                    }
+                }
+            }
+
+            if (blockOcclusion > 0)
+            {
+                _vOcclusionAccumulation += blockOcclusion;
+                _vBlockHits++;
+
+                if (_vVerboseLog)
+                    _vDdaTrace.Append($"  DDA hit: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2} total={_vOcclusionAccumulation:F2}\n");
+
+                if (_vOcclusionAccumulation >= _vConfig.MaxOcclusion)
+                {
+                    if (_vVerboseLog) _vDdaTrace.Append($"  Max occlusion reached after {_vBlockHits} blocks\n");
+                    return true; // Stop traversal
+                }
+            }
+
+            return false; // Continue
         }
 
         /// <summary>
