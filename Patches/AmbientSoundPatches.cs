@@ -206,7 +206,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in AmbientSound updatePosition postfix: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in AmbientSound updatePosition postfix: {ex.Message}");
             }
         }
     }

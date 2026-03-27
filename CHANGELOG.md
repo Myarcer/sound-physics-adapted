@@ -4,6 +4,15 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-03-26
+
+### Fixed
+- Door occlusion — closed doors now properly muffle sound; open doors are fully transparent; thin panels that miss AABB ray tests get override-based occlusion directly
+- Weather DDA door separation — dual-accumulator separates Layer 1 ambient muffling (doors count) from 5B spawn detection (doors transparent), so rain sources spawn behind closed doors but still muffle correctly
+- DDA partial-block destination — player inside a partial block (slab, ladder, etc.) no longer gets blanket skip; AABB check determines actual occlusion contribution
+- DDA sky coverage — step-back test replaces legacy heuristic, preventing false sky readings through solid overhangs
+- Glass pane TreatAsFullCube migration — glass panes no longer promoted to full-cube occlusion during config version upgrade
+
 ## [0.2.0] - 2026-03-25
 
 ### Added

@@ -110,8 +110,9 @@ namespace soundphysicsadapted
                 if (!_throttledSounds.Contains(sound))
                 {
                     _throttledCount++;
-                    SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[THROTTLE] Muted {GetSoundName(sound)} (budget {max}, total {_allSounds.Count})");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog(
+                            $"[THROTTLE] Muted {GetSoundName(sound)} (budget {max}, total {_allSounds.Count})");
                 }
             }
             foreach (var sound in _throttledSounds)
@@ -119,8 +120,9 @@ namespace soundphysicsadapted
                 if (!_newThrottled.Contains(sound))
                 {
                     _unthrottledCount++;
-                    SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[THROTTLE] Unmuted {GetSoundName(sound)}");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog(
+                            $"[THROTTLE] Unmuted {GetSoundName(sound)}");
                 }
             }
 

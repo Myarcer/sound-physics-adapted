@@ -438,7 +438,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"ApplyReverb error: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"ApplyReverb error: {ex.Message}");
             }
         }
 
@@ -480,7 +481,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"[MonoDownmix] StartPlayingAudio prefix error: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[MonoDownmix] StartPlayingAudio prefix error: {ex.Message}");
             }
         }
 
@@ -794,7 +796,8 @@ namespace soundphysicsadapted
 
                 if (stereoData == null)
                 {
-                    SoundPhysicsAdaptedModSystem.DebugLog($"MonoPrefix: could not find cached data for '{location}'");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"MonoPrefix: could not find cached data for '{location}'");
                     return;
                 }
 
@@ -813,12 +816,14 @@ namespace soundphysicsadapted
                 monoSwapOriginal = stereoData;
                 soundAudioDataDict[location] = monoMeta;
 
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"MonoPrefix: swapped '{location}' to mono ({monoMeta.Channels}ch, Loaded={monoMeta.Loaded})");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"MonoPrefix: swapped '{location}' to mono ({monoMeta.Channels}ch, Loaded={monoMeta.Loaded})");
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"MonoPrefix error: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"MonoPrefix error: {ex.Message}");
                 monoSwapKey = null;
                 monoSwapOriginal = null;
             }
@@ -896,7 +901,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in LoadSound patch: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in LoadSound patch: {ex.Message}");
             }
         }
 
@@ -927,7 +933,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in SetPosition patch: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in SetPosition patch: {ex.Message}");
             }
         }
 
@@ -956,7 +963,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in SetPositionXYZ patch: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in SetPositionXYZ patch: {ex.Message}");
             }
         }
 
@@ -1049,7 +1057,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in SoundStartPrefix: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in SoundStartPrefix: {ex.Message}");
             }
         }
 
@@ -1118,7 +1127,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in SoundStartPostfix: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in SoundStartPostfix: {ex.Message}");
             }
         }
         /// <summary>
@@ -1154,7 +1164,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in StartPlayingFinal patch: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in StartPlayingFinal patch: {ex.Message}");
             }
         }
 
@@ -1185,7 +1196,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in CreateSoundSourcePostfix: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in CreateSoundSourcePostfix: {ex.Message}");
             }
         }
 
@@ -1288,8 +1300,9 @@ namespace soundphysicsadapted
                 float filterValue = OcclusionCalculator.OcclusionToFilter(occlusion);
                 ApplyLowPassFilter(sound, filterValue, soundPosD, soundName);
 
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"PATCHED: {soundName} pos=({soundPos.X:F0},{soundPos.Y:F0},{soundPos.Z:F0}) " +
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"PATCHED: {soundName} pos=({soundPos.X:F0},{soundPos.Y:F0},{soundPos.Z:F0}) " +
                     $"occlusion={occlusion:F2} filter={filterValue:F3}"
                 );
             }
@@ -1324,8 +1337,9 @@ namespace soundphysicsadapted
                 float filterValue = OcclusionCalculator.OcclusionToFilter(occlusion);
                 ApplyLowPassFilter(sound, filterValue, soundPosD, soundName);
 
-                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                    $"INIT: {soundName} occ={occlusion:F2} filt={filterValue:F3}");
+                if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                        $"INIT: {soundName} occ={occlusion:F2} filt={filterValue:F3}");
             }
         }
 
@@ -1583,7 +1597,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"HOOK[{variant}] ERROR: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"HOOK[{variant}] ERROR: {ex.Message}");
             }
         }
 

@@ -138,7 +138,8 @@ namespace soundphysicsadapted
                 // Debug log first time we check a block type
                 if (block.Code?.ToString()?.Contains("glasspane") == true)
                 {
-                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog($"TreatAsFullCube check: {block.Code} => {result}");
+                    if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog($"TreatAsFullCube check: {block.Code} => {result}");
                 }
 
                 return result;
