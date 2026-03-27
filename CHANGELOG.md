@@ -4,6 +4,28 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] - 2026-03-27
+
+### Added
+- Diffraction floor — sounds traveling around L-shaped corridors and corners are no longer over-muffled. Bounce ray data detects viable indirect paths and raises the LPF floor based on simplified UTD/Maekawa diffraction physics (~8-10dB per 90° bend). Requires 2+ open bounce paths and meaningful shared airspace — entombed sounds cannot benefit
+- Static sound cache — sounds that haven't moved skip raycasts entirely. Automatically bypassed for 1s after any block change (door open/close, break/place) to prevent step-down artifacts. Toggle via `EnableStaticSoundCache` config option
+- `bocc` debug visualization mode — shows bOcc LOS path quality (green=clear, yellow=partial, orange=heavy, red=blocked)
+
+### Fixed
+- Tall door (2-3 block) self-occlusion — multiblock upper halves no longer push the sound source above the door into ceiling/wall blocks causing false occlusion
+- Stationary sound debug gap — `FORCE_REFRESH_MS` now bypasses `RateLimitedLog` so sounds that haven't moved still log correctly
+
+### Performance
+- Extracted `RunOcclusion` lambda to a static method, eliminating closure allocations on every tick
+- Zero-cost debug log guards added to all hot-path files — no string formatting overhead when debug logging is off
+- Reuse `multiRayOcclusion` result instead of redundant DDA recalculation
+
+### Config
+- `MaxDiffractionFilter` (default `0.35`) — caps diffraction relief at ~9dB, realistic for a single 90° corner bend
+- `MinDiffractionOcclusion` (default `0.3`) — minimum occlusion on diffracted paths (~8dB), prevents unrealistically transparent corners
+- `EnableStaticSoundCache` (default `true`)
+- Config bumped to v4, material config to v8 — outdated configs auto-regenerate from fresh defaults; no legacy migration chains
+
 ## [0.2.1] - 2026-03-26
 
 ### Fixed
