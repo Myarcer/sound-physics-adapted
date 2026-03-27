@@ -853,7 +853,8 @@ namespace soundphysicsadapted
                         float sharedAirspaceFilterFloor = MathF.Sqrt(airspaceRatio) * 0.2f;
                         sharedAirspaceFilterFloor = Math.Max(sharedAirspaceFilterFloor, 0.01f); // Avoid log(0)
                         float blockAbsorption = SoundPhysicsAdaptedModSystem.Config?.BlockAbsorption ?? 1.0f;
-                        float sharedAirspaceFloor = -MathF.Log(sharedAirspaceFilterFloor) / blockAbsorption;
+                        float absorptionCoeff = blockAbsorption * 3.0f; // SPR-matching multiplier
+                        float sharedAirspaceFloor = -MathF.Log(sharedAirspaceFilterFloor) / absorptionCoeff;
 
                         // Convert clarity floor to occlusion scale
                         // clarity floor filter = sqrt(pathClarity) * 0.35 (slightly higher than SPR's 0.2)
@@ -861,7 +862,7 @@ namespace soundphysicsadapted
                         // So: occ = -ln(filter) / blockAbsorption
                         float clarityFilterFloor = MathF.Sqrt(pathClarity) * 0.35f;
                         clarityFilterFloor = Math.Max(clarityFilterFloor, 0.01f); // Avoid log(0)
-                        float clarityOccFloor = -MathF.Log(clarityFilterFloor) / blockAbsorption;
+                        float clarityOccFloor = -MathF.Log(clarityFilterFloor) / absorptionCoeff;
 
                         // Take the MORE FAVORABLE (lower) ceiling — caps max occlusion
                         // SPR intent: prevent repositioned sounds from being TOO muffled
@@ -941,6 +942,15 @@ namespace soundphysicsadapted
                         float bendRatio = distance > 0.1f ? Math.Clamp(reposOffset / distance, 0f, 1f) : 0f;
                         float diffractionDarkening = 1f - bendRatio * 0.3f;
                         pathFilter *= diffractionDarkening;
+
+                        // SPR-STYLE WALL BASELINE (Issue #2 fix):
+                        // Direct wall occlusion sets the minimum muffling — probes can never
+                        // make a sound brighter than what the wall penetration allows.
+                        // Shared airspace floor prevents over-muffling (SPR: max(directCutoff, floor)).
+                        // pathFilter from blended probes is only used if it's MORE muffled than baseline.
+                        float airspaceFilterFloorFinal = MathF.Sqrt(airspaceRatio) * 0.2f;
+                        float wallBaseline = Math.Max(directFilter, airspaceFilterFloorFinal);
+                        pathFilter = Math.Min(pathFilter, wallBaseline);
 
                         finalFilter = pathFilter;
 

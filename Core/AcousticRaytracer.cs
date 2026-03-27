@@ -415,7 +415,7 @@ namespace soundphysicsadapted
             float weight3 = Math.Clamp(sharedAirspace / 10f, 0f, 1f);
 
             float blockAbsorption = config.BlockAbsorption;
-            float occludedCutoff = MathF.Exp(-directOcclusion * blockAbsorption);
+            float occludedCutoff = MathF.Exp(-directOcclusion * blockAbsorption * 3.0f);
             float sendCutoff0 = occludedCutoff * (1f - weight0) + weight0;
             float sendCutoff1 = occludedCutoff * (1f - weight1) + weight1;
             float sendCutoff2 = occludedCutoff * (1f - weight2) + weight2;
