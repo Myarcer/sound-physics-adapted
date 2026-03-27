@@ -122,9 +122,8 @@ Per-material occlusion values, JSON configuration, block-specific overrides.
 ### Phase 4: Shared Airspace & Sound Paths ✅
 Shared airspace detection, sound repositioning through doorways/openings.
 
-### Phase 5: Weather & Ambient - In Progress
-Positional weather audio, shelter detection, gradual attenuation, directional thunder.
-Currently Still in Development, i am not happy with the Positional Sources Detection and smoothing.
+### Phase 5: Weather & Ambient ✅ (mostly complete)
+Positional weather audio, shelter detection, gradual attenuation, directional thunder. Core system is working — some edge-case smoothing polish remaining.
 
 ### Phase 6: Polish — In Progress
 Air absorption, performance optimization, debug visualization.

@@ -4,6 +4,32 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] - 2026-03-27
+
+### Added
+- Diffraction floor (rebuilt from scratch) — the old bOcc system that let entombed sounds bleed through many walls is replaced with a physics-grounded floor using bounce ray data. When 2+ open bounce paths and meaningful shared airspace are detected (indicating a real L-corridor or corner path), the LPF floor is raised based on simplified UTD/Maekawa diffraction (~8-10dB per 90° bend). Entombed sounds cannot benefit — both the open path count and >5% shared airspace requirements block wall-leaking
+- Static sound cache — sounds that haven't moved skip raycasts entirely. Automatically bypassed for 1s after any block change (door open/close, break/place) to prevent step-down artifacts. Toggle via `EnableStaticSoundCache` config option
+- `bocc` debug visualization mode — shows bOcc LOS path quality (green=clear, yellow=partial, orange=heavy, red=blocked)
+
+### Changed
+- Occlusion absorption multiplier reduced from ×3 to ×2 — less aggressive per block, more natural muffling curve through thick walls
+- `MaxOcclusion` default raised from `4.0` to `32.0` — the previous cap of 4 blocks caused sounds behind 4+ walls to clamp at the same filter level regardless of additional walls; 32 gives full headroom across the realistic range
+
+### Fixed
+- Tall door (2-3 block) self-occlusion — multiblock upper halves no longer push the sound source above the door into ceiling/wall blocks causing false occlusion
+- Stationary sound debug gap — `FORCE_REFRESH_MS` now bypasses `RateLimitedLog` so sounds that haven't moved still log correctly
+
+### Performance
+- Extracted `RunOcclusion` lambda to a static method, eliminating closure allocations on every tick
+- Zero-cost debug log guards added to all hot-path files — no string formatting overhead when debug logging is off
+- Reuse `multiRayOcclusion` result instead of redundant DDA recalculation
+
+### Config
+- `MaxDiffractionFilter` (default `0.35`) — caps diffraction relief at ~9dB, realistic for a single 90° corner bend
+- `MinDiffractionOcclusion` (default `0.3`) — minimum occlusion on diffracted paths (~8dB), prevents unrealistically transparent corners
+- `EnableStaticSoundCache` (default `true`)
+- Config bumped to v4, material config to v8 — outdated configs auto-regenerate from fresh defaults; no legacy migration chains
+
 ## [0.2.1] - 2026-03-26
 
 ### Fixed
