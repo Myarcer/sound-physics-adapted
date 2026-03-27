@@ -905,11 +905,13 @@ namespace soundphysicsadapted
 
                         if (hasDiffractionEvidence)
                         {
-                            // Minimum diffraction occlusion: physical loss from bending around edge.
-                            // exp(-0.3 * 3) = 0.407 ≈ 8dB loss (single 90° corner, Maekawa at N≈0).
+                            // Diffraction floor: use BETTER of measured indirect path vs.
+                            // guaranteed minimum from physics (single 90° bend, ~8dB).
+                            // Max applied on filter (pick less muffled), NOT on occlusion.
                             float minDiffOcc = config.MinDiffractionOcclusion;
-                            float effectiveBOcc = Math.Max((float)pathResult.Value.BlendedOcclusion, minDiffOcc);
-                            float bOccFilter = OcclusionCalculator.OcclusionToFilter(effectiveBOcc);
+                            float rawBOccFilter = OcclusionCalculator.OcclusionToFilter((float)pathResult.Value.BlendedOcclusion);
+                            float minDiffFilter = OcclusionCalculator.OcclusionToFilter(minDiffOcc);
+                            float bOccFilter = Math.Max(rawBOccFilter, minDiffFilter);
 
                             // Confidence from multiple evidence sources:
                             // - airspace: 25%+ → full confidence (strong shared volume)
