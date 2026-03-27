@@ -830,17 +830,19 @@ namespace soundphysicsadapted
 
                     // Occluded: full path resolution with opening probes.
                     // Position shifts toward openings, LPF uses DIRECT occlusion (SPR-style).
-                    // bOcc is fundamentally broken for LPF — see LPF_INVESTIGATION.md Issue #2.
+                    // bOcc provides a DIFFRACTION FLOOR: when bounce rays find viable indirect
+                    // paths (L-corridors, around corners), allows more HF than direct occlusion
+                    // alone. Capped at ~9dB (MaxDiffractionFilter) with entombment guards.
                     bool applied = allPermeated || AudioRenderer.ApplySoundPath(sound, pathResult.Value, soundPos);
 
                     if (applied)
                     {
                         float airspaceRatio = pathResult.Value.SharedAirspaceRatio;
 
-                        // SPR-STYLE LPF: Direct occlusion drives the filter. Always.
+                        // SPR-STYLE LPF: Direct occlusion drives the base filter. Always.
                         // Shared airspace floor prevents over-muffling of repositioned sounds.
-                        // bOcc (probe-path occlusion) is NOT used — it's self-defeatingly biased
-                        // toward zero due to permeation weighting (see LPF_INVESTIGATION.md).
+                        // Diffraction floor (from bOcc bounce data) adds relief for L-corridors
+                        // and around-corner scenarios where indirect paths are viable.
 
                         // SPR: directCutoff = max(directCutoff, sqrt(sharedAirspace) * 0.2)
                         float sharedAirspaceFloor = MathF.Sqrt(airspaceRatio) * 0.2f;
@@ -886,16 +888,53 @@ namespace soundphysicsadapted
                         // SPR-style: airspace floor prevents over-muffling
                         finalFilter = Math.Max(smoothedDirectFilter, sharedAirspaceFloor);
 
+                        // DIFFRACTION FLOOR (bOcc reintegration):
+                        // When bounce rays find viable indirect paths (L-corridors, around corners),
+                        // allow more HF through than direct occlusion + airspace floor alone.
+                        // Based on UTD/Maekawa simplified diffraction: ~8-10dB loss per 90° bend.
+                        // Guards prevent entombed sounds from benefiting (requires meaningful
+                        // shared airspace, open path count, and moderate direct occlusion).
+                        float diffractionFloor = 0f;
+                        float reposOffset = (float)pathResult.Value.RepositionOffset;
+                        int openPaths = pathResult.Value.PathCount;
+
+                        bool hasDiffractionEvidence =
+                            openPaths >= 2 &&              // at least 2 open bounce paths
+                            airspaceRatio >= 0.05f &&      // >5% shared airspace (not entombed)
+                            smoothedOcc > 0.5f;            // direct path must be meaningfully occluded
+
+                        if (hasDiffractionEvidence)
+                        {
+                            // Minimum diffraction occlusion: physical loss from bending around edge.
+                            // exp(-0.3 * 3) = 0.407 ≈ 8dB loss (single 90° corner, Maekawa at N≈0).
+                            float minDiffOcc = config.MinDiffractionOcclusion;
+                            float effectiveBOcc = Math.Max((float)pathResult.Value.BlendedOcclusion, minDiffOcc);
+                            float bOccFilter = OcclusionCalculator.OcclusionToFilter(effectiveBOcc);
+
+                            // Confidence from multiple evidence sources:
+                            // - airspace: 25%+ → full confidence (strong shared volume)
+                            // - paths: 4+ open → full confidence (consistent indirect routing)
+                            // - repositioning: 3m+ offset → bonus (sound visibly bends around corner)
+                            float airspaceConf = Math.Min(airspaceRatio * 4f, 1f);
+                            float pathConf = Math.Min(openPaths / 4f, 1f);
+                            float reposConf = Math.Clamp(reposOffset / 3f, 0f, 1f);
+                            float confidence = Math.Min(1f, airspaceConf * pathConf + reposConf * 0.3f);
+
+                            diffractionFloor = Math.Min(bOccFilter * confidence, config.MaxDiffractionFilter);
+
+                            // Take max: diffraction floor overrides if higher than current filter
+                            finalFilter = Math.Max(finalFilter, diffractionFloor);
+                        }
+
                         // DIFFRACTION ANGLE DARKENING:
                         // Sounds bending around corners lose HF proportional to bend angle.
-                        float reposOffset = (float)pathResult.Value.RepositionOffset;
                         float bendRatio = distance > 0.1f ? Math.Clamp(reposOffset / distance, 0f, 1f) : 0f;
                         float diffractionDarkening = 1f - bendRatio * 0.3f;
                         finalFilter *= diffractionDarkening;
 
                         if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[4B-LPF] dOcc={occlusion:F2} smooth={smoothedOcc:F2} filt={finalFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
+                                $"[4B-LPF] dOcc={occlusion:F2} smooth={smoothedOcc:F2} filt={finalFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} airFloor={sharedAirspaceFloor:F2} diffFloor={diffractionFloor:F3} air={airspaceRatio:F2} open={openPaths} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
                     }
 
                     if (updatedThisTick == 0 && pathResult.Value.RepositionOffset > 0.1)

@@ -163,6 +163,22 @@ namespace soundphysicsadapted
         public float MinLowPassFilter { get; set; } = 0.001f;
 
         /// <summary>
+        /// Maximum HF pass from diffraction floor (0 = disable, 1 = full pass).
+        /// When bounce rays find viable indirect paths (e.g., around an L-shaped corridor),
+        /// the diffraction floor allows more HF through than direct occlusion alone.
+        /// 0.35 ≈ 9dB attenuation (realistic for one 90-degree corner bend).
+        /// Based on Maekawa/UTD simplified diffraction models.
+        /// </summary>
+        public float MaxDiffractionFilter { get; set; } = 0.35f;
+
+        /// <summary>
+        /// Minimum occlusion applied to diffracted paths (in block units).
+        /// Prevents diffraction from making sounds unrealistically clear.
+        /// 0.3 ≈ 8dB loss per 90-degree bend (Wwise-style abstract diffraction coefficient).
+        /// </summary>
+        public float MinDiffractionOcclusion { get; set; } = 0.3f;
+
+        /// <summary>
         /// Offset distance for multi-ray occlusion (soft edges).
         /// Shoots 9 rays with offset positions to detect thin walls at perpendicular angles.
         /// 0 = single ray (strict mode), 0.3-0.5 = recommended for soft occlusion.
