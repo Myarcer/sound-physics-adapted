@@ -260,9 +260,21 @@ namespace soundphysicsadapted
                         }
                     }
 
-                    bool hasAirspace = pathOcclusion < 0.5f;
+                    // SPR uses strict binary LOS (raycast MISS = zero blocks hit).
+                    // Our DDA returns accumulated occlusion, so threshold at 0.1 to match:
+                    // <0.1 = effectively clear path (tiny float rounding at most).
+                    // Old value was 0.5 which let roof-grazing/corner-clipping paths through.
+                    bool hasAirspace = pathOcclusion < 0.1f;
                     if (hasAirspace)
                         sharedAirspaceCount++;
+
+                    // Debug: log bounce points near the airspace threshold to diagnose false positives
+                    if (SoundPhysicsAdaptedModSystem.IsVerboseDebugEnabled && pathOcclusion > 0.001f && pathOcclusion < 1.0f)
+                    {
+                        SoundPhysicsAdaptedModSystem.VerboseDebugLog(
+                            $"[AIRSPACE-BP] ray={i} b={bounce} pOcc={pathOcclusion:F3} pass={hasAirspace} " +
+                            $"bp=({bpX:F1},{bpY:F1},{bpZ:F1}) n=({lastHitNormal.X:F2},{lastHitNormal.Y:F2},{lastHitNormal.Z:F2})");
+                    }
 
                     // SPR-style: ALL bounces contribute energy (no airspace gating).
                     // Reverb filtering through walls is handled by per-slot cutoff below.
