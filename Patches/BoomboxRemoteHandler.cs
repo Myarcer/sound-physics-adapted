@@ -192,7 +192,8 @@ namespace soundphysicsadapted.Patches
                 };
 
                 remoteBoomboxes[packet.CarrierEntityId] = remote;
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"BoomboxRemote: Created sound for carrier {packet.CarrierEntityId}, track={packet.TrackLocation}, pos=({packet.PosX:F1},{packet.PosY:F1},{packet.PosZ:F1})");
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"BoomboxRemote: Created sound for carrier {packet.CarrierEntityId}, track={packet.TrackLocation}, pos=({packet.PosX:F1},{packet.PosY:F1},{packet.PosZ:F1})");
             }
             catch (Exception ex)
             {
@@ -213,7 +214,8 @@ namespace soundphysicsadapted.Patches
                     remote.Sound.Dispose();
                 }
                 remoteBoomboxes.Remove(carrierEntityId);
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"BoomboxRemote: Removed sound for carrier {carrierEntityId}");
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"BoomboxRemote: Removed sound for carrier {carrierEntityId}");
             }
         }
 

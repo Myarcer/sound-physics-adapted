@@ -109,7 +109,8 @@ namespace soundphysicsadapted.Patches
             // Skip vanilla reverb - our system handles it
             if (config.DebugMode && config.DebugReverb)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"VANILLA REVERB BLOCKED: value={reverbDecayTime:F2}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"VANILLA REVERB BLOCKED: value={reverbDecayTime:F2}");
             }
 
             return false; // Skip original method

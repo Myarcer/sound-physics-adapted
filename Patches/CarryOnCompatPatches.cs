@@ -146,7 +146,8 @@ namespace soundphysicsadapted.Patches
                 {
                     var prefix = typeof(CarryOnCompatPatches).GetMethod(nameof(StopMusicPrefix), BindingFlags.Public | BindingFlags.Static);
                     harmony.Patch(stopMusicMethod, prefix: new HarmonyMethod(prefix));
-                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("CarryOn compat: Patched StopMusic");
+                    if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog("CarryOn compat: Patched StopMusic");
                 }
 
                 // Patch BlockEntityResonator.StartMusic - intercept to inject existing sound
@@ -155,7 +156,8 @@ namespace soundphysicsadapted.Patches
                 {
                     var prefix = typeof(CarryOnCompatPatches).GetMethod(nameof(StartMusicPrefix), BindingFlags.Public | BindingFlags.Static);
                     harmony.Patch(startMusicMethod, prefix: new HarmonyMethod(prefix));
-                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("CarryOn compat: Patched StartMusic");
+                    if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog("CarryOn compat: Patched StartMusic");
                 }
 
                 // Register tick listener to detect carry state changes and pre-steal sound
@@ -230,7 +232,8 @@ namespace soundphysicsadapted.Patches
             // Cancel pre-steal if carry key released without picking up
             if (!carryKeyHeld && pendingBoomboxSound != null && !isCarryingResonator)
             {
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Carry key released without pickup, canceling pre-steal");
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Carry key released without pickup, canceling pre-steal");
                 CancelPreSteal();
             }
 
@@ -240,7 +243,8 @@ namespace soundphysicsadapted.Patches
                 long elapsed = capi.World.ElapsedMilliseconds - pendingStolenTimeMs;
                 if (elapsed > 3000)
                 {
-                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Pre-steal timed out after 3s");
+                    if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Pre-steal timed out after 3s");
                     CancelPreSteal();
                 }
             }
@@ -260,7 +264,8 @@ namespace soundphysicsadapted.Patches
             // Slot change while carrying (Hands -> Back or vice versa)
             else if (isCarryingResonator && slot != currentCarrySlot)
             {
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Carry slot changed from {currentCarrySlot} to {slot}");
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Carry slot changed from {currentCarrySlot} to {slot}");
                 currentCarrySlot = slot;
             }
 
@@ -284,7 +289,8 @@ namespace soundphysicsadapted.Patches
             var sound = ResonatorReflection.GetSound(be);
             if (sound == null || sound.IsDisposed) return;
 
-            SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Pre-stealing sound from resonator at {sel.Position}, isPlaying={sound.IsPlaying}");
+            if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Pre-stealing sound from resonator at {sel.Position}, isPlaying={sound.IsPlaying}");
 
             // Clear the sound reference from the track so block entity cleanup can't dispose it.
             // When Carry On calls SetBlock(0, pos), the block entity will be removed.
@@ -297,7 +303,8 @@ namespace soundphysicsadapted.Patches
                 if (track != null)
                 {
                     soundField.SetValue(track, null);
-                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Cleared sound field from track to prevent disposal");
+                    if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Cleared sound field from track to prevent disposal");
                 }
             }
 
@@ -319,7 +326,8 @@ namespace soundphysicsadapted.Patches
             }
             catch { }
 
-            SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Sound pre-stolen successfully, wasPlaying={wasPlayingWhenPickedUp}");
+            if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Sound pre-stolen successfully, wasPlaying={wasPlayingWhenPickedUp}");
         }
 
         /// <summary>
@@ -350,26 +358,30 @@ namespace soundphysicsadapted.Patches
                                 if (existingSound == null || existingSound.IsDisposed)
                                 {
                                     soundField.SetValue(track, pendingBoomboxSound);
-                                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Sound returned to resonator track");
+                                    if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Sound returned to resonator track");
                                     returned = true;
                                 }
                                 else
                                 {
-                                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Track already has a sound, disposing our stolen copy");
+                                    if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Track already has a sound, disposing our stolen copy");
                                 }
                             }
                         }
                     }
                     catch (Exception ex)
                     {
-                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Failed to return sound: {ex.Message}");
+                        if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Failed to return sound: {ex.Message}");
                     }
                 }
 
                 if (!returned)
                 {
                     // Can't return to original resonator - dispose cleanly
-                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Can't return sound to resonator, disposing");
+                    if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Can't return sound to resonator, disposing");
                     try
                     {
                         pendingBoomboxSound.Stop();
@@ -418,13 +430,15 @@ namespace soundphysicsadapted.Patches
                 noSlotLogCount++;
                 if (noSlotLogCount <= 1 || noSlotLogCount % 50 == 0)
                 {
-                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"IsCarryingResonator: Has carriedAttr but no resonator in Hands or Back (log #{noSlotLogCount})");
+                    if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"IsCarryingResonator: Has carriedAttr but no resonator in Hands or Back (log #{noSlotLogCount})");
                 }
                 return false;
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"IsCarryingResonator: Exception - {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"IsCarryingResonator: Exception - {ex.Message}");
                 return false;
             }
         }
@@ -478,11 +492,13 @@ namespace soundphysicsadapted.Patches
                 pendingSourceResonator = null;
 
                 StartBoomboxTick();
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox ACTIVATED from pre-steal! slot={currentCarrySlot}, from={originalResonatorPos}, wasPlaying={wasPlayingWhenPickedUp}");
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox ACTIVATED from pre-steal! slot={currentCarrySlot}, from={originalResonatorPos}, wasPlaying={wasPlayingWhenPickedUp}");
             }
             else
             {
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Carrying resonator but no pre-stolen sound available");
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Carrying resonator but no pre-stolen sound available");
             }
         }
 
@@ -499,7 +515,8 @@ namespace soundphysicsadapted.Patches
 
             if (activeBoomboxSound != null && !activeBoomboxSound.IsDisposed)
             {
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox deactivated - disposing carried sound, vanilla will restart");
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox deactivated - disposing carried sound, vanilla will restart");
                 activeBoomboxSound.Stop();
                 activeBoomboxSound.Dispose();
             }
@@ -654,12 +671,14 @@ namespace soundphysicsadapted.Patches
             // Check if feature is enabled
             if (SoundPhysicsAdaptedModSystem.Config?.EnableCarryOnCompat != true) return true;
             
-            SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox StopMusicPrefix: ENTERED for pos={__instance.Pos}");
+            if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox StopMusicPrefix: ENTERED for pos={__instance.Pos}");
             
             // Skip if we're doing a pause/resume action
             if (ResonatorPatches.IsPausingOrResuming)
             {
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox StopMusicPrefix: Pause/resume in progress, passing through");
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox StopMusicPrefix: Pause/resume in progress, passing through");
                 return true;
             }
             
@@ -667,7 +686,8 @@ namespace soundphysicsadapted.Patches
             bool inPausingList = IsPausingResonator(__instance.Pos);
             if (inPausingList)
             {
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox StopMusicPrefix: Position in pausing/resuming list, passing through");
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox StopMusicPrefix: Position in pausing/resuming list, passing through");
                 return true;
             }
 
@@ -677,7 +697,8 @@ namespace soundphysicsadapted.Patches
             if (pendingBoomboxSound != null && pendingPickupPos != null && 
                 __instance.Pos.Equals(pendingPickupPos))
             {
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox StopMusicPrefix: Sound was pre-stolen, vanilla will no-op on null sound field");
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox StopMusicPrefix: Sound was pre-stolen, vanilla will no-op on null sound field");
             }
 
             return true; // Always let vanilla StopMusic proceed
@@ -693,7 +714,8 @@ namespace soundphysicsadapted.Patches
             if (__instance.Api?.Side != EnumAppSide.Client) return true;
             if (SoundPhysicsAdaptedModSystem.Config?.EnableCarryOnCompat != true) return true;
 
-            SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox StartMusicPrefix: ENTERED for pos={__instance.Pos}");
+            if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox StartMusicPrefix: ENTERED for pos={__instance.Pos}");
             return true; // Always let vanilla handle it
         }
 

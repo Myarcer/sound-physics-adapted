@@ -2,7 +2,7 @@
 
 ## Project Overview
 - **Goal**: Sound physics mod for Vintage Story (occlusion, reverb, positional weather audio)
-- **Version**: 0.2.1 | **Target VS**: 1.21+ (also tested on 1.22)
+- **Version**: 0.2.1 | **Target VS**: 1.21 CURRENTLY (also tested on 1.22)
 - **Language**: C# (.NET 8.0) | **Framework**: Vintage Story Modding API + Harmony
 - **Build**: `dotnet build soundphysicsadapted.csproj -c Release` (auto-deploys zip to VS mods folder)
 

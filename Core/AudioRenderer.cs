@@ -328,8 +328,9 @@ namespace soundphysicsadapted
             // If mismatched, VS recycled this sourceId to a different sound.
             if (currentSourceId != entry.SourceId)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"[STALE] GetValidatedSourceId: {entry.SoundName} stored={entry.SourceId} current={currentSourceId}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"[STALE] GetValidatedSourceId: {entry.SoundName} stored={entry.SourceId} current={currentSourceId}");
                 return null;
             }
 
@@ -354,7 +355,8 @@ namespace soundphysicsadapted
                 int sourceId = GetSourceId(sound);
                 if (sourceId == 0)
                 {
-                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Cannot get sourceId for sound");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Cannot get sourceId for sound");
                     return false;
                 }
 
@@ -362,7 +364,8 @@ namespace soundphysicsadapted
                 int filterId = EfxHelper.GenFilter();
                 if (filterId == 0)
                 {
-                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Failed to create filter");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Failed to create filter");
                     return false;
                 }
 
@@ -408,8 +411,9 @@ namespace soundphysicsadapted
 
                 if (!loggedOnce)
                 {
-                    SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[SoundFilterManager] Registered sound: sourceId={sourceId}, filterId={filterId}");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog(
+                            $"[SoundFilterManager] Registered sound: sourceId={sourceId}, filterId={filterId}");
                     loggedOnce = true;
                 }
 
@@ -417,7 +421,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] RegisterSound failed: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] RegisterSound failed: {ex.Message}");
                 return false;
             }
         }
@@ -441,13 +446,15 @@ namespace soundphysicsadapted
         {
             if (alSourceMethod == null || efxDirectFilterValue == null)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] AttachFilter FAILED: alSourceMethod={alSourceMethod != null}, efxDirectFilterValue={efxDirectFilterValue != null}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] AttachFilter FAILED: alSourceMethod={alSourceMethod != null}, efxDirectFilterValue={efxDirectFilterValue != null}");
                 return false;
             }
 
             if (sourceId <= 0 || filterId <= 0)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] AttachFilter INVALID IDs: source={sourceId}, filter={filterId}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] AttachFilter INVALID IDs: source={sourceId}, filter={filterId}");
                 return false;
             }
 
@@ -463,7 +470,8 @@ namespace soundphysicsadapted
                 if (error != 0)
                 {
                     // Common errors: 0xA001 = AL_INVALID_NAME, 0xA002 = AL_INVALID_ENUM, 0xA003 = AL_INVALID_VALUE
-                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] ATTACH ERROR: OpenAL error 0x{error:X} attaching filter={filterId} to source={sourceId}");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] ATTACH ERROR: OpenAL error 0x{error:X} attaching filter={filterId} to source={sourceId}");
                     return false;
                 }
 
@@ -472,7 +480,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] AttachFilter EXCEPTION: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] AttachFilter EXCEPTION: {ex.Message}");
                 return false;
             }
         }
@@ -551,7 +560,8 @@ namespace soundphysicsadapted
                 }
                 catch (Exception ex)
                 {
-                    SoundPhysicsAdaptedModSystem.DebugLog($"[TEST] Failed to set gain: {ex.Message}");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[TEST] Failed to set gain: {ex.Message}");
                 }
             }
         }
@@ -597,14 +607,16 @@ namespace soundphysicsadapted
 
                     if (alSourceFloatMethod != null)
                     {
-                        SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Initialized AL.Source float method");
+                        if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Initialized AL.Source float method");
                         return true;
                     }
                 }
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Failed to init AL.Source float: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Failed to init AL.Source float: {ex.Message}");
             }
 
             return false;
@@ -639,7 +651,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] ApplyPitchOffset error: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] ApplyPitchOffset error: {ex.Message}");
                 return false;
             }
         }
@@ -690,7 +703,8 @@ namespace soundphysicsadapted
                     }
                     catch (Exception ex)
                     {
-                        SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] Failed to parse Position enum: {ex.Message} (available: {string.Join(",", Enum.GetNames(alSource3fType))})");
+                        if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] Failed to parse Position enum: {ex.Message} (available: {string.Join(",", Enum.GetNames(alSource3fType))})");
                         continue;
                     }
 
@@ -703,7 +717,8 @@ namespace soundphysicsadapted
 
                     if (alSource3fMethod != null)
                     {
-                        SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] AL.Source3f init OK via {asm.GetName().Name}");
+                        if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] AL.Source3f init OK via {asm.GetName().Name}");
                         return true;
                     }
                     else
@@ -712,15 +727,18 @@ namespace soundphysicsadapted
                         var sigs = alType.GetMethods(BindingFlags.Public | BindingFlags.Static)
                             .Where(m => m.Name == "Source")
                             .Select(m => string.Join(", ", Array.ConvertAll(m.GetParameters(), p => p.ParameterType.Name)));
-                        SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] AL.Source3f NOT FOUND. Available: {string.Join(" | ", sigs)}");
+                        if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] AL.Source3f NOT FOUND. Available: {string.Join(" | ", sigs)}");
                     }
                 }
 
-                SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] FAILED: scanned {opentkCount} OpenTK assemblies, AL.Source3f not found");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] FAILED: scanned {opentkCount} OpenTK assemblies, AL.Source3f not found");
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] InitializeALSource3f EXCEPTION: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] InitializeALSource3f EXCEPTION: {ex.Message}");
             }
 
             return false;
@@ -763,7 +781,8 @@ namespace soundphysicsadapted
             if (!IsInitialized || sound == null)
             {
                 if (repositionFailLogCount++ < 5)
-                    SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] ApplySoundPath SKIP: init={IsInitialized} sound={sound != null}");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] ApplySoundPath SKIP: init={IsInitialized} sound={sound != null}");
                 return false;
             }
 
@@ -771,7 +790,8 @@ namespace soundphysicsadapted
             if (config == null || !config.EnableSoundRepositioning)
             {
                 if (repositionFailLogCount++ < 5)
-                    SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] ApplySoundPath SKIP: config={config != null} reposEnabled={config?.EnableSoundRepositioning}");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] ApplySoundPath SKIP: config={config != null} reposEnabled={config?.EnableSoundRepositioning}");
                 return false;
             }
 
@@ -779,20 +799,23 @@ namespace soundphysicsadapted
             if (!InitializeALSource3f())
             {
                 if (repositionFailLogCount++ < 10)
-                    SoundPhysicsAdaptedModSystem.DebugLog("[PHASE4B] ApplySoundPath FAILED: AL.Source3f not available (see init logs above)");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog("[PHASE4B] ApplySoundPath FAILED: AL.Source3f not available (see init logs above)");
                 return false;
             }
 
             if (!activeFilters.TryGetValue(sound, out var entry))
             {
                 if (repositionFailLogCount++ < 5)
-                    SoundPhysicsAdaptedModSystem.DebugLog("[PHASE4B] ApplySoundPath SKIP: sound not in activeFilters");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog("[PHASE4B] ApplySoundPath SKIP: sound not in activeFilters");
                 return false;
             }
             if (entry.SourceId <= 0)
             {
                 if (repositionFailLogCount++ < 5)
-                    SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] ApplySoundPath SKIP: sourceId={entry.SourceId}");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] ApplySoundPath SKIP: sourceId={entry.SourceId}");
                 return false;
             }
 
@@ -803,7 +826,8 @@ namespace soundphysicsadapted
             if (currentSourceId != entry.SourceId)
             {
                 if (repositionFailLogCount++ < 10)
-                    SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] ApplySoundPath STALE: stored={entry.SourceId} current={currentSourceId}");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] ApplySoundPath STALE: stored={entry.SourceId} current={currentSourceId}");
                 return false;
             }
 
@@ -850,8 +874,9 @@ namespace soundphysicsadapted
                 if (repositionLogCount < 20 || (config.DebugMode && config.DebugSoundPaths))
                 {
                     repositionLogCount++;
-                    SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[PHASE4B] REPOSITION #{repositionLogCount}: {entry.SoundName ?? "?"} " +
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog(
+                            $"[PHASE4B] REPOSITION #{repositionLogCount}: {entry.SoundName ?? "?"} " +
                         $"src={entry.SourceId} offset={pathResult.RepositionOffset:F1}m " +
                         $"target=({(float)newPos.X:F1},{(float)newPos.Y:F1},{(float)newPos.Z:F1}) " +
                         $"orig=({(float)originalPos.X:F1},{(float)originalPos.Y:F1},{(float)originalPos.Z:F1}) " +
@@ -862,7 +887,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] ApplySoundPath EXCEPTION: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] ApplySoundPath EXCEPTION: {ex.Message}");
                 return false;
             }
         }
@@ -1041,13 +1067,15 @@ namespace soundphysicsadapted
                 // Not registered yet - try to register
                 if (!RegisterSound(sound))
                 {
-                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Failed to register sound: {soundName ?? "unknown"}");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Failed to register sound: {soundName ?? "unknown"}");
                     return false;
                 }
 
                 if (!activeFilters.TryGetValue(sound, out entry))
                 {
-                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] BUG: RegisterSound succeeded but entry not in dict!");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] BUG: RegisterSound succeeded but entry not in dict!");
                     return false;
                 }
 
@@ -1248,7 +1276,8 @@ namespace soundphysicsadapted
             smoothLogAccumulator++;
             if (smoothLogAccumulator >= 200 && (smoothed > 0 || posSmoothed > 0))
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"SMOOTH: {smoothed}/{activeFilters.Count} filters, {posSmoothed} positions (5s sample)");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"SMOOTH: {smoothed}/{activeFilters.Count} filters, {posSmoothed} positions (5s sample)");
                 smoothLogAccumulator = 0;
             }
         }
@@ -1423,8 +1452,9 @@ namespace soundphysicsadapted
                 }
             }
 
-            SoundPhysicsAdaptedModSystem.DebugLog(
-                $"[SoundFilterManager] Underwater recalc: filter={updated}, pitch={pitchUpdated}, removed={toRemove.Count}");
+            if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                SoundPhysicsAdaptedModSystem.DebugLog(
+                    $"[SoundFilterManager] Underwater recalc: filter={updated}, pitch={pitchUpdated}, removed={toRemove.Count}");
         }
 
         /// <summary>
@@ -1478,7 +1508,8 @@ namespace soundphysicsadapted
             }
             catch (Exception ex)
             {
-                SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] CleanupEntry failed: {ex.Message}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] CleanupEntry failed: {ex.Message}");
             }
         }
 
