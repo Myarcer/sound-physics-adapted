@@ -636,7 +636,7 @@ namespace soundphysicsadapted
 
                     if (collisionBoxes != null && collisionBoxes.Length > 0)
                     {
-                        // Door/gate override: check BEFORE volume filter — thin door panels
+                        // Block override: check BEFORE volume filter — thin panels like doors
                         // (vol ~0.12) would be rejected by the 0.15 threshold below.
                         var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
                         bool hasOverride = matConfig != null && matConfig.HasBlockOverride(block);
@@ -672,32 +672,12 @@ namespace soundphysicsadapted
                             }
                         }
 
-                        if (hasOverride && doorTransparent)
+                        if (hasOverride)
                         {
-                            // 5B spawn path only: doors/gates/trapdoors are weather-transparent
-                            // so rain sources spawn behind closed doors. AudioPhysicsSystem
-                            // handles the actual sound occlusion independently.
-                            // Dual accumulator: closed doors count for Layer 1 muffling
-                            if (!IsDoorOpen(block, blockAccessor, ctx.X, ctx.Y, ctx.Z))
-                            {
-                                float doorOcc = BlockClassification.GetBlockOcclusion(block, config);
-                                if (doorOcc <= 0)
-                                    doorOcc = 0.8f;
-                                doorInclAccum += doorOcc;
-                            }
-
-                            if (previousBlockWasOccluding)
-                            {
-                                entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
-                                hasEntryPoint = true;
-                            }
-                            previousBlockWasOccluding = false;
-                            return false;
-                        }
-                        else if (hasOverride)
-                        {
-                            // Layer 1 path: override blocks apply their configured occlusion
-                            // directly, skip AABB ray test (same as sound DDA door-closed path).
+                            // Override blocks apply their configured occlusion directly,
+                            // skip AABB ray test (thin panels cause ray misses at oblique angles).
+                            // Door-behavior blocks are already caught by IsDoorOrGateBlock above —
+                            // only non-door overrides (industrial doors, containers, etc.) reach here.
                             blockOcclusion = BlockClassification.GetBlockOcclusion(block, config);
                         }
                         else if (!RayHitsAnyCollisionBox(from, ndx, ndy, ndz, length, ctx.X, ctx.Y, ctx.Z, collisionBoxes))
@@ -873,10 +853,8 @@ namespace soundphysicsadapted
         /// </summary>
         private static bool IsOpenDoorOrGate(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
         {
-            var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
-
-            // Check if this block itself is an open door/gate with a config override
-            if (matConfig != null && matConfig.HasBlockOverride(block))
+            // Check if this block itself is an open door/gate (behavior-based)
+            if (HasDoorLikeBehavior(block, blockAccessor, x, y, z))
             {
                 if (IsDoorOpen(block, blockAccessor, x, y, z))
                     return true;
@@ -902,7 +880,8 @@ namespace soundphysicsadapted
                     if (controller != null && controller.Id != 0 &&
                         !(controller.Code?.Path?.StartsWith("multiblock-", StringComparison.Ordinal) == true))
                     {
-                        if (matConfig != null && matConfig.HasBlockOverride(controller))
+                        if (HasDoorLikeBehavior(controller, blockAccessor,
+                            _mbControllerPos.X, _mbControllerPos.InternalY, _mbControllerPos.Z))
                         {
                             if (IsDoorOpen(controller, blockAccessor,
                                 _mbControllerPos.X, _mbControllerPos.InternalY, _mbControllerPos.Z))
@@ -916,20 +895,45 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Check if a block has openable door/gate/trapdoor behavior.
+        /// Uses BlockEntity behaviors (vanilla doors/trapdoors) and block code
+        /// pattern fallback (ME gates, portcullises, wicket gates).
+        /// Does NOT rely on BlockOverride config — purely behavior-based.
+        /// </summary>
+        private static bool HasDoorLikeBehavior(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
+        {
+            // Check block entity behaviors (vanilla doors/trapdoors)
+            var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0));
+            if (be != null)
+            {
+                if (be.GetBehavior<BEBehaviorDoor>() != null) return true;
+                if (be.GetBehavior<BEBehaviorTrapDoor>() != null) return true;
+            }
+
+            // Fallback: gate/portcullis blocks that use code variants for state
+            // (ME gates, fencegates, wicket gates, portcullises)
+            // Does NOT match "cokeovendoor", "doorkiln" etc. — those are sealed industrial doors
+            string path = block.Code?.Path;
+            if (path != null && (path.Contains("gate") || path.Contains("portcullis")))
+                return true;
+
+            return false;
+        }
+
+        /// <summary>
         /// Check if a block is a door/gate/trapdoor (open OR closed).
-        /// Used by weather DDA to make ALL doors weather-transparent for spawning,
+        /// Used by weather DDA to make openable doors weather-transparent for spawning,
         /// regardless of open/closed state. The 5B tracking system handles sound
         /// occlusion independently via AudioPhysicsSystem.
+        /// Checks actual door behaviors, not the BlockOverride config list.
         /// </summary>
         private static bool IsDoorOrGateBlock(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
         {
-            var matConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
-
-            // Check if this block itself has a config override (doors, gates, trapdoors)
-            if (matConfig != null && matConfig.HasBlockOverride(block))
+            // Direct behavior check (vanilla doors, trapdoors, gates)
+            if (HasDoorLikeBehavior(block, blockAccessor, x, y, z))
                 return true;
 
-            // Check if this is a multiblock spacer whose controller has a config override
+            // Check if this is a multiblock spacer whose controller has door behavior
             string path = block.Code?.Path;
             if (path != null && path.StartsWith("multiblock-", StringComparison.Ordinal))
             {
@@ -949,7 +953,8 @@ namespace soundphysicsadapted
                     if (controller != null && controller.Id != 0 &&
                         !(controller.Code?.Path?.StartsWith("multiblock-", StringComparison.Ordinal) == true))
                     {
-                        if (matConfig != null && matConfig.HasBlockOverride(controller))
+                        if (HasDoorLikeBehavior(controller, blockAccessor,
+                            _mbControllerPos.X, _mbControllerPos.InternalY, _mbControllerPos.Z))
                             return true;
                     }
                 }
