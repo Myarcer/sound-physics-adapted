@@ -1212,6 +1212,9 @@ namespace soundphysicsadapted
             // Clear mono downmix cache
             MonoDownmixManager.ClearCache();
 
+            // Clear static block occlusion caches (survive across world loads if not reset)
+            BlockClassification.ClearCache();
+
             // Clear ambient face-sampling data
             AmbientSoundPatches.Clear();
 
