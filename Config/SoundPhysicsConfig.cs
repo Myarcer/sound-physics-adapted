@@ -113,8 +113,8 @@ namespace soundphysicsadapted
         /// <summary>
         /// Maximum occlusion value (caps total block count).
         /// The DDA ray stops early once this threshold is reached.
-        /// With BlockAbsorption=1.0 and ×3 internal multiplier, filter = exp(-MaxOcclusion * 3):
-        ///   4.0 = exp(-12) ≈ 0.0006% (effectively silent)
+        /// With BlockAbsorption=1.0 and ×2 internal multiplier, filter = exp(-MaxOcclusion * 2):
+        ///   4.0 = exp(-8)  ≈ 0.03% (effectively silent at low configs)
         ///  32.0 = massive headroom for low-absorption configs
         /// SPR defaults to 64. We use 32 — enough headroom while limiting DDA cost.
         /// </summary>

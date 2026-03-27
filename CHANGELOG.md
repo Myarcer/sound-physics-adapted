@@ -7,9 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.2.2] - 2026-03-27
 
 ### Added
-- Diffraction floor — sounds traveling around L-shaped corridors and corners are no longer over-muffled. Bounce ray data detects viable indirect paths and raises the LPF floor based on simplified UTD/Maekawa diffraction physics (~8-10dB per 90° bend). Requires 2+ open bounce paths and meaningful shared airspace — entombed sounds cannot benefit
+- Diffraction floor (rebuilt from scratch) — the old bOcc system that let entombed sounds bleed through many walls is replaced with a physics-grounded floor using bounce ray data. When 2+ open bounce paths and meaningful shared airspace are detected (indicating a real L-corridor or corner path), the LPF floor is raised based on simplified UTD/Maekawa diffraction (~8-10dB per 90° bend). Entombed sounds cannot benefit — both the open path count and >5% shared airspace requirements block wall-leaking
 - Static sound cache — sounds that haven't moved skip raycasts entirely. Automatically bypassed for 1s after any block change (door open/close, break/place) to prevent step-down artifacts. Toggle via `EnableStaticSoundCache` config option
 - `bocc` debug visualization mode — shows bOcc LOS path quality (green=clear, yellow=partial, orange=heavy, red=blocked)
+
+### Changed
+- Occlusion absorption multiplier reduced from ×3 to ×2 — less aggressive per block, more natural muffling curve through thick walls
+- `MaxOcclusion` default raised from `4.0` to `32.0` — the previous cap of 4 blocks caused sounds behind 4+ walls to clamp at the same filter level regardless of additional walls; 32 gives full headroom across the realistic range
 
 ### Fixed
 - Tall door (2-3 block) self-occlusion — multiblock upper halves no longer push the sound source above the door into ceiling/wall blocks causing false occlusion
