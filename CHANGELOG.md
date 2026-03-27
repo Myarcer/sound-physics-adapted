@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - Pre-existing block entity sounds (querns, forges, beehives) that started during world loading were permanently invisible to the occlusion system — they played at full volume through any number of walls. Now queued during startup and retroactively registered with correct occlusion once warmup completes
 
+### Performance
+- DDA rays now early-abort at the inaudibility threshold instead of continuing to `MaxOcclusion=32` — saves ~80% of DDA steps for entombed sounds behind thick walls. Threshold is derived from `MinLowPassFilter` and `BlockAbsorption` (default: ~3.8 blocks of stone = inaudible, material-aware)
+
 ## [0.2.2] - 2026-03-27
 
 ### Added
