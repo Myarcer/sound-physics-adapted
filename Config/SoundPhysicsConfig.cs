@@ -1,3 +1,5 @@
+using System;
+
 namespace soundphysicsadapted
 {
     /// <summary>
@@ -732,6 +734,37 @@ namespace soundphysicsadapted
         /// </summary>
         public int WeatherTickIntervalMs { get; set; } = 100;
 
+        // ============================================================
+        // DERIVED VALUES (not serialized)
+        // ============================================================
+
+        /// <summary>
+        /// Pre-computed occlusion threshold beyond which sound is at MinLowPassFilter.
+        /// DDA rays abort early when accumulated occlusion reaches this value.
+        /// Derived from: -ln(MinLowPassFilter) / (BlockAbsorption * 2.0)
+        /// Respects material-based accumulation since the check is on accumulated
+        /// occlusion value, not block count. Includes 10% headroom.
+        /// Not serialized to config — recalculated on load via RecalculateDerived().
+        /// </summary>
+        internal float InaudibleOcclusionThreshold { get; private set; } = 32.0f;
+
+        /// <summary>
+        /// Recalculate derived values after config load or parameter change.
+        /// Must be called after deserialization and after any set command that
+        /// changes BlockAbsorption, MinLowPassFilter, or MaxOcclusion.
+        /// </summary>
+        public void RecalculateDerived()
+        {
+            // OcclusionToFilter formula: filter = exp(-occ * BlockAbsorption * 2.0)
+            // Solve for occ when filter = MinLowPassFilter:
+            //   MinLowPassFilter = exp(-occ * BlockAbsorption * 2.0)
+            //   occ = -ln(MinLowPassFilter) / (BlockAbsorption * 2.0)
+            float absorption = Math.Max(BlockAbsorption * 2.0f, 0.001f);
+            float rawThreshold = (float)(-Math.Log(Math.Max(MinLowPassFilter, 1e-6f)) / absorption);
+            // 10% headroom so reverb (which uses x3 multiplier) still gets a
+            // meaningful value before DDA abort, not an exact boundary clamp.
+            InaudibleOcclusionThreshold = Math.Min(rawThreshold * 1.1f, MaxOcclusion);
+        }
 
     }
 }

@@ -69,13 +69,13 @@ namespace soundphysicsadapted
 
             float centerOcclusion = RunOcclusion(soundPos, playerPos, blockAccessor, config);
 
-            // EARLY EXIT: If center ray hits max occlusion, no need for offset rays
-            if (centerOcclusion >= config.MaxOcclusion)
+            // EARLY EXIT: If center ray is already inaudible, no need for offset rays
+            if (centerOcclusion >= config.InaudibleOcclusionThreshold)
             {
                 if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                     SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                        $"Occlusion calc: dist={distance:F1} center=MAX (early exit)");
-                return config.MaxOcclusion;
+                        $"Occlusion calc: dist={distance:F1} center={centerOcclusion:F2} (inaudible, early exit)");
+                return centerOcclusion;
             }
 
             // If center ray finds significant occlusion, trust it (direct line blocked)
@@ -148,14 +148,14 @@ namespace soundphysicsadapted
                             maxOffsetOcclusion = Math.Max(maxOffsetOcclusion, rayOcclusion);
                         }
 
-                        // EARLY EXIT: If we have enough votes (6+) AND high occlusion (95%+),
+                        // EARLY EXIT: If we have enough votes (6+) AND high occlusion (inaudible),
                         // we're clearly fully occluded - no need to check remaining rays
-                        if (raysBlocked >= 6 && maxOffsetOcclusion >= config.MaxOcclusion * 0.95f)
+                        if (raysBlocked >= 6 && maxOffsetOcclusion >= config.InaudibleOcclusionThreshold)
                         {
                             if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                                 SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
                                     $"Occlusion calc: dist={distance:F1} early exit at {raysBlocked} votes, max={maxOffsetOcclusion:F2}");
-                            return config.MaxOcclusion;
+                            return maxOffsetOcclusion;
                         }
                     }
                 }
@@ -327,14 +327,18 @@ namespace soundphysicsadapted
             _vLength = length;
 
             int maxDDASteps = config.MaxDDASteps;
-            bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, _runOcclusionVisitor, skipFirst: skipFirstBlock, maxSteps: maxDDASteps);
+            DDABlockTraversal.Traverse(from, to, blockAccessor, _runOcclusionVisitor, skipFirst: skipFirstBlock, maxSteps: maxDDASteps);
             
             float occlusionAccumulation = _vOcclusionAccumulation;
 
             // Flush entire DDA trace as single log entry
             SoundPhysicsAdaptedModSystem.VerboseDebugBatch(ddaTrace);
 
-            return stopped ? config.MaxOcclusion : occlusionAccumulation;
+            // Return actual accumulated occlusion whether DDA stopped early or not.
+            // Previous behavior returned MaxOcclusion (32) on early stop, inflating
+            // values for path-weighting. The real accumulation is already >= the
+            // inaudible threshold, so callers get a correct "fully muffled" value.
+            return occlusionAccumulation;
         }
 
         private static bool RunOcclusionVisitor(ref DDABlockTraversal.TraversalContext ctx)
@@ -440,9 +444,9 @@ namespace soundphysicsadapted
                 if (_vVerboseLog)
                     _vDdaTrace.Append($"  DDA hit: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) occ={blockOcclusion:F2} total={_vOcclusionAccumulation:F2}\n");
 
-                if (_vOcclusionAccumulation >= _vConfig.MaxOcclusion)
+                if (_vOcclusionAccumulation >= _vConfig.InaudibleOcclusionThreshold)
                 {
-                    if (_vVerboseLog) _vDdaTrace.Append($"  Max occlusion reached after {_vBlockHits} blocks\n");
+                    if (_vVerboseLog) _vDdaTrace.Append($"  Inaudible threshold ({_vConfig.InaudibleOcclusionThreshold:F1}) reached after {_vBlockHits} blocks, total occ={_vOcclusionAccumulation:F2}\n");
                     return true; // Stop traversal
                 }
             }

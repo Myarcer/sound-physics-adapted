@@ -144,12 +144,14 @@ namespace soundphysicsadapted
                     MigrateConfig(config);
                 }
                 api.StoreModConfig(config, "soundphysicsadapted.json");
-                api.Logger.Notification($"[SoundPhysicsAdapted] Config loaded (v{config.ConfigVersion}) - Enabled: {config.Enabled}, DebugMode: {config.DebugMode}");
+                config.RecalculateDerived();
+                api.Logger.Notification($"[SoundPhysicsAdapted] Config loaded (v{config.ConfigVersion}) - Enabled: {config.Enabled}, DebugMode: {config.DebugMode}, InaudibleThreshold: {config.InaudibleOcclusionThreshold:F1}");
             }
             catch (Exception ex)
             {
                 api.Logger.Error($"[SoundPhysicsAdapted] Failed to load config: {ex.Message}");
                 config = new SoundPhysicsConfig();
+                config.RecalculateDerived();
             }
 
             // Load material sound configuration
@@ -753,6 +755,7 @@ namespace soundphysicsadapted
                         }
                         
                         api.StoreModConfig(config, "soundphysicsadapted.json");
+                        config.RecalculateDerived();
                         return TextCommandResult.Success($"[SoundPhysicsAdapted] Set {param} = {value}");
                     })
                 .EndSubCommand()
@@ -761,6 +764,7 @@ namespace soundphysicsadapted
                     .HandleWith((args) =>
                     {
                         config = new SoundPhysicsConfig();
+                        config.RecalculateDerived();
                         api.StoreModConfig(config, "soundphysicsadapted.json");
                         return TextCommandResult.Success("[SoundPhysicsAdapted] Config reset to defaults");
                     })
