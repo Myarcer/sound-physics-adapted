@@ -594,9 +594,11 @@ namespace soundphysicsadapted
 
             int debugSourceId = AudioRenderer.GetSourceId(sound);
 
+            bool isForceRefresh = cache.LastRaycastTimeMs > 0 && (currentTimeMs - cache.LastRaycastTimeMs) >= FORCE_REFRESH_MS;
             if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                 SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                    $"[RAY] {soundName} d={distance:F1} occ={occlusion:F2} snd=({soundPos.X:F2},{soundPos.Y:F2},{soundPos.Z:F2}) plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2}) startBlk=({(int)Math.Floor(soundPos.X)},{(int)Math.Floor(soundPos.Y)},{(int)Math.Floor(soundPos.Z)})");
+                    $"[RAY] {soundName} d={distance:F1} occ={occlusion:F2} snd=({soundPos.X:F2},{soundPos.Y:F2},{soundPos.Z:F2}) plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2}) startBlk=({(int)Math.Floor(soundPos.X)},{(int)Math.Floor(soundPos.Y)},{(int)Math.Floor(soundPos.Z)})", 
+                    force: isForceRefresh);
 
             // Default to direct occlusion filter; path resolution may override below
             float finalFilter = directFilter;

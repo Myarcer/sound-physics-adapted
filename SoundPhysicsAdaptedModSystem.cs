@@ -1277,7 +1277,7 @@ namespace soundphysicsadapted
         /// Core rate-limited logging. All debug methods delegate here.
         /// Handles window check, suppression counter, and flush summary.
         /// </summary>
-        private static void RateLimitedLog(string message, string prefix = null)
+        private static void RateLimitedLog(string message, string prefix = null, bool force = false)
         {
             long now = clientApi.ElapsedMilliseconds;
             if (now - debugLogWindowStart >= DEBUG_LOG_WINDOW_MS)
@@ -1292,9 +1292,9 @@ namespace soundphysicsadapted
                 debugLogWindowStart = now;
             }
 
-            if (debugLogCount < EffectiveLogLimit)
+            if (force || debugLogCount < EffectiveLogLimit)
             {
-                debugLogCount++;
+                if (!force) debugLogCount++;
                 clientApi.Logger.Debug(prefix != null
                     ? $"[SoundPhysicsAdapted] {prefix}{message}"
                     : $"[SoundPhysicsAdapted] {message}");
@@ -1310,10 +1310,10 @@ namespace soundphysicsadapted
         /// Rate-limited to prevent log flooding in heavy scenes.
         /// Shows occlusion results, path resolution, filter values.
         /// </summary>
-        public static void DebugLog(string message)
+        public static void DebugLog(string message, bool force = false)
         {
             if (config?.DebugMode != true || clientApi == null) return;
-            RateLimitedLog(message);
+            RateLimitedLog(message, force: force);
         }
 
         /// <summary>
@@ -1377,10 +1377,10 @@ namespace soundphysicsadapted
         /// Occlusion-specific debug logging - per-sound occlusion results.
         /// Only logs when BOTH DebugMode AND DebugOcclusion are enabled.
         /// </summary>
-        public static void OcclusionDebugLog(string message)
+        public static void OcclusionDebugLog(string message, bool force = false)
         {
             if (config?.DebugMode != true || config?.DebugOcclusion != true || clientApi == null) return;
-            RateLimitedLog(message, "[Occlusion] ");
+            RateLimitedLog(message, "[Occlusion] ", force);
         }
 
         /// <summary>
