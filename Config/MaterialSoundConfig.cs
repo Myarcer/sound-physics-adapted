@@ -11,6 +11,12 @@ namespace soundphysicsadapted
     /// </summary>
     public class MaterialSoundConfig
     {
+        /// <summary>
+        /// Current material config version. Any saved config below this is regenerated from defaults.
+        /// Bump this when changing defaults that should apply to all users.
+        /// </summary>
+        public const int CurrentVersion = 8;
+
         /// <summary>Config version for migration</summary>
         public int Version { get; set; } = 1;
 
@@ -287,7 +293,7 @@ namespace soundphysicsadapted
         {
             return new MaterialSoundConfig
             {
-                Version = 6,
+                Version = CurrentVersion,
                 Occlusion = new OcclusionSection
                 {
                     Materials = new Dictionary<string, float>
@@ -322,8 +328,14 @@ namespace soundphysicsadapted
                         // Override prevents volume scaling from clobbering thin panel occlusion
                         { "game:door-*", 0.8f },
                         { "game:metaldoor-*", 0.9f },
-                        // Trapdoors
-                        { "game:trapdoor-*", 0.7f },
+                        // Trapdoors — solid panels vs open grating/bars
+                        { "game:trapdoor-solid-*", 0.75f },
+                        { "game:trapdoor-plate-*", 0.85f },
+                        { "game:trapdoor-grated-*", 0.3f },
+                        { "game:trapdoor-bars-*", 0.2f },
+                        // Industrial doors (coke oven, kiln) — thick sealed doors
+                        { "game:cokeovendoor-*", 0.85f },
+                        { "game:doorkiln-*", 0.85f },
                         // Gates — fencegate, gate3x3, wicketgate, portcullis
                         { "game:*gate*", 0.8f },
                         // Soft materials

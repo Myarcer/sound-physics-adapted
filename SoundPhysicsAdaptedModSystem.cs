@@ -42,7 +42,7 @@ namespace soundphysicsadapted
         /// Bump this when adding new migration blocks in MigrateConfig().
         /// Pre-migration configs (ConfigVersion == 0) are always wiped to fresh defaults.
         /// </summary>
-        private const int CurrentConfigVersion = 3;
+        private const int CurrentConfigVersion = 4;
         private static MaterialSoundConfig materialConfig;
         private static ICoreClientAPI clientApi;
         private static AudioPhysicsSystem acousticsManager;
@@ -130,17 +130,17 @@ namespace soundphysicsadapted
                     config.ConfigVersion = CurrentConfigVersion;
                     api.Logger.Notification("[SoundPhysicsAdapted] No config found, generating defaults.");
                 }
-                else if (config.ConfigVersion == 0)
+                else if (config.ConfigVersion < CurrentConfigVersion)
                 {
-                    // ConfigVersion missing → pre-migration config, stale values possible.
-                    // Regenerate fully fresh to ensure clean defaults.
-                    api.Logger.Notification("[SoundPhysicsAdapted] Pre-migration config detected (no version field). Regenerating with fresh defaults.");
+                    // Any config older than current version gets regenerated from fresh defaults.
+                    // This replaces incremental migrations — cleaner than maintaining legacy chains.
+                    api.Logger.Notification($"[SoundPhysicsAdapted] Config v{config.ConfigVersion} is outdated (current: v{CurrentConfigVersion}). Regenerating with fresh defaults.");
                     config = new SoundPhysicsConfig();
                     config.ConfigVersion = CurrentConfigVersion;
                 }
                 else
                 {
-                    // Managed config — apply any pending version migrations
+                    // Current version — no migration needed
                     MigrateConfig(config);
                 }
                 api.StoreModConfig(config, "soundphysicsadapted.json");
@@ -160,196 +160,12 @@ namespace soundphysicsadapted
                 {
                     materialConfig = MaterialSoundConfig.CreateDefault();
                 }
-                else
+                else if (materialConfig.Version < MaterialSoundConfig.CurrentVersion)
                 {
-                    // Migration: ensure TreatAsFullCube list exists for older configs
-                    if (materialConfig.Occlusion.TreatAsFullCube == null || materialConfig.Occlusion.TreatAsFullCube.Count == 0)
-                    {
-                        materialConfig.Occlusion.TreatAsFullCube = new System.Collections.Generic.List<string>
-                        {
-                            "game:slantedroofing*"
-                        };
-                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated config: added TreatAsFullCube defaults");
-                    }
-                    
-                    // Migration: add snowlayer override if missing
-                    if (materialConfig.Occlusion.BlockOverrides != null && 
-                        !materialConfig.Occlusion.BlockOverrides.ContainsKey("game:snowlayer-*"))
-                    {
-                        materialConfig.Occlusion.BlockOverrides["game:snowlayer-*"] = 0.0f;
-                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated config: added snowlayer override");
-                    }
-                    
-                    // Migration: update glass to 0.8 if still at old default 0.5
-                    if (materialConfig.Occlusion.Materials.TryGetValue("glass", out float glassVal) && glassVal <= 0.5f)
-                    {
-                        materialConfig.Occlusion.Materials["glass"] = 0.8f;
-                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated config: updated glass occlusion to 0.8");
-                    }
-
-                    // Version 2 migration: structural plant block overrides for thatch/sod roofing
-                    if (materialConfig.Version < 2)
-                    {
-                        var overrides = materialConfig.Occlusion.BlockOverrides;
-                        if (overrides != null)
-                        {
-                            // All thatch/sod roofing variants (Plant material = 0.02 is far too low)
-                            var thatchOverrides = new System.Collections.Generic.Dictionary<string, float>
-                            {
-                                { "game:slantedroofing-thatch*", 0.55f },
-                                { "game:slantedroofing-sod*", 0.55f },
-                                { "game:slantedroofingbottom-thatch*", 0.55f },
-                                { "game:slantedroofingbottom-sod*", 0.55f },
-                                { "game:slantedroofingcornerinner-thatch*", 0.55f },
-                                { "game:slantedroofingcornerinner-sod*", 0.55f },
-                                { "game:slantedroofingcornerouter-thatch*", 0.55f },
-                                { "game:slantedroofingcornerouter-sod*", 0.55f },
-                                { "game:slantedroofingridge-thatch*", 0.55f },
-                                { "game:slantedroofingridge-sod*", 0.55f },
-                                { "game:slantedroofingridgeend-thatch*", 0.55f },
-                                { "game:slantedroofingridgeend-sod*", 0.55f },
-                                { "game:slantedroofingtip-thatch*", 0.55f },
-                                { "game:slantedroofingtip-sod*", 0.55f },
-                                { "game:slantedroofinghalfleft-*", 0.45f },
-                                { "game:slantedroofinghalfright-*", 0.45f },
-                                { "game:hay-*", 0.4f }
-                            };
-                            foreach (var kvp in thatchOverrides)
-                            {
-                                if (!overrides.ContainsKey(kvp.Key))
-                                    overrides[kvp.Key] = kvp.Value;
-                            }
-                        }
-
-                        // Broaden TreatAsFullCube: all slanted roofing has geometry that rays miss
-                        if (materialConfig.Occlusion.TreatAsFullCube != null)
-                        {
-                            materialConfig.Occlusion.TreatAsFullCube.RemoveAll(p => p.StartsWith("game:slantedroofing"));
-                            if (!materialConfig.Occlusion.TreatAsFullCube.Contains("game:slantedroofing*"))
-                                materialConfig.Occlusion.TreatAsFullCube.Add("game:slantedroofing*");
-                        }
-
-                        materialConfig.Version = 2;
-                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v2: added thatch/sod roofing overrides + broadened TreatAsFullCube");
-                    }
-
-                    // Version 3 migration: decorative block overrides
-                    // Toolracks, torchhholders, lanterns, anvils etc. were missing from
-                    // saved configs, causing their material occlusion (wood=0.6, metal=0.95)
-                    // to apply. These items should be acoustically transparent.
-                    if (materialConfig.Version < 3)
-                    {
-                        var overrides = materialConfig.Occlusion.BlockOverrides;
-                        if (overrides != null)
-                        {
-                            var decorativeOverrides = new System.Collections.Generic.Dictionary<string, float>
-                            {
-                                { "game:firepit-*", 0.0f },
-                                { "game:toolrack-*", 0.0f },
-                                { "game:torchholder-*", 0.0f },
-                                { "game:lantern-*", 0.0f },
-                                { "game:candle-*", 0.0f },
-                                { "game:sign-*", 0.0f },
-                                { "game:anvil-*", 0.0f },
-                                { "game:ingotpile-*", 0.0f },
-                                { "game:platepile-*", 0.0f },
-                                { "game:supportbeam-*", 0.0f },
-                                { "game:stationarybasket-*", 0.0f },
-                                { "game:groundstorage*", 0.0f },
-                                { "game:placeddrygrass-*", 0.0f },
-                                { "game:drygrass-*", 0.0f }
-                            };
-                            foreach (var kvp in decorativeOverrides)
-                            {
-                                if (!overrides.ContainsKey(kvp.Key))
-                                    overrides[kvp.Key] = kvp.Value;
-                            }
-                        }
-
-                        materialConfig.Version = 3;
-                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v3: added decorative block overrides (toolrack, torchholder, lantern, anvil, etc.)");
-                    }
-
-                    // Version 4 migration: knapping/clayforming surfaces + loose ground items
-                    // These thin interactive surfaces have block-wide collision boxes that rays
-                    // easily hit, applying stone material occlusion (~0.95) despite being acoustically
-                    // transparent. Loose stones/flints/ores are tiny ground scatter.
-                    if (materialConfig.Version < 4)
-                    {
-                        var overrides = materialConfig.Occlusion.BlockOverrides;
-                        if (overrides != null)
-                        {
-                            var craftSurfaceOverrides = new System.Collections.Generic.Dictionary<string, float>
-                            {
-                                { "game:knappingsurface*", 0.0f },
-                                { "game:clayforming*", 0.0f },
-                                { "game:loosestones-*", 0.0f },
-                                { "game:looseflints-*", 0.0f },
-                                { "game:looseores-*", 0.0f }
-                            };
-                            foreach (var kvp in craftSurfaceOverrides)
-                            {
-                                if (!overrides.ContainsKey(kvp.Key))
-                                    overrides[kvp.Key] = kvp.Value;
-                            }
-                        }
-
-                        materialConfig.Version = 4;
-                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v4: added knapping/clayforming surface + loose ground item overrides");
-                    }
-
-                    // Version 5 migration: fix door/gate override patterns
-                    // Old patterns required state suffix ("door-*-closed-*") that VS doors
-                    // don't have (e.g. "door-solid-aged"). Replace with broad prefixes.
-                    // Open/closed is now handled by collision geometry, not code matching.
-                    if (materialConfig.Version < 5)
-                    {
-                        var overrides = materialConfig.Occlusion.BlockOverrides;
-                        if (overrides != null)
-                        {
-                            // Remove broken state-specific patterns
-                            overrides.Remove("game:door-*-closed-*");
-                            overrides.Remove("game:door-*-opened-*");
-                            overrides.Remove("game:trapdoor-*-closed-*");
-                            overrides.Remove("game:trapdoor-*-opened-*");
-                            // Add broad patterns matching actual VS block codes
-                            if (!overrides.ContainsKey("game:door-*"))
-                                overrides["game:door-*"] = 0.8f;
-                            if (!overrides.ContainsKey("game:metaldoor-*"))
-                                overrides["game:metaldoor-*"] = 0.9f;
-                            if (!overrides.ContainsKey("game:trapdoor-*"))
-                                overrides["game:trapdoor-*"] = 0.7f;
-                            if (!overrides.ContainsKey("game:*gate*"))
-                                overrides["game:*gate*"] = 0.8f;
-                        }
-
-                        materialConfig.Version = 5;
-                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v5: fixed door/gate override patterns (broad prefix match)");
-                    }
-
-                    // Version 6 migration: Medieval Expansion gate/portcullis/drawbridge overrides
-                    // + remove glasspane-leaded from TreatAsFullCube (thin geometry, normal AABB is fine)
-                    if (materialConfig.Version < 6)
-                    {
-                        var overrides = materialConfig.Occlusion.BlockOverrides;
-                        if (overrides != null)
-                        {
-                            if (!overrides.ContainsKey("medievalexpansion:gate*"))
-                                overrides["medievalexpansion:gate*"] = 0.8f;
-                            if (!overrides.ContainsKey("medievalexpansion:portcullis*"))
-                                overrides["medievalexpansion:portcullis*"] = 0.85f;
-                            if (!overrides.ContainsKey("medievalexpansion:drawbridge*"))
-                                overrides["medievalexpansion:drawbridge*"] = 0.8f;
-                        }
-
-                        if (materialConfig.Occlusion.TreatAsFullCube != null)
-                        {
-                            materialConfig.Occlusion.TreatAsFullCube.RemoveAll(p => p.Contains("glasspane"));
-                        }
-
-                        materialConfig.Version = 6;
-                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v6: added Medieval Expansion overrides, removed glasspane from TreatAsFullCube");
-                    }
+                    // Any material config older than current version gets regenerated from fresh defaults.
+                    // All prior migration history (v1-v7) deleted at v8 — fresh defaults include everything.
+                    api.Logger.Notification($"[SoundPhysicsAdapted] Material config v{materialConfig.Version} is outdated (current: v{MaterialSoundConfig.CurrentVersion}). Regenerating with fresh defaults.");
+                    materialConfig = MaterialSoundConfig.CreateDefault();
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");
@@ -1107,6 +923,7 @@ namespace soundphysicsadapted
                                 $"  occlusion: {(viz.ShowOcclusion ? "ON" : "off")}\n" +
                                 $"  reposition: {(viz.ShowReposition ? "ON" : "off")}\n" +
                                 $"  openings: {(viz.ShowOpenings ? "ON" : "off")}\n" +
+                                $"  bocc: {(viz.ShowBOccPaths ? "ON" : "off")}\n" +
                                 $"  weather: {(config.DebugWeatherVisualization ? "ON" : "off")}");
                         }
                         }
@@ -1133,13 +950,17 @@ namespace soundphysicsadapted
                             case "openings":
                                 viz.ShowOpenings = !viz.ShowOpenings;
                                 return TextCommandResult.Success($"[SPA] Opening probe viz: {(viz.ShowOpenings ? "ON" : "OFF")}");
+                            case "bocc":
+                                viz.ShowBOccPaths = !viz.ShowBOccPaths;
+                                return TextCommandResult.Success($"[SPA] bOcc LOS path viz: {(viz.ShowBOccPaths ? "ON" : "OFF")}" +
+                                    (viz.ShowBOccPaths ? "\nGreen=clear LOS | Yellow=partial | Orange=heavy | DarkRed=blocked" : ""));
                             case "off":
                             case "clear":
                                 viz.ClearAll();
                                 config.DebugWeatherVisualization = false;
                                 return TextCommandResult.Success("[SPA] All visualizations OFF");
                             default:
-                                return TextCommandResult.Error($"Unknown viz mode: {mode}\nValid: bounces | rays | occlusion | reposition | weather | openings | off");
+                                return TextCommandResult.Error($"Unknown viz mode: {mode}\nValid: bounces | rays | occlusion | reposition | weather | openings | bocc | off");
                         }
                     })
                 .EndSubCommand();
@@ -1212,6 +1033,9 @@ namespace soundphysicsadapted
             // Clear mono downmix cache
             MonoDownmixManager.ClearCache();
 
+            // Clear static block occlusion caches (survive across world loads if not reset)
+            BlockClassification.ClearCache();
+
             // Clear ambient face-sampling data
             AmbientSoundPatches.Clear();
 
@@ -1255,21 +1079,9 @@ namespace soundphysicsadapted
         /// </summary>
         private static void MigrateConfig(SoundPhysicsConfig cfg)
         {
-            if (cfg.ConfigVersion < 2)
-            {
-                // v1→v2: Performance tuning — lower caps, add time budget, add DDA step limit
-                if (cfg.MaxOcclusion >= 10.0f) cfg.MaxOcclusion = 4.0f;
-                if (cfg.MaxSoundsPerTick >= 25) cfg.MaxSoundsPerTick = 10;
-                if (cfg.MaxOverdueSoundsPerTick >= 6) cfg.MaxOverdueSoundsPerTick = 3;
-                cfg.ConfigVersion = 2;
-            }
-            if (cfg.ConfigVersion < 3)
-            {
-                // v2→v3: Absorption ×3 fix means MaxOcclusion=4 is now overkill acoustically
-                // (exp(-12) ≈ 0%) but too low for user flexibility. Raise to 32 for headroom.
-                if (cfg.MaxOcclusion <= 4.0f) cfg.MaxOcclusion = 32.0f;
-                cfg.ConfigVersion = 3;
-            }
+            // All prior migration history deleted at v4.
+            // Any config older than v4 gets regenerated from fresh defaults.
+            // This keeps the codebase clean — no legacy migration chains to maintain.
             cfg.ConfigVersion = CurrentConfigVersion;
         }
 
@@ -1688,7 +1500,7 @@ namespace soundphysicsadapted
             }
 
             lastBlockChangeTimeMs = currentTime;
-            acousticsManager.InvalidateCache();
+            acousticsManager.InvalidateCache(currentTime);
         }
     }
 }

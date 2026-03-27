@@ -34,6 +34,14 @@ namespace soundphysicsadapted
         private const double MOVE_THRESHOLD = 0.25;    // Blocks - below this = "didn't move"
         private const long FORCE_REFRESH_MS = 2000;    // 2s - catch block changes we missed
 
+        // === Block Change Grace Window ===
+        // After a block change (door open/close), the static cache would re-engage immediately
+        // because neither player nor sound moved. This causes audible "step-down" artifacts:
+        // one raycast fires, then 2s of silence until FORCE_REFRESH. The grace window keeps
+        // the static cache bypassed for long enough that sounds reconverge smoothly.
+        private const long BLOCK_CHANGE_GRACE_MS = 1000; // 1s of unrestricted updates after block change
+        private long lastBlockChangeInvalidationMs = 0;
+
         // === Sky Probe ===
         private const int SKY_PROBE_RAY_COUNT = 5;
         private const float SKY_PROBE_DISTANCE = 64f;
@@ -195,8 +203,10 @@ namespace soundphysicsadapted
         /// Invalidate all cached results. Called on block change events.
         /// Doesn't force immediate raycast - just ensures the next interval
         /// check actually runs the raycast instead of returning stale data.
+        /// Also starts a grace window where the static cache is bypassed,
+        /// preventing the "one raycast then 2s freeze" step-down artifact.
         /// </summary>
-        public void InvalidateCache()
+        public void InvalidateCache(long currentTimeMs = 0)
         {
             foreach (var kvp in soundCache)
             {
@@ -206,6 +216,10 @@ namespace soundphysicsadapted
                 kvp.Value.LastRaycastTimeMs = 0;
                 kvp.Value.LastUpdateTimeMs = 0;
             }
+
+            // Start grace window — static cache stays bypassed for BLOCK_CHANGE_GRACE_MS
+            if (currentTimeMs > 0)
+                lastBlockChangeInvalidationMs = currentTimeMs;
 
             reverbCellCache?.Clear();
 
@@ -290,7 +304,13 @@ namespace soundphysicsadapted
                 // Oneshot sounds like footsteps/impacts must not be deferred or they'll play wrong.
                 bool isOverdue = cache.LastRaycastTimeMs == 0 || timeSinceRaycast >= FORCE_REFRESH_MS;
 
-                if (cache.LastPlayerPos != null && cache.LastSoundPos != null && !isOverdue)
+                // Block change grace window: after a door/block change, keep the static cache
+                // bypassed so sounds reconverge smoothly instead of freezing for 2s.
+                bool inGraceWindow = lastBlockChangeInvalidationMs > 0
+                    && (currentTimeMs - lastBlockChangeInvalidationMs) < BLOCK_CHANGE_GRACE_MS;
+
+                bool staticCacheEnabled = config?.EnableStaticSoundCache ?? true;
+                if (staticCacheEnabled && !inGraceWindow && cache.LastPlayerPos != null && cache.LastSoundPos != null && !isOverdue)
                 {
                     double playerMoved = playerPos.DistanceTo(cache.LastPlayerPos);
                     double soundMoved = soundPos.DistanceTo(cache.LastSoundPos);
@@ -830,17 +850,19 @@ namespace soundphysicsadapted
 
                     // Occluded: full path resolution with opening probes.
                     // Position shifts toward openings, LPF uses DIRECT occlusion (SPR-style).
-                    // bOcc is fundamentally broken for LPF — see LPF_INVESTIGATION.md Issue #2.
+                    // bOcc provides a DIFFRACTION FLOOR: when bounce rays find viable indirect
+                    // paths (L-corridors, around corners), allows more HF than direct occlusion
+                    // alone. Capped at ~9dB (MaxDiffractionFilter) with entombment guards.
                     bool applied = allPermeated || AudioRenderer.ApplySoundPath(sound, pathResult.Value, soundPos);
 
                     if (applied)
                     {
                         float airspaceRatio = pathResult.Value.SharedAirspaceRatio;
 
-                        // SPR-STYLE LPF: Direct occlusion drives the filter. Always.
+                        // SPR-STYLE LPF: Direct occlusion drives the base filter. Always.
                         // Shared airspace floor prevents over-muffling of repositioned sounds.
-                        // bOcc (probe-path occlusion) is NOT used — it's self-defeatingly biased
-                        // toward zero due to permeation weighting (see LPF_INVESTIGATION.md).
+                        // Diffraction floor (from bOcc bounce data) adds relief for L-corridors
+                        // and around-corner scenarios where indirect paths are viable.
 
                         // SPR: directCutoff = max(directCutoff, sqrt(sharedAirspace) * 0.2)
                         float sharedAirspaceFloor = MathF.Sqrt(airspaceRatio) * 0.2f;
@@ -886,16 +908,55 @@ namespace soundphysicsadapted
                         // SPR-style: airspace floor prevents over-muffling
                         finalFilter = Math.Max(smoothedDirectFilter, sharedAirspaceFloor);
 
+                        // DIFFRACTION FLOOR (bOcc reintegration):
+                        // When bounce rays find viable indirect paths (L-corridors, around corners),
+                        // allow more HF through than direct occlusion + airspace floor alone.
+                        // Based on UTD/Maekawa simplified diffraction: ~8-10dB loss per 90° bend.
+                        // Guards prevent entombed sounds from benefiting (requires meaningful
+                        // shared airspace, open path count, and moderate direct occlusion).
+                        float diffractionFloor = 0f;
+                        float reposOffset = (float)pathResult.Value.RepositionOffset;
+                        int openPaths = pathResult.Value.PathCount;
+
+                        bool hasDiffractionEvidence =
+                            openPaths >= 2 &&              // at least 2 open bounce paths
+                            airspaceRatio >= 0.05f &&      // >5% shared airspace (not entombed)
+                            smoothedOcc > 0.5f;            // direct path must be meaningfully occluded
+
+                        if (hasDiffractionEvidence)
+                        {
+                            // Diffraction floor: use BETTER of measured indirect path vs.
+                            // guaranteed minimum from physics (single 90° bend, ~8dB).
+                            // Max applied on filter (pick less muffled), NOT on occlusion.
+                            float minDiffOcc = config.MinDiffractionOcclusion;
+                            float rawBOccFilter = OcclusionCalculator.OcclusionToFilter((float)pathResult.Value.BlendedOcclusion);
+                            float minDiffFilter = OcclusionCalculator.OcclusionToFilter(minDiffOcc);
+                            float bOccFilter = Math.Max(rawBOccFilter, minDiffFilter);
+
+                            // Confidence from multiple evidence sources:
+                            // - airspace: 25%+ → full confidence (strong shared volume)
+                            // - paths: 4+ open → full confidence (consistent indirect routing)
+                            // - repositioning: 3m+ offset → bonus (sound visibly bends around corner)
+                            float airspaceConf = Math.Min(airspaceRatio * 4f, 1f);
+                            float pathConf = Math.Min(openPaths / 4f, 1f);
+                            float reposConf = Math.Clamp(reposOffset / 3f, 0f, 1f);
+                            float confidence = Math.Min(1f, airspaceConf * pathConf + reposConf * 0.3f);
+
+                            diffractionFloor = Math.Min(bOccFilter * confidence, config.MaxDiffractionFilter);
+
+                            // Take max: diffraction floor overrides if higher than current filter
+                            finalFilter = Math.Max(finalFilter, diffractionFloor);
+                        }
+
                         // DIFFRACTION ANGLE DARKENING:
                         // Sounds bending around corners lose HF proportional to bend angle.
-                        float reposOffset = (float)pathResult.Value.RepositionOffset;
                         float bendRatio = distance > 0.1f ? Math.Clamp(reposOffset / distance, 0f, 1f) : 0f;
                         float diffractionDarkening = 1f - bendRatio * 0.3f;
                         finalFilter *= diffractionDarkening;
 
                         if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[4B-LPF] dOcc={occlusion:F2} smooth={smoothedOcc:F2} filt={finalFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} airFloor={sharedAirspaceFloor:F2} air={airspaceRatio:F2} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
+                                $"[4B-LPF] dOcc={occlusion:F2} smooth={smoothedOcc:F2} filt={finalFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} airFloor={sharedAirspaceFloor:F2} diffFloor={diffractionFloor:F3} air={airspaceRatio:F2} open={openPaths} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
                     }
 
                     if (updatedThisTick == 0 && pathResult.Value.RepositionOffset > 0.1)

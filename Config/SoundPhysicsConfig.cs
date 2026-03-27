@@ -163,6 +163,22 @@ namespace soundphysicsadapted
         public float MinLowPassFilter { get; set; } = 0.001f;
 
         /// <summary>
+        /// Maximum HF pass from diffraction floor (0 = disable, 1 = full pass).
+        /// When bounce rays find viable indirect paths (e.g., around an L-shaped corridor),
+        /// the diffraction floor allows more HF through than direct occlusion alone.
+        /// 0.35 ≈ 9dB attenuation (realistic for one 90-degree corner bend).
+        /// Based on Maekawa/UTD simplified diffraction models.
+        /// </summary>
+        public float MaxDiffractionFilter { get; set; } = 0.35f;
+
+        /// <summary>
+        /// Minimum occlusion applied to diffracted paths (in block units).
+        /// Prevents diffraction from making sounds unrealistically clear.
+        /// 0.3 ≈ 8dB loss per 90-degree bend (Wwise-style abstract diffraction coefficient).
+        /// </summary>
+        public float MinDiffractionOcclusion { get; set; } = 0.3f;
+
+        /// <summary>
         /// Offset distance for multi-ray occlusion (soft edges).
         /// Shoots 9 rays with offset positions to detect thin walls at perpendicular angles.
         /// 0 = single ray (strict mode), 0.3-0.5 = recommended for soft occlusion.
@@ -691,6 +707,15 @@ namespace soundphysicsadapted
         /// 0 = no limit (vanilla behavior, same as disabling the throttle). Default 40.
         /// </summary>
         public int MaxConcurrentSounds { get; set; } = 40;
+
+        /// <summary>
+        /// Enable static sound cache (skip raycasts when player and sound haven't moved).
+        /// When true: sounds are only recalculated when something moves or changes.
+        /// When false: sounds always recalculate when their interval is due, regardless of movement.
+        /// Disabling reduces performance but ensures immediate response to all world changes.
+        /// Block break/place and door interactions always bypass this cache automatically.
+        /// </summary>
+        public bool EnableStaticSoundCache { get; set; } = true;
 
         /// <summary>
         /// Fade duration in seconds when a sound is throttled (evicted) or unthrottled (admitted).

@@ -121,8 +121,10 @@ namespace soundphysicsadapted
 
             float soundDistance = (float)playerPos.DistanceTo(soundPos);
 
+            // Distance scaling applied to FULL ray count first, outdoor cap last.
+            // Prevents inversion where mid-range outdoors got more rays than close.
             var acoustics = SoundPhysicsAdaptedModSystem.Acoustics;
-            int baseRayCount = acoustics != null ? acoustics.SuggestedReverbRayCount : config.ReverbRayCount;
+            int baseRayCount = config.ReverbRayCount;
 
             int numRays;
             if (soundDistance < 15f)
@@ -131,6 +133,10 @@ namespace soundphysicsadapted
                 numRays = Math.Max(12, baseRayCount / 2);
             else
                 numRays = Math.Max(8, baseRayCount / 4);
+
+            bool outdoorCap = acoustics?.IsOutdoors ?? false;
+            if (outdoorCap)
+                numRays = Math.Min(numRays, 8);
 
             int bounces = config.ReverbBounces;
             float maxDistance = config.ReverbMaxDistance;

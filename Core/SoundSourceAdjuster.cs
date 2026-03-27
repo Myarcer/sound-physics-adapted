@@ -44,11 +44,12 @@ namespace soundphysicsadapted
             // to the controller block using the offset encoded in its variant.
             // e.g. "multiblock-monolithic-0-p1-0" has dy=+1, meaning controller is 1 below.
             bool wasMultiblock = false;
+            int multiblockDy = 0;
             string originalCode = code;
 
             if (code.StartsWith("multiblock-", StringComparison.Ordinal))
             {
-                Block controllerBlock = ResolveMultiblockController(block, blockAccessor);
+                Block controllerBlock = ResolveMultiblockController(block, blockAccessor, out multiblockDy);
                 if (controllerBlock != null && controllerBlock.Id != 0)
                 {
                     wasMultiblock = true;
@@ -71,7 +72,7 @@ namespace soundphysicsadapted
             // --- Step 2: Door adjustment ---
             // VS plays door sounds at (pos.X+0.5, pos.InternalY+0.5, pos.Z+0.5)
             // For multi-block-tall doors, shift Y to the top block center.
-            float doorShift = GetDoorHeightShift(block);
+            float doorShift = GetDoorHeightShift(block, multiblockDy);
             if (doorShift > 0f)
             {
                 Vec3d adjusted = soundPos.Clone();
@@ -120,8 +121,10 @@ namespace soundphysicsadapted
         ///
         /// Sets _controllerPos as a side effect for debug logging.
         /// </summary>
-        private static Block ResolveMultiblockController(Block multiblock, IBlockAccessor blockAccessor)
+        private static Block ResolveMultiblockController(Block multiblock, IBlockAccessor blockAccessor, out int dyOffset)
         {
+            dyOffset = 0;
+
             // Parse offset from variant dictionary
             // BlockMultiblock stores: Variant["dx"], Variant["dy"], Variant["dz"]
             // Format: "n1" = -1, "p1" = +1, "0" = 0
@@ -139,6 +142,8 @@ namespace soundphysicsadapted
             int dx = ParseVariantOffset(dxStr);
             int dy = ParseVariantOffset(dyStr);
             int dz = ParseVariantOffset(dzStr);
+
+            dyOffset = dy;
 
             // OffsetInv = -Offset; controller = placeholder + OffsetInv = placeholder - Offset
             _controllerPos.Set(
@@ -193,7 +198,7 @@ namespace soundphysicsadapted
         /// Works with both direct door blocks and controller blocks resolved
         /// from multiblock placeholders.
         /// </summary>
-        private static float GetDoorHeightShift(Block block)
+        private static float GetDoorHeightShift(Block block, int multiblockDy)
         {
             string code = block.Code?.Path;
             if (code == null) return 0f;
@@ -213,9 +218,15 @@ namespace soundphysicsadapted
             // VS places sound at bottom_block_Y + 0.5. We want top_block_Y + 0.5.
             // height=2: shift +1.0 (from Y+0.5 to Y+1.5, top block center)
             // height=3: shift +2.0 (from Y+0.5 to Y+2.5, top block center)
-            // This clears floor-level obstacles (chests, barrels) that a geometric
-            // center shift (+0.5 for height=2) would still clip at short range.
-            return (float)(height - 1);
+            //
+            // For multiblock upper halves, the sound already originates higher up.
+            // Subtract the multiblock dy to avoid pushing the sound above the door
+            // into ceiling/wall blocks (which causes false self-occlusion).
+            // height=2, lower (dy=0): shift = 1 - 0 = 1  (bottom → top center)
+            // height=2, upper (dy=1): shift = 1 - 1 = 0  (already at top, no shift)
+            // height=3, lower (dy=0): shift = 2, middle (dy=1): shift = 1, top (dy=2): shift = 0
+            float shift = (float)(height - 1 - multiblockDy);
+            return shift > 0f ? shift : 0f;
         }
 
         /// <summary>
