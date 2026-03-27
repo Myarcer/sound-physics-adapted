@@ -1121,12 +1121,11 @@ namespace soundphysicsadapted
             // Each material layer adds its transmission loss linearly (in dB).
             // The occlusion value represents the sum of all material losses.
             // Exponential converts from dB-like scale to linear intensity.
-            // Formula from Sound Physics Remastered:
-            // absorptionCoeff = blockAbsorption * 3D
+            // Formula derived from Sound Physics Remastered (SPR uses ×3, we use ×2):
+            // absorptionCoeff = blockAbsorption * 2
             // directCutoff = exp(-occlusionAccumulation * absorptionCoeff)
-            // The ×3 is SPR's internal scaling that maps the user-facing knob (0.1-4.0)
-            // to physically meaningful absorption. Without it, muffling is 3× too weak.
-            float filterValue = (float)Math.Exp(-occlusion * config.BlockAbsorption * 3.0f);
+            // ×2 gives slightly less aggressive muffling than SPR's ×3 for better feel.
+            float filterValue = (float)Math.Exp(-occlusion * config.BlockAbsorption * 2.0f);
 
             // Clamp to minimum to prevent completely silent sounds
             return Math.Max(filterValue, config.MinLowPassFilter);
