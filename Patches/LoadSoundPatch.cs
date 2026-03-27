@@ -39,6 +39,15 @@ namespace soundphysicsadapted
         private static AssetLocation monoSwapKey;       // The key we swapped (for restore)
         private static AudioData monoSwapOriginal;      // The original stereo data (for restore)
 
+        // === PRE-WARMUP SOUND QUEUE ===
+        // Sounds that call Start() between LevelFinalize and warmup completion are queued here.
+        // Block entities (querns, forges, beehives) initialized during chunk loading start their
+        // ambient sounds before IsWorldReady, causing them to be permanently invisible to the
+        // occlusion tick system. After warmup completes, ProcessPreWarmupQueue() retroactively
+        // registers and applies initial occlusion to these sounds.
+        private static List<WeakReference<ILoadedSound>> preWarmupSoundQueue = new List<WeakReference<ILoadedSound>>();
+        private static bool preWarmupQueueProcessed = false;
+
         /// <summary>
         /// Manually apply patches using reflection
         /// Called from ModSystem.StartClientSide
@@ -979,11 +988,32 @@ namespace soundphysicsadapted
         {
             try
             {
-                // STARTUP GATE: Skip ALL processing until warmup completes.
+                // STARTUP GATE: Skip processing until warmup completes.
                 // During chunk loading, hundreds of sounds fire Start() simultaneously.
                 // Without this gate, reflection calls + DDA raycasts + OpenAL ops
                 // block the main thread for 86+ seconds (zero FPS freeze).
-                if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
+                //
+                // PRE-WARMUP QUEUE: Block entities (querns, forges, beehives) start their
+                // ambient sounds during chunk loading, before IsWorldReady. Queue positional
+                // sounds so they can be retroactively registered after warmup completes.
+                // Queuing is cheap (just a WeakReference); the expensive DDA runs later.
+                if (!SoundPhysicsAdaptedModSystem.IsWorldReady)
+                {
+                    if (!preWarmupQueueProcessed)
+                    {
+                        var queueSound = __instance as ILoadedSound;
+                        if (queueSound?.Params != null)
+                        {
+                            var pos = queueSound.Params.Position;
+                            bool hasPosition = pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0);
+                            if (hasPosition)
+                            {
+                                preWarmupSoundQueue.Add(new WeakReference<ILoadedSound>(queueSound));
+                            }
+                        }
+                    }
+                    return;
+                }
 
                 // Cast to ILoadedSound interface
                 var loadedSound = __instance as ILoadedSound;
@@ -1375,6 +1405,84 @@ namespace soundphysicsadapted
             }
 
             // No per-sound log - underwater state changes are logged at transition only
+        }
+
+        /// <summary>
+        /// Process sounds that were queued during the warmup window.
+        /// Called once from the smoothing tick when warmup completes.
+        /// Retroactively applies initial occlusion + registers these sounds so the
+        /// tick system can maintain them going forward.
+        /// </summary>
+        public static void ProcessPreWarmupQueue()
+        {
+            if (preWarmupQueueProcessed) return;
+            preWarmupQueueProcessed = true;
+
+            // Ensure block accessor is available for occlusion raycasts
+            if (cachedBlockAccessor == null && cachedApi != null)
+                cachedBlockAccessor = cachedApi.World?.BlockAccessor;
+
+            int processed = 0;
+            int disposed = 0;
+
+            foreach (var weakRef in preWarmupSoundQueue)
+            {
+                if (!weakRef.TryGetTarget(out var sound)) { disposed++; continue; }
+
+                try
+                {
+                    var soundParams = sound.Params;
+                    if (soundParams == null) { disposed++; continue; }
+
+                    Vec3f position = soundParams.Position;
+                    if (position == null || (position.X == 0 && position.Y == 0 && position.Z == 0))
+                    { disposed++; continue; }
+
+                    string soundName = soundParams.Location?.ToShortString() ?? "unknown";
+
+                    // Skip lightning (handled by ThunderAudioHandler)
+                    if (soundName.Contains("lightning")) continue;
+
+                    // Detach VS's global filter
+                    int sourceId = AudioRenderer.GetSourceId(sound);
+                    AudioRenderer.DetachGlobalFilter(sourceId);
+
+                    // Apply initial occlusion (registers the sound in activeFilters)
+                    ApplyOcclusion(sound, position, soundName);
+
+                    // Reattach our filter (sound is already in PLAYING state)
+                    if (AudioRenderer.IsInitialized)
+                    {
+                        AudioRenderer.ReattachFilter(sound);
+                    }
+
+                    // Apply reverb if enabled
+                    var config = SoundPhysicsAdaptedModSystem.Config;
+                    if (config != null && config.EnableCustomReverb && cachedBlockAccessor != null
+                        && cachedApi?.World?.Player?.Entity != null)
+                    {
+                        var player = cachedApi.World.Player.Entity;
+                        Vec3d playerPos = player.Pos.XYZ.Add(player.LocalEyePos);
+                        Vec3d soundPosD = new Vec3d(position.X, position.Y, position.Z);
+                        ApplyReverb(sound, soundPosD, playerPos, cachedBlockAccessor);
+                    }
+
+                    processed++;
+                }
+                catch (Exception ex)
+                {
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[PRE-WARMUP] Error processing queued sound: {ex.Message}");
+                }
+            }
+
+            if (processed > 0 || disposed > 0)
+            {
+                cachedApi?.Logger.Notification(
+                    $"[SoundPhysicsAdapted] Pre-warmup queue: {processed} sounds registered, {disposed} already disposed");
+            }
+
+            preWarmupSoundQueue.Clear();
         }
 
         #region AL.SourcePlay Diagnostic Hook

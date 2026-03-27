@@ -575,6 +575,10 @@ namespace soundphysicsadapted
                 {
                     DiagnosticLog("WARMUP-DONE: Raycasting now enabled.");
                     clientApi?.Logger.Notification("[SoundPhysicsAdapted] Warmup complete — occlusion/reverb processing enabled");
+
+                    // Retroactively process sounds that started during warmup (querns, forges, etc.)
+                    // These were queued because SoundStartPrefix skipped them while IsWorldReady was false.
+                    LoadSoundPatch.ProcessPreWarmupQueue();
                 }
             }
 
