@@ -1107,6 +1107,7 @@ namespace soundphysicsadapted
                                 $"  occlusion: {(viz.ShowOcclusion ? "ON" : "off")}\n" +
                                 $"  reposition: {(viz.ShowReposition ? "ON" : "off")}\n" +
                                 $"  openings: {(viz.ShowOpenings ? "ON" : "off")}\n" +
+                                $"  bocc: {(viz.ShowBOccPaths ? "ON" : "off")}\n" +
                                 $"  weather: {(config.DebugWeatherVisualization ? "ON" : "off")}");
                         }
                         }
@@ -1133,13 +1134,17 @@ namespace soundphysicsadapted
                             case "openings":
                                 viz.ShowOpenings = !viz.ShowOpenings;
                                 return TextCommandResult.Success($"[SPA] Opening probe viz: {(viz.ShowOpenings ? "ON" : "OFF")}");
+                            case "bocc":
+                                viz.ShowBOccPaths = !viz.ShowBOccPaths;
+                                return TextCommandResult.Success($"[SPA] bOcc LOS path viz: {(viz.ShowBOccPaths ? "ON" : "OFF")}" +
+                                    (viz.ShowBOccPaths ? "\nGreen=clear LOS | Yellow=partial | Orange=heavy | DarkRed=blocked" : ""));
                             case "off":
                             case "clear":
                                 viz.ClearAll();
                                 config.DebugWeatherVisualization = false;
                                 return TextCommandResult.Success("[SPA] All visualizations OFF");
                             default:
-                                return TextCommandResult.Error($"Unknown viz mode: {mode}\nValid: bounces | rays | occlusion | reposition | weather | openings | off");
+                                return TextCommandResult.Error($"Unknown viz mode: {mode}\nValid: bounces | rays | occlusion | reposition | weather | openings | bocc | off");
                         }
                     })
                 .EndSubCommand();

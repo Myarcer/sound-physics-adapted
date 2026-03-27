@@ -58,13 +58,14 @@ namespace soundphysicsadapted
         public bool ShowOcclusion { get; set; }
         public bool ShowReposition { get; set; }
         public bool ShowOpenings { get; set; }
+        public bool ShowBOccPaths { get; set; }
 
         public bool AnyActive => BounceColorMode > 0 || ShowRays || ShowOcclusion
-            || ShowReposition || ShowOpenings;
+            || ShowReposition || ShowOpenings || ShowBOccPaths;
 
         // Subset that needs raytracer data capture
         public bool AnyAcousticVizActive => BounceColorMode > 0 || ShowRays || ShowOcclusion
-            || ShowReposition || ShowOpenings;
+            || ShowReposition || ShowOpenings || ShowBOccPaths;
 
         // === IRenderer ===
         public double RenderOrder => 0.99;
@@ -272,6 +273,7 @@ namespace soundphysicsadapted
             ShowOcclusion = false;
             ShowReposition = false;
             ShowOpenings = false;
+            ShowBOccPaths = false;
             clearRequested = true;
         }
 
@@ -488,6 +490,7 @@ namespace soundphysicsadapted
                 if (ShowOcclusion && snap.OccVizCount > 0) AppendOcclusionLines(mesh, cam, snap.OccViz, snap.OccVizCount);
                 if (ShowReposition && snap.RepositionCount > 0) AppendRepositionLines(mesh, cam, snap.Repositions, snap.RepositionCount);
                 if (ShowOpenings && snap.OpeningCount > 0) AppendOpeningBoxes(mesh, cam, snap.Openings, snap.OpeningCount);
+                if (ShowBOccPaths && snap.BounceCount > 0) AppendBOccPathLines(mesh, cam, snap.Bounces, snap.BounceCount);
             }
 
             if (vertexOffset == 0)
@@ -689,6 +692,33 @@ namespace soundphysicsadapted
                 // Using float stored values avoids double→float precision jitter at large world coords.
                 AppendLine(mesh, ov.PosX, ov.PosY, ov.PosZ,
                     ov.PlayerX, ov.PlayerY, ov.PlayerZ, color, cam);
+            }
+        }
+
+        /// <summary>
+        /// bOcc LOS paths: line from each bounce point to the player (camera),
+        /// colored by PathOcclusion. Green=clear LOS (contributes to bOcc),
+        /// Yellow=partial, Red=blocked. Shows which bounce points can "see" the player.
+        /// </summary>
+        private void AppendBOccPathLines(MeshData mesh, Vec3d cam, BouncePoint[] bounces, int count)
+        {
+            float camXf = (float)cam.X, camYf = (float)cam.Y, camZf = (float)cam.Z;
+            for (int i = 0; i < count; i++)
+            {
+                ref BouncePoint bp = ref bounces[i];
+                int color;
+                byte alpha = (byte)(currentFadeAlpha * 160);
+                if (bp.PathOcclusion < 0.1f)
+                    color = (alpha << 24) | (0 << 16) | (255 << 8) | 0;      // Green: clear LOS
+                else if (bp.PathOcclusion < 1.0f)
+                    color = (alpha << 24) | (0 << 16) | (255 << 8) | 255;    // Yellow: partial
+                else if (bp.PathOcclusion < 2.0f)
+                    color = (alpha << 24) | (0 << 16) | (128 << 8) | 255;    // Orange: heavy
+                else
+                    color = (alpha << 24) | (0 << 16) | (0 << 8) | 180;     // Dark red: blocked
+
+                AppendLine(mesh, (float)bp.PosX, (float)bp.PosY, (float)bp.PosZ,
+                    camXf, camYf, camZf, color, cam);
             }
         }
 
