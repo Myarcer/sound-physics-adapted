@@ -34,6 +34,14 @@ namespace soundphysicsadapted
         private const double MOVE_THRESHOLD = 0.25;    // Blocks - below this = "didn't move"
         private const long FORCE_REFRESH_MS = 2000;    // 2s - catch block changes we missed
 
+        // === Block Change Grace Window ===
+        // After a block change (door open/close), the static cache would re-engage immediately
+        // because neither player nor sound moved. This causes audible "step-down" artifacts:
+        // one raycast fires, then 2s of silence until FORCE_REFRESH. The grace window keeps
+        // the static cache bypassed for long enough that sounds reconverge smoothly.
+        private const long BLOCK_CHANGE_GRACE_MS = 1000; // 1s of unrestricted updates after block change
+        private long lastBlockChangeInvalidationMs = 0;
+
         // === Sky Probe ===
         private const int SKY_PROBE_RAY_COUNT = 5;
         private const float SKY_PROBE_DISTANCE = 64f;
@@ -195,8 +203,10 @@ namespace soundphysicsadapted
         /// Invalidate all cached results. Called on block change events.
         /// Doesn't force immediate raycast - just ensures the next interval
         /// check actually runs the raycast instead of returning stale data.
+        /// Also starts a grace window where the static cache is bypassed,
+        /// preventing the "one raycast then 2s freeze" step-down artifact.
         /// </summary>
-        public void InvalidateCache()
+        public void InvalidateCache(long currentTimeMs = 0)
         {
             foreach (var kvp in soundCache)
             {
@@ -206,6 +216,10 @@ namespace soundphysicsadapted
                 kvp.Value.LastRaycastTimeMs = 0;
                 kvp.Value.LastUpdateTimeMs = 0;
             }
+
+            // Start grace window — static cache stays bypassed for BLOCK_CHANGE_GRACE_MS
+            if (currentTimeMs > 0)
+                lastBlockChangeInvalidationMs = currentTimeMs;
 
             reverbCellCache?.Clear();
 
@@ -290,8 +304,13 @@ namespace soundphysicsadapted
                 // Oneshot sounds like footsteps/impacts must not be deferred or they'll play wrong.
                 bool isOverdue = cache.LastRaycastTimeMs == 0 || timeSinceRaycast >= FORCE_REFRESH_MS;
 
+                // Block change grace window: after a door/block change, keep the static cache
+                // bypassed so sounds reconverge smoothly instead of freezing for 2s.
+                bool inGraceWindow = lastBlockChangeInvalidationMs > 0
+                    && (currentTimeMs - lastBlockChangeInvalidationMs) < BLOCK_CHANGE_GRACE_MS;
+
                 bool staticCacheEnabled = config?.EnableStaticSoundCache ?? true;
-                if (staticCacheEnabled && cache.LastPlayerPos != null && cache.LastSoundPos != null && !isOverdue)
+                if (staticCacheEnabled && !inGraceWindow && cache.LastPlayerPos != null && cache.LastSoundPos != null && !isOverdue)
                 {
                     double playerMoved = playerPos.DistanceTo(cache.LastPlayerPos);
                     double soundMoved = soundPos.DistanceTo(cache.LastSoundPos);

@@ -1500,7 +1500,7 @@ namespace soundphysicsadapted
             }
 
             lastBlockChangeTimeMs = currentTime;
-            acousticsManager.InvalidateCache();
+            acousticsManager.InvalidateCache(currentTime);
         }
     }
 }
