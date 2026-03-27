@@ -350,6 +350,41 @@ namespace soundphysicsadapted
                         materialConfig.Version = 6;
                         api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v6: added Medieval Expansion overrides, removed glasspane from TreatAsFullCube");
                     }
+
+                    // Version 7 migration: trapdoor segregation + industrial doors
+                    // Split catch-all trapdoor pattern into solid/plate vs grated/bars categories.
+                    // Grated and bars trapdoors let sound through even when closed.
+                    // Add coke oven and kiln doors for proper weather DDA + occlusion handling.
+                    if (materialConfig.Version < 7)
+                    {
+                        var overrides = materialConfig.Occlusion.BlockOverrides;
+                        if (overrides != null)
+                        {
+                            // Remove old catch-all trapdoor pattern
+                            overrides.Remove("game:trapdoor-*");
+
+                            // Solid/plate trapdoors — block most sound when closed
+                            if (!overrides.ContainsKey("game:trapdoor-solid-*"))
+                                overrides["game:trapdoor-solid-*"] = 0.75f;
+                            if (!overrides.ContainsKey("game:trapdoor-plate-*"))
+                                overrides["game:trapdoor-plate-*"] = 0.85f;
+
+                            // Grated/bars trapdoors — sound passes through even when closed
+                            if (!overrides.ContainsKey("game:trapdoor-grated-*"))
+                                overrides["game:trapdoor-grated-*"] = 0.3f;
+                            if (!overrides.ContainsKey("game:trapdoor-bars-*"))
+                                overrides["game:trapdoor-bars-*"] = 0.2f;
+
+                            // Industrial doors — thick sealed doors on multiblock structures
+                            if (!overrides.ContainsKey("game:cokeovendoor-*"))
+                                overrides["game:cokeovendoor-*"] = 0.85f;
+                            if (!overrides.ContainsKey("game:doorkiln-*"))
+                                overrides["game:doorkiln-*"] = 0.85f;
+                        }
+
+                        materialConfig.Version = 7;
+                        api.Logger.Notification("[SoundPhysicsAdapted] Migrated to v7: trapdoor segregation (solid/plate vs grated/bars) + coke oven/kiln door overrides");
+                    }
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");
