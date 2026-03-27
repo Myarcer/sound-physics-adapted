@@ -156,9 +156,8 @@ namespace soundphysicsadapted
 
             float goldenAngle = PHI * MathF.PI * 2f;
 
-            float singleRayOcclusion = OcclusionCalculator.CalculatePathOcclusion(soundPos, playerPos, blockAccessor);
-            bool hasDirectAirspace = singleRayOcclusion < 0.1f;
-            float directOcclusion = multiRayOcclusion >= 0 ? multiRayOcclusion : singleRayOcclusion;
+            float directOcclusion = multiRayOcclusion >= 0 ? multiRayOcclusion : OcclusionCalculator.CalculatePathOcclusion(soundPos, playerPos, blockAccessor);
+            bool hasDirectAirspace = directOcclusion < 0.1f;
 
             // At >25m behind a wall, opening probes are skipped. Bounce rays fire in
             // random fibonacci directions — any "open" bounce is a false positive whose
