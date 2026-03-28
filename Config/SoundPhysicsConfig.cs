@@ -639,7 +639,7 @@ namespace soundphysicsadapted
         /// At close range pitch=1.0 (bright crack), at max distance pitch drops to this value
         /// (deeper, bassier rumble). Simulates high-frequency atmospheric attenuation.
         /// </summary>
-        public float ThunderCrackPitchMin { get; set; } = 0.72f;
+        public float ThunderCrackPitchMin { get; set; } = 0.5f;
 
         /// <summary>
         /// Random pitch variation applied to each thunder event (±this value).
@@ -683,11 +683,53 @@ namespace soundphysicsadapted
         /// </summary>
         public string[] RainSurfaceBlockPatterns { get; set; } = new string[]
         {
-            "anvil",
-            "metalblock",
-            "metalplate",
-            "ingotpile",
-            "platepile"
+            // --- Smithing / storage piles ---
+            "anvil",            // game:anvil-{metal}, game:anvilpart-{base|top}-{metal}
+            "ingotpile",        // game:ingotpile
+            "platepile",        // game:platepile
+            "metalpartpile",    // game:metalpartpile (scraps/parts pile)
+            "metalsheet",       // game:metalsheet-{metal}-{facing}
+
+            // --- Metal blocks / plates / sheets ---
+            "metalblock",       // game:metalblock-{type}-{metal}
+            "metalplate",       // game:metalplate-{metal}  (if used by mods)
+
+            // --- Metal machines / containers ---
+            "hopper",           // game:hopper-{metal}-{facing}
+            "chute",            // game:chute, chute-cross, chute-straight, chute-t
+            "verticalboiler",   // game:verticalboiler
+            "condenser",        // game:condenser
+            "cokeovendoor",     // game:cokeovendoor-{metal}
+
+            // --- Metal furniture / decor ---
+            "ironfence",        // game:ironfence-{metal}-{config}
+            "supportchain",     // game:supportchain-{metal}-{facing}
+            "supportbeam-tarnishedmetal", // game:supportbeam-tarnishedmetal-{config}
+            "chandelier",       // game:chandelier-{metal}
+            "lantern",          // game:lantern-{metal}-{facing}   (TODO: own sound?)
+            "metaldoor",        // game:metaldoor-{metal}-{config}
+            "trapdoor",         // game:trapdoor-{metal}-{config}
+            "plaque",           // game:plaque-{metal}-{facing}
+            "shingleblock",     // game:shingleblock-{metal}-{facing}  (metal roof shingles)
+            "lightningrod",     // game:lightningrod-{metal}
+
+            // --- Mechanics (metal gears / axles) ---
+            "angledgears",      // game:angledgears-{facing}
+            "largegear3",       // game:largegear3-{facing}
+            "loosegears",       // game:loosegears (spawns in caves)
+            "helvehammerbase",  // game:helvehammerbase
+            "pulverizerframe",  // game:pulverizerframe
+            "brake",            // game:brake-{metal}
+            "transmission",     // game:transmission-{facing}
+            "crank",            // game:crank-{metal}-{facing}
+
+            // --- Bloomery / forge ---
+            "bloomerybase",     // game:bloomerybase-{state}
+            "bloomerychimney",  // game:bloomerychimney-{state}
+            "forge",            // game:forge-{state}  (stone forge, has metal parts)
+
+            // Note: woodenaxle, bellows, windmillrotor, archimedesscrew are
+            // mostly wood — skipped. Add manually if you want rain-on-wood sound.
         };
 
         // ============================================================
