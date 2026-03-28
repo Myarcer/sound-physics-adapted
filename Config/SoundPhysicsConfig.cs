@@ -713,23 +713,11 @@ namespace soundphysicsadapted
             "shingleblock",     // game:shingleblock-{metal}-{facing}  (metal roof shingles)
             "lightningrod",     // game:lightningrod-{metal}
 
-            // --- Mechanics (metal gears / axles) ---
-            "angledgears",      // game:angledgears-{facing}
-            "largegear3",       // game:largegear3-{facing}
-            "loosegears",       // game:loosegears (spawns in caves)
-            "helvehammerbase",  // game:helvehammerbase
-            "pulverizerframe",  // game:pulverizerframe
-            "brake",            // game:brake-{metal}
-            "transmission",     // game:transmission-{facing}
-            "crank",            // game:crank-{metal}-{facing}
-
-            // --- Bloomery / forge ---
-            "bloomerybase",     // game:bloomerybase-{state}
-            "bloomerychimney",  // game:bloomerychimney-{state}
-            "forge",            // game:forge-{state}  (stone forge, has metal parts)
-
-            // Note: woodenaxle, bellows, windmillrotor, archimedesscrew are
-            // mostly wood — skipped. Add manually if you want rain-on-wood sound.
+            // Note: mechanics (angledgears, largegear3, helvehammerbase, transmission,
+            // brake, crank, pulverizerframe etc.) are all wood — skip.
+            // bloomerybase/bloomerychimney are clay/stone — skip.
+            // forge is stone — skip.
+            // Add any of these back when a rain-on-wood / rain-on-stone sound is available.
         };
 
         // ============================================================
