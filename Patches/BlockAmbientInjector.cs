@@ -201,7 +201,7 @@ namespace soundphysicsadapted.Patches
             // Torch blocks: constant volume (always audible when lit)
             if (torchBlockIds.Contains(blockId))
             {
-                __result = SoundPhysicsAdaptedModSystem.Config?.TorchAmbientVolume ?? 0.25f;
+                __result = SoundPhysicsAdaptedModSystem.Config?.TorchAmbientVolume ?? 0.35f;
                 return;
             }
         }
