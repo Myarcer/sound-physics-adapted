@@ -649,6 +649,90 @@ namespace soundphysicsadapted
         public float ThunderPitchRandomness { get; set; } = 0.06f;
 
         // ============================================================
+        // RAIN SURFACE IMPACTS
+        // Plays localized rain impact sounds on specific block types
+        // (anvils, metal blocks, etc.) when exposed to rain.
+        // Uses VS's built-in ambient sound system — same clustering
+        // mechanism as leaded glass panes (BlockRainAmbient).
+        // Adjacent matching blocks merge into one louder source.
+        // ============================================================
+
+        /// <summary>
+        /// Section header visible in JSON config file.
+        /// </summary>
+        public string _RainSurfaceImpactSystem { get; set; } = "--- Rain impact sounds on metal surfaces. Uses VS ambient clustering (same as glass panes). ---";
+
+        /// <summary>
+        /// Master toggle for rain surface impact sounds.
+        /// When enabled: blocks matching RainSurfaceBlockPatterns play rain impact loops
+        /// when exposed to rain. Adjacent blocks cluster into one sound source.
+        /// </summary>
+        public bool EnableRainSurfaceImpacts { get; set; } = true;
+
+        /// <summary>
+        /// Volume multiplier for rain surface impact sounds.
+        /// Combined with rainfall intensity: final VolumeMul = rainfall * this.
+        /// The per-block volume also scales with cluster size (VS AmbientBlockCount ratio).
+        /// </summary>
+        public float RainSurfaceVolume { get; set; } = 0.5f;
+
+        /// <summary>
+        /// Block code patterns that trigger rain surface impacts.
+        /// Matched as prefix against block.Code.Path (e.g., "anvil" matches "anvil-copper").
+        /// Add patterns for any block type you want rain impact sounds on.
+        /// </summary>
+        public string[] RainSurfaceBlockPatterns { get; set; } = new string[]
+        {
+            "anvil",
+            "metalblock",
+            "metalplate",
+            "ingotpile",
+            "platepile"
+        };
+
+        // ============================================================
+        // TORCH AMBIENT
+        // Adds ambient crackling sound to placed torches.
+        // Uses VS's built-in ambient sound system for clustering.
+        // Mono downmixed by our LoadSoundPatch (positional = auto mono).
+        // ============================================================
+
+        /// <summary>
+        /// Section header visible in JSON config file.
+        /// </summary>
+        public string _TorchAmbientSystem { get; set; } = "--- Ambient crackling for placed torches. Uses VS ambient clustering. ---";
+
+        /// <summary>
+        /// Master toggle for torch ambient sounds.
+        /// When enabled: placed lit torches emit a quiet crackling loop.
+        /// Extinct/unlit torches are automatically excluded.
+        /// </summary>
+        public bool EnableTorchAmbient { get; set; } = true;
+
+        /// <summary>
+        /// Base volume for torch ambient sounds (returned by GetAmbientSoundStrength).
+        /// Lower than held torch to avoid overwhelming nearby areas.
+        /// </summary>
+        public float TorchAmbientVolume { get; set; } = 0.12f;
+
+        /// <summary>
+        /// Sound asset path for torch ambient. Uses vanilla fire crackling.
+        /// Format: "domain:path" (without .ogg extension).
+        /// </summary>
+        public string TorchAmbientSoundPath { get; set; } = "game:sounds/environment/fireplace";
+
+        /// <summary>
+        /// Block code patterns that are considered lit torches.
+        /// Matched as prefix against block.Code.Path.
+        /// Blocks matching these AND containing "extinct" are excluded.
+        /// </summary>
+        public string[] TorchBlockPatterns { get; set; } = new string[]
+        {
+            "torch",
+            "walltorch"
+        };
+
+        // ============================================================
         // PERFORMANCE
         // Per-tick processing budget to prevent frame drops during
         // spike scenarios (teleport, block break mass invalidation).
