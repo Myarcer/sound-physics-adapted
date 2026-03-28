@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
@@ -105,7 +106,7 @@ namespace soundphysicsadapted
         // Only far sounds (>48 blocks) get TTL — close/medium invalidate via key change
         private const long FAR_TTL_MS = 5000;  // 5s for far sounds only
 
-        private Dictionary<long, ReverbCellEntry> cells;
+        private ConcurrentDictionary<long, ReverbCellEntry> cells;
 
         // Stats
         private long totalHits = 0;
@@ -114,7 +115,7 @@ namespace soundphysicsadapted
 
         public ReverbCellCache()
         {
-            cells = new Dictionary<long, ReverbCellEntry>(64);
+            cells = new ConcurrentDictionary<long, ReverbCellEntry>();
         }
 
         // === Composite key computation ===
@@ -201,7 +202,7 @@ namespace soundphysicsadapted
             {
                 if (currentTimeMs - entry.CreatedTimeMs > FAR_TTL_MS)
                 {
-                    cells.Remove(key);
+                    cells.TryRemove(key, out _);
                     canStore = true;
                     totalMisses++;
                     return null;
@@ -243,7 +244,6 @@ namespace soundphysicsadapted
             long key = PackCompositeKey(soundPos, playerPos, distance);
 
             // Only store if no existing entry (don't overwrite valid entries)
-            if (cells.ContainsKey(key)) return;
 
             var entry = new ReverbCellEntry();
             entry.Reverb = reverb;
@@ -274,7 +274,8 @@ namespace soundphysicsadapted
             entry.HasDirectAirspace = hasDirectAirspace;
             entry.UseCount = 1;
 
-            cells[key] = entry;
+            // TryAdd is atomic — if another thread stored this key first, we just discard ours
+            if (!cells.TryAdd(key, entry)) return;
 
             int sCellX = (int)Math.Floor(soundPos.X / SOUND_CELL_SIZE);
             int sCellY = (int)Math.Floor(soundPos.Y / SOUND_CELL_SIZE);
@@ -330,7 +331,7 @@ namespace soundphysicsadapted
             if (toRemove != null)
             {
                 foreach (var key in toRemove)
-                    cells.Remove(key);
+                    cells.TryRemove(key, out _);
                 if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
                     SoundPhysicsAdaptedModSystem.DebugLog(
                         $"[CELL-CACHE] INVALIDATE {toRemove.Count} entries near ({targetCellX},{targetCellY},{targetCellZ}) reason=block_change");
@@ -360,7 +361,7 @@ namespace soundphysicsadapted
             if (toRemove != null)
             {
                 foreach (var key in toRemove)
-                    cells.Remove(key);
+                    cells.TryRemove(key, out _);
             }
         }
 
@@ -402,7 +403,7 @@ namespace soundphysicsadapted
             if (expired != null)
             {
                 foreach (var key in expired)
-                    cells.Remove(key);
+                    cells.TryRemove(key, out _);
             }
 
             // If still over limit, LRU evict down to half capacity
