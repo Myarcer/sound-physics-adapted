@@ -713,13 +713,14 @@ namespace soundphysicsadapted
         /// Base volume for torch ambient sounds (returned by GetAmbientSoundStrength).
         /// Lower than held torch to avoid overwhelming nearby areas.
         /// </summary>
-        public float TorchAmbientVolume { get; set; } = 0.12f;
+        public float TorchAmbientVolume { get; set; } = 0.25f;
 
         /// <summary>
-        /// Sound asset path for torch ambient. Uses vanilla fire crackling.
+        /// Sound asset path for torch ambient. Uses the same idle crackling
+        /// sound that plays when a player holds a torch in hand.
         /// Format: "domain:path" (without .ogg extension).
         /// </summary>
-        public string TorchAmbientSoundPath { get; set; } = "game:sounds/environment/fireplace";
+        public string TorchAmbientSoundPath { get; set; } = "game:sounds/held/torch-idle";
 
         /// <summary>
         /// Block code patterns that are considered lit torches.
