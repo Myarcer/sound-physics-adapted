@@ -416,7 +416,7 @@ namespace soundphysicsadapted
                     lruList.Add((kvp.Key, kvp.Value.LastUsedTimeMs));
                 lruList.Sort((a, b) => a.lastUsed.CompareTo(b.lastUsed));
                 for (int i = 0; i < toRemove && i < lruList.Count; i++)
-                    cells.Remove(lruList[i].key);
+                    cells.TryRemove(lruList[i].key, out _);
             }
         }
 
