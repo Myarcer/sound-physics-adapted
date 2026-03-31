@@ -86,6 +86,11 @@ namespace soundphysicsadapted
             public int ThrottleTransitionCount;
             public long ThrottleWindowStartMs;
             public bool ThrottleFrozen;
+
+            // Weighted face blending: EMA-smoothed acoustic position for ambient volumes.
+            // Prevents L/R flip-flop when multiple faces tie on occlusion.
+            public Vec3d SmoothedAcousticPos;
+            public bool HasSmoothedAcousticPos;
         }
 
         private Dictionary<ILoadedSound, SoundCacheEntry> soundCache = new Dictionary<ILoadedSound, SoundCacheEntry>();
@@ -555,42 +560,89 @@ namespace soundphysicsadapted
             // All blocks (including doors) are treated uniformly — AABB collision geometry
             // determines occlusion naturally. No special door handling.
 
-            // AMBIENT FACE SAMPLING: For ambient volume sounds (beehives, water, lava),
-            // VS repositions the sound to the nearest bbox surface — which may land on an
-            // occluded face while other faces have clear LOS. Sample all player-facing face
-            // centers and use the least-occluded one as the acoustic origin for DDA.
+            // AMBIENT WEIGHTED FACE BLENDING: For ambient volume sounds (beehives, water, lava),
+            // VS positions the sound at the nearest bbox surface — which may land on an occluded
+            // face. We multi-sample all player-facing faces and compute a weighted average position
+            // where weight = max(0, 1 - occlusion). This eliminates face-flip L/R panning artifacts
+            // because tied faces naturally blend to the corner between them, and partially occluded
+            // faces contribute proportionally less.
             bool isAmbientVolume = sound.Params?.SoundType == EnumSoundType.Ambient;
             Vec3d acousticPos = soundPos;
 
             if (isAmbientVolume)
             {
-                var candidates = AmbientSoundPatches.GetFaceCandidates(sound, out int candidateCount);
-                if (candidates != null && candidateCount > 0)
-                {
-                    // Screen candidates with cheap single-ray DDA.
-                    // Pick the face with the clearest path to the player.
-                    float bestOcc = float.MaxValue;
-                    Vec3d bestPos = soundPos;
+                var samples = AmbientSoundPatches.GetFaceSamples(sound, out int sampleCount, out bool playerInside);
 
-                    for (int i = 0; i < candidateCount; i++)
+                if (playerInside)
+                {
+                    // Player is inside the volume — use VS's native positioning (centered/stereo).
+                    // acousticPos stays as soundPos, which VS already placed at the player.
+                    acousticPos = soundPos;
+                }
+                else if (samples != null && sampleCount > 0)
+                {
+                    // Multi-sample weighted blending:
+                    // For each sample point, DDA to player gives occlusion.
+                    // Weight = max(0, 1 - occlusion). Clear samples get weight 1.0,
+                    // fully occluded get 0. The acoustic position is the weighted average
+                    // of face centers, where each face center's weight is the average
+                    // clarity of its samples (fraction unoccluded).
+
+                    // Accumulate per-face-center weights
+                    // We use a simple approach: weight each sample's face center by sample clarity.
+                    double weightedX = 0, weightedY = 0, weightedZ = 0;
+                    double totalWeight = 0;
+                    int testedCount = 0;
+
+                    for (int i = 0; i < sampleCount; i++)
                     {
-                        float candOcc = OcclusionCalculator.CalculatePathOcclusion(
-                            candidates[i], playerPos, blockAccessor);
-                        if (candOcc < bestOcc)
-                        {
-                            bestOcc = candOcc;
-                            bestPos = candidates[i];
-                            if (bestOcc <= 0f) break; // fully clear, no point checking more
-                        }
+                        float sampleOcc = OcclusionCalculator.CalculatePathOcclusion(
+                            samples[i].SamplePoint, playerPos, blockAccessor);
+                        float clarity = Math.Max(0f, 1f - sampleOcc);
+
+                        var fc = samples[i].FaceCenter;
+                        weightedX += fc.X * clarity;
+                        weightedY += fc.Y * clarity;
+                        weightedZ += fc.Z * clarity;
+                        totalWeight += clarity;
+                        testedCount++;
                     }
 
-                    acousticPos = bestPos;
+                    if (totalWeight > 0.001)
+                    {
+                        double invW = 1.0 / totalWeight;
+                        var rawPos = new Vec3d(weightedX * invW, weightedY * invW, weightedZ * invW);
+
+                        // EMA temporal smoothing to prevent any residual jitter.
+                        // Alpha 0.15 = ~300ms convergence at 50ms ticks.
+                        const float ACOUSTIC_POS_EMA = 0.15f;
+                        if (cache.HasSmoothedAcousticPos)
+                        {
+                            var prev = cache.SmoothedAcousticPos;
+                            acousticPos = new Vec3d(
+                                prev.X + (rawPos.X - prev.X) * ACOUSTIC_POS_EMA,
+                                prev.Y + (rawPos.Y - prev.Y) * ACOUSTIC_POS_EMA,
+                                prev.Z + (rawPos.Z - prev.Z) * ACOUSTIC_POS_EMA);
+                        }
+                        else
+                        {
+                            acousticPos = rawPos;
+                        }
+
+                        cache.SmoothedAcousticPos = acousticPos;
+                        cache.HasSmoothedAcousticPos = true;
+                    }
+                    else
+                    {
+                        // All samples fully occluded — use VS position as fallback
+                        acousticPos = soundPos;
+                    }
 
                     if (updatedThisTick == 0)
                     {
                         if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[AMBIENT-FACE] {soundName} tested {candidateCount} faces, bestOcc={bestOcc:F2} " +
+                                $"[AMBIENT-BLEND] {soundName} tested {testedCount} samples, totalW={totalWeight:F2} " +
                                 $"pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
                     }
                 }
