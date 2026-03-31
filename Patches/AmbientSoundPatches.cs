@@ -167,10 +167,12 @@ namespace soundphysicsadapted
                 {
                     if (bboxObj is not Cuboidi bbox) continue;
 
-                    // Check if player is inside this bbox
-                    if (playerX >= bbox.X1 && playerX <= bbox.X2 &&
-                        playerY >= bbox.Y1 && playerY <= bbox.Y2 &&
-                        playerZ >= bbox.Z1 && playerZ <= bbox.Z2)
+                    // Check if player is inside this bbox.
+                    // Cuboidi uses integer block positions: a block at X2 occupies [X2, X2+1) in world space.
+                    // Player position is float, so upper bound must be exclusive at blockCoord+1.
+                    if (playerX >= bbox.X1 && playerX <= bbox.X2 + 1 &&
+                        playerY >= bbox.Y1 && playerY <= bbox.Y2 + 1 &&
+                        playerZ >= bbox.Z1 && playerZ <= bbox.Z2 + 1)
                     {
                         playerInside = true;
                         break; // No need to sample faces when inside

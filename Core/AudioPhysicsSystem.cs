@@ -560,14 +560,16 @@ namespace soundphysicsadapted
             // All blocks (including doors) are treated uniformly — AABB collision geometry
             // determines occlusion naturally. No special door handling.
 
-            // AMBIENT WEIGHTED FACE BLENDING: For ambient volume sounds (beehives, water, lava),
+            // AMBIENT FACE-SAMPLED OCCLUSION: For ambient volume sounds (beehives, water, lava),
             // VS positions the sound at the nearest bbox surface — which may land on an occluded
-            // face. We multi-sample all player-facing faces and compute a weighted average position
-            // where weight = max(0, 1 - occlusion). This eliminates face-flip L/R panning artifacts
-            // because tied faces naturally blend to the corner between them, and partially occluded
-            // faces contribute proportionally less.
+            // face. We multi-sample all player-facing faces to determine:
+            //   1. Acoustic position = face center with highest total clarity (ON the surface)
+            //   2. Occlusion = derived directly from sample clarity (no second DDA needed)
+            // This avoids the interior-point bug where averaging face centers produces a point
+            // inside the bbox volume that always hits the volume's own blocks.
             bool isAmbientVolume = sound.Params?.SoundType == EnumSoundType.Ambient;
             Vec3d acousticPos = soundPos;
+            float ambientDerivedOcclusion = -1f; // -1 = not computed (use normal Calculate path)
 
             if (isAmbientVolume)
             {
@@ -575,45 +577,78 @@ namespace soundphysicsadapted
 
                 if (playerInside)
                 {
-                    // Player is inside the volume — use VS's native positioning (centered/stereo).
-                    // acousticPos stays as soundPos, which VS already placed at the player.
+                    // Player is inside the volume — no occlusion, VS handles positioning natively.
                     acousticPos = soundPos;
+                    ambientDerivedOcclusion = 0f;
                 }
                 else if (samples != null && sampleCount > 0)
                 {
-                    // Multi-sample weighted blending:
-                    // For each sample point, DDA to player gives occlusion.
-                    // Weight = max(0, 1 - occlusion). Clear samples get weight 1.0,
-                    // fully occluded get 0. The acoustic position is the weighted average
-                    // of face centers, where each face center's weight is the average
-                    // clarity of its samples (fraction unoccluded).
+                    // Per-sample DDA gives occlusion from each surface point to player.
+                    // We aggregate per face center: find the face with best (highest) total clarity.
+                    // Acoustic position = that face center (on the surface, never interior).
+                    // Overall occlusion = 1 - (average clarity across ALL samples).
 
-                    // Accumulate per-face-center weights
-                    // We use a simple approach: weight each sample's face center by sample clarity.
-                    double weightedX = 0, weightedY = 0, weightedZ = 0;
-                    double totalWeight = 0;
+                    // Track best face center and accumulate overall clarity
+                    Vec3d bestFaceCenter = null;
+                    double bestFaceClarity = -1;
+                    double totalClarity = 0;
                     int testedCount = 0;
+
+                    // Track per-face-center clarity accumulation
+                    // Face centers are shared by multiple samples — aggregate by reference equality
+                    double currentFaceClaritySum = 0;
+                    int currentFaceSampleCount = 0;
+                    Vec3d currentFaceCenter = null;
 
                     for (int i = 0; i < sampleCount; i++)
                     {
+                        var fc = samples[i].FaceCenter;
+
+                        // Detect face center change (samples are grouped by face from AddFaceSamples)
+                        if (currentFaceCenter == null || fc != currentFaceCenter)
+                        {
+                            // Finalize previous face
+                            if (currentFaceCenter != null && currentFaceSampleCount > 0)
+                            {
+                                double avgClarity = currentFaceClaritySum / currentFaceSampleCount;
+                                if (avgClarity > bestFaceClarity)
+                                {
+                                    bestFaceClarity = avgClarity;
+                                    bestFaceCenter = currentFaceCenter;
+                                }
+                            }
+                            currentFaceCenter = fc;
+                            currentFaceClaritySum = 0;
+                            currentFaceSampleCount = 0;
+                        }
+
                         float sampleOcc = OcclusionCalculator.CalculatePathOcclusion(
                             samples[i].SamplePoint, playerPos, blockAccessor);
                         float clarity = Math.Max(0f, 1f - sampleOcc);
 
-                        var fc = samples[i].FaceCenter;
-                        weightedX += fc.X * clarity;
-                        weightedY += fc.Y * clarity;
-                        weightedZ += fc.Z * clarity;
-                        totalWeight += clarity;
+                        currentFaceClaritySum += clarity;
+                        currentFaceSampleCount++;
+                        totalClarity += clarity;
                         testedCount++;
                     }
 
-                    if (totalWeight > 0.001)
+                    // Finalize last face
+                    if (currentFaceCenter != null && currentFaceSampleCount > 0)
                     {
-                        double invW = 1.0 / totalWeight;
-                        var rawPos = new Vec3d(weightedX * invW, weightedY * invW, weightedZ * invW);
+                        double avgClarity = currentFaceClaritySum / currentFaceSampleCount;
+                        if (avgClarity > bestFaceClarity)
+                        {
+                            bestFaceClarity = avgClarity;
+                            bestFaceCenter = currentFaceCenter;
+                        }
+                    }
 
-                        // EMA temporal smoothing to prevent any residual jitter.
+                    if (bestFaceCenter != null && testedCount > 0)
+                    {
+                        // Acoustic position = best face center (on the surface)
+                        var rawPos = bestFaceCenter;
+
+                        // EMA temporal smoothing to prevent face-flip jitter.
                         // Alpha 0.15 = ~300ms convergence at 50ms ticks.
                         const float ACOUSTIC_POS_EMA = 0.15f;
                         if (cache.HasSmoothedAcousticPos)
@@ -631,24 +666,34 @@ namespace soundphysicsadapted
 
                         cache.SmoothedAcousticPos = acousticPos;
                         cache.HasSmoothedAcousticPos = true;
+
+                        // Occlusion derived directly from sample data.
+                        // Average clarity across all samples = fraction of clear paths.
+                        double avgOverallClarity = totalClarity / testedCount;
+                        ambientDerivedOcclusion = (float)(1.0 - avgOverallClarity);
                     }
                     else
                     {
                         // All samples fully occluded — use VS position as fallback
                         acousticPos = soundPos;
+                        ambientDerivedOcclusion = 1f;
                     }
 
                     if (updatedThisTick == 0)
                     {
                         if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[AMBIENT-BLEND] {soundName} tested {testedCount} samples, totalW={totalWeight:F2} " +
-                                $"pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
+                                $"[AMBIENT-BLEND] {soundName} tested {testedCount} samples, bestFaceClarity={bestFaceClarity:F2} " +
+                                $"derivedOcc={ambientDerivedOcclusion:F2} pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
                     }
                 }
             }
 
-            float occlusion = OcclusionCalculator.Calculate(acousticPos, playerPos, blockAccessor);
+            // For ambient volumes with sample-derived occlusion, skip the redundant DDA.
+            // The sample data already accounts for all paths from surface to player.
+            float occlusion = ambientDerivedOcclusion >= 0f
+                ? ambientDerivedOcclusion
+                : OcclusionCalculator.Calculate(acousticPos, playerPos, blockAccessor);
 
             // Per-sound penetration override: gameplay-critical sounds (bells, temporal rifts)
             // get reduced occlusion so they remain audible through thick walls.
