@@ -87,10 +87,11 @@ namespace soundphysicsadapted
             public long ThrottleWindowStartMs;
             public bool ThrottleFrozen;
 
-            // Weighted face blending: EMA-smoothed acoustic position for ambient volumes.
-            // Prevents L/R flip-flop when multiple faces tie on occlusion.
+            // Face-sampled acoustic position for ambient volumes.
+            // EMA-smoothed to prevent jitter; hysteresis prevents face-flip L/R panning.
             public Vec3d SmoothedAcousticPos;
             public bool HasSmoothedAcousticPos;
+            public Vec3d CurrentBestFaceCenter; // For hysteresis: don't switch unless significantly better
         }
 
         private Dictionary<ILoadedSound, SoundCacheEntry> soundCache = new Dictionary<ILoadedSound, SoundCacheEntry>();
@@ -580,22 +581,33 @@ namespace soundphysicsadapted
                     // Player is inside the volume — no occlusion, VS handles positioning natively.
                     acousticPos = soundPos;
                     ambientDerivedOcclusion = 0f;
+
+                    if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"[AMBIENT-INSIDE] {soundName} playerInside=true, occ=0, using vanilla pos");
                 }
                 else if (samples != null && sampleCount > 0)
                 {
                     // Per-sample DDA gives occlusion from each surface point to player.
-                    // We aggregate per face center: find the face with best (highest) total clarity.
-                    // Acoustic position = that face center (on the surface, never interior).
-                    // Overall occlusion = 1 - (average clarity across ALL samples).
+                    // We aggregate per face center to find the face with best clarity.
+                    //
+                    // KEY DESIGN: Occlusion = 1 - bestFaceClarity (clearest path), NOT average
+                    // of all faces. Back-faces traverse the entire volume and would drag the
+                    // average up, causing false muffling when standing right next to a clear face.
+                    //
+                    // Position = best face center with hysteresis to prevent L/R flip-flop.
 
-                    // Track best face center and accumulate overall clarity
+                    // Hysteresis threshold: don't switch face unless new one is this much better.
+                    const double FACE_SWITCH_THRESHOLD = 0.15;
+
                     Vec3d bestFaceCenter = null;
                     double bestFaceClarity = -1;
-                    double totalClarity = 0;
                     int testedCount = 0;
 
+                    // Also track clarity for the current (hysteresis) face
+                    double currentLockedFaceClarity = -1;
+
                     // Track per-face-center clarity accumulation
-                    // Face centers are shared by multiple samples — aggregate by reference equality
                     double currentFaceClaritySum = 0;
                     int currentFaceSampleCount = 0;
                     Vec3d currentFaceCenter = null;
@@ -616,6 +628,14 @@ namespace soundphysicsadapted
                                     bestFaceClarity = avgClarity;
                                     bestFaceCenter = currentFaceCenter;
                                 }
+                                // Track if this is the locked face from last tick
+                                if (cache.CurrentBestFaceCenter != null &&
+                                    currentFaceCenter.X == cache.CurrentBestFaceCenter.X &&
+                                    currentFaceCenter.Y == cache.CurrentBestFaceCenter.Y &&
+                                    currentFaceCenter.Z == cache.CurrentBestFaceCenter.Z)
+                                {
+                                    currentLockedFaceClarity = avgClarity;
+                                }
                             }
                             currentFaceCenter = fc;
                             currentFaceClaritySum = 0;
@@ -628,7 +648,6 @@ namespace soundphysicsadapted
 
                         currentFaceClaritySum += clarity;
                         currentFaceSampleCount++;
-                        totalClarity += clarity;
                         testedCount++;
                     }
 
@@ -641,36 +660,56 @@ namespace soundphysicsadapted
                             bestFaceClarity = avgClarity;
                             bestFaceCenter = currentFaceCenter;
                         }
+                        if (cache.CurrentBestFaceCenter != null &&
+                            currentFaceCenter.X == cache.CurrentBestFaceCenter.X &&
+                            currentFaceCenter.Y == cache.CurrentBestFaceCenter.Y &&
+                            currentFaceCenter.Z == cache.CurrentBestFaceCenter.Z)
+                        {
+                            currentLockedFaceClarity = avgClarity;
+                        }
                     }
 
                     if (bestFaceCenter != null && testedCount > 0)
                     {
-                        // Acoustic position = best face center (on the surface)
-                        var rawPos = bestFaceCenter;
+                        // Face hysteresis: keep current face unless new one is significantly better.
+                        // Prevents L/R oscillation when two faces have similar clarity.
+                        Vec3d chosenFace = bestFaceCenter;
+                        double chosenClarity = bestFaceClarity;
 
-                        // EMA temporal smoothing to prevent face-flip jitter.
+                        if (cache.CurrentBestFaceCenter != null && currentLockedFaceClarity >= 0)
+                        {
+                            // Stick with current face unless new face exceeds it by threshold
+                            if (bestFaceClarity - currentLockedFaceClarity < FACE_SWITCH_THRESHOLD)
+                            {
+                                chosenFace = cache.CurrentBestFaceCenter;
+                                chosenClarity = currentLockedFaceClarity;
+                            }
+                        }
+                        cache.CurrentBestFaceCenter = chosenFace;
+
+                        // EMA temporal smoothing on position.
                         // Alpha 0.15 = ~300ms convergence at 50ms ticks.
                         const float ACOUSTIC_POS_EMA = 0.15f;
                         if (cache.HasSmoothedAcousticPos)
                         {
                             var prev = cache.SmoothedAcousticPos;
                             acousticPos = new Vec3d(
-                                prev.X + (rawPos.X - prev.X) * ACOUSTIC_POS_EMA,
-                                prev.Y + (rawPos.Y - prev.Y) * ACOUSTIC_POS_EMA,
-                                prev.Z + (rawPos.Z - prev.Z) * ACOUSTIC_POS_EMA);
+                                prev.X + (chosenFace.X - prev.X) * ACOUSTIC_POS_EMA,
+                                prev.Y + (chosenFace.Y - prev.Y) * ACOUSTIC_POS_EMA,
+                                prev.Z + (chosenFace.Z - prev.Z) * ACOUSTIC_POS_EMA);
                         }
                         else
                         {
-                            acousticPos = rawPos;
+                            acousticPos = chosenFace;
                         }
 
                         cache.SmoothedAcousticPos = acousticPos;
                         cache.HasSmoothedAcousticPos = true;
 
-                        // Occlusion derived directly from sample data.
-                        // Average clarity across all samples = fraction of clear paths.
-                        double avgOverallClarity = totalClarity / testedCount;
-                        ambientDerivedOcclusion = (float)(1.0 - avgOverallClarity);
+                        // Occlusion = 1 - bestFaceClarity (clearest path to player).
+                        // Using the best face, not average of all faces, because back-face
+                        // samples traverse the volume interior and inflate occlusion falsely.
+                        ambientDerivedOcclusion = (float)(1.0 - chosenClarity);
                     }
                     else
                     {
