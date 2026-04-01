@@ -3,6 +3,7 @@ using Vintagestory.API.Client;
 using Vintagestory.API.Server;
 using Vintagestory.API.MathTools;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Linq;
@@ -513,6 +514,14 @@ namespace soundphysicsadapted
                 _warmupTicksRemaining = WARMUP_TICKS;
                 DiagnosticLog($"WORLD-READY: LevelFinalize fired. Warming up for {WARMUP_TICKS} ticks before enabling raycasting.");
                 api.Logger.Notification("[SoundPhysicsAdapted] World ready — warmup started, raycasting deferred");
+
+                // DIAGNOSTIC: Dump beehive entries from soundAudioData after a delay
+                long diagId = 0;
+                diagId = api.Event.RegisterGameTickListener((float dt) =>
+                {
+                    api.Event.UnregisterGameTickListener(diagId);
+                    DumpBeehiveSoundDiag(api);
+                }, 3000); // 3 second delay to let CatalogSounds finish
             };
 
             // Phase 3: Initialize reverb effect system
@@ -1155,6 +1164,119 @@ namespace soundphysicsadapted
         public static void DiagnosticLog(string message)
         {
             clientApi?.Logger.Debug($"[SPA-DIAG] {message}");
+        }
+
+        /// <summary>
+        /// OVERRIDE DIAGNOSTIC: Dump all soundAudioData entries containing "beehive"
+        /// to verify whether mod override is actually present in the sound cache.
+        /// </summary>
+        private static void DumpBeehiveSoundDiag(ICoreClientAPI api)
+        {
+            try
+            {
+                // Get soundAudioData via reflection (same approach as LoadSoundPatch)
+                Type screenManagerType = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    screenManagerType = asm.GetType("Vintagestory.Client.ScreenManager")
+                                     ?? asm.GetType("Vintagestory.Client.NoObf.ScreenManager");
+                    if (screenManagerType != null) break;
+                }
+                if (screenManagerType == null)
+                {
+                    api.Logger.Notification("[SPA-BEEHIVE-DIAG] Could not find ScreenManager type");
+                    return;
+                }
+
+                var field = screenManagerType.GetField("soundAudioData",
+                    BindingFlags.Public | BindingFlags.Static);
+                if (field == null)
+                {
+                    api.Logger.Notification("[SPA-BEEHIVE-DIAG] Could not find soundAudioData field");
+                    return;
+                }
+
+                var dictObj = field.GetValue(null);
+                if (dictObj == null)
+                {
+                    api.Logger.Notification("[SPA-BEEHIVE-DIAG] soundAudioData is null");
+                    return;
+                }
+
+                // Use dynamic to iterate since we may not have direct type access
+                var dictType = dictObj.GetType();
+                int count = (int)dictType.GetProperty("Count").GetValue(dictObj);
+                api.Logger.Notification($"[SPA-BEEHIVE-DIAG] soundAudioData has {count} total entries");
+
+                int found = 0;
+                // Iterate using IEnumerable
+                foreach (dynamic kvp in (System.Collections.IEnumerable)dictObj)
+                {
+                    AssetLocation key = kvp.Key;
+                    object audioData = kvp.Value;
+
+                    if (key.Path != null && key.Path.Contains("beehive"))
+                    {
+                        found++;
+                        // Use reflection to get AudioMetaData properties
+                        var adType = audioData.GetType();
+                        var assetProp = adType.GetProperty("Asset");
+                        var channelsProp = adType.GetProperty("Channels");
+                        var rateProp = adType.GetProperty("Rate");
+                        var loadedPropInfo = adType.GetProperty("Loaded");
+                        var loadedFieldInfo = loadedPropInfo == null ? adType.GetField("Loaded") : null;
+
+                        object asset = assetProp?.GetValue(audioData);
+                        int channels = channelsProp != null ? (int)channelsProp.GetValue(audioData) : -1;
+                        int rate = rateProp != null ? (int)rateProp.GetValue(audioData) : -1;
+                        int loaded = -1;
+                        if (loadedPropInfo != null) loaded = (int)loadedPropInfo.GetValue(audioData);
+                        else if (loadedFieldInfo != null) loaded = (int)loadedFieldInfo.GetValue(audioData);
+
+                        string originInfo = "unknown";
+                        string assetLocStr = "n/a";
+                        int dataSize = -1;
+
+                        if (asset != null)
+                        {
+                            var iasset = asset as IAsset;
+                            if (iasset != null)
+                            {
+                                originInfo = iasset.Origin?.OriginPath ?? "null-origin";
+                                assetLocStr = iasset.Location?.ToString() ?? "null-loc";
+                                dataSize = iasset.Data?.Length ?? -1;
+                            }
+                        }
+
+                        api.Logger.Notification(
+                            $"[SPA-BEEHIVE-DIAG] KEY={key.Domain}:{key.Path} | " +
+                            $"AssetLoc={assetLocStr} | Origin={originInfo} | DataLen={dataSize} | " +
+                            $"Channels={channels} | Rate={rate} | Loaded={loaded}");
+                    }
+                }
+
+                if (found == 0)
+                {
+                    api.Logger.Notification("[SPA-BEEHIVE-DIAG] NO beehive entries found in soundAudioData!");
+
+                    // Dump all keys that contain "creature" for comparison
+                    int creatureCount = 0;
+                    foreach (dynamic kvp in (System.Collections.IEnumerable)dictObj)
+                    {
+                        AssetLocation key = kvp.Key;
+                        if (key.Path != null && key.Path.Contains("creature"))
+                        {
+                            creatureCount++;
+                            api.Logger.Notification($"[SPA-BEEHIVE-DIAG] CREATURE: {key.Domain}:{key.Path}");
+                        }
+                    }
+                    api.Logger.Notification($"[SPA-BEEHIVE-DIAG] Found {creatureCount} creature sound entries total");
+                }
+            }
+            catch (Exception ex)
+            {
+                api.Logger.Error($"[SPA-BEEHIVE-DIAG] Error: {ex}");
+            }
         }
 
         /// <summary>

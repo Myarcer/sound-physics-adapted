@@ -28,13 +28,15 @@ namespace soundphysicsadapted.Core
         public static void Initialize(ICoreAPI api, SoundPhysicsConfig config)
         {
             if (initialized) return;
+            initialized = true;
 
             activeOverrides.Clear();
+
+            api.Logger.Notification("[SoundPhysicsAdapted] SoundOverrideManager.Initialize() called");
 
             if (!config.EnableSoundOverrides)
             {
                 api.Logger.Notification("[SoundPhysicsAdapted] Sound overrides: DISABLED (set EnableSoundOverrides=true to enable)");
-                initialized = true;
                 return;
             }
 
@@ -54,7 +56,7 @@ namespace soundphysicsadapted.Core
                 api.Logger.Notification($"[SoundPhysicsAdapted] Sound overrides: ENABLED ({activeOverrides.Count} sounds)");
                 foreach (var path in activeOverrides)
                 {
-                    api.Logger.Debug($"[SoundPhysicsAdapted]   Override active: {path}");
+                    api.Logger.Notification($"[SoundPhysicsAdapted]   Override active: {path}");
                 }
             }
             else
@@ -62,7 +64,23 @@ namespace soundphysicsadapted.Core
                 api.Logger.Notification("[SoundPhysicsAdapted] Sound overrides: Enabled but no individual overrides active");
             }
 
-            initialized = true;
+            // Verify asset resolution — check which origin actually provides the beehive sound
+            try
+            {
+                var beehiveAsset = api.Assets.TryGet(new AssetLocation("survival", "sounds/creature/beehive-wild.ogg"));
+                if (beehiveAsset != null)
+                {
+                    api.Logger.Notification($"[SoundPhysicsAdapted] Beehive asset resolved: origin={beehiveAsset.Origin?.OriginPath ?? "unknown"}, size={beehiveAsset.Data?.Length ?? -1} bytes");
+                }
+                else
+                {
+                    api.Logger.Warning("[SoundPhysicsAdapted] Beehive asset NOT FOUND via TryGet - override may not work!");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                api.Logger.Warning($"[SoundPhysicsAdapted] Beehive asset check failed: {ex.Message}");
+            }
         }
 
         /// <summary>
