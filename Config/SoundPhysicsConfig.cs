@@ -404,13 +404,13 @@ namespace soundphysicsadapted
         /// Override vanilla beehive-wild.ogg with improved version.
         /// Requires EnableSoundOverrides=true.
         /// </summary>
-        public bool OverrideBeehiveSound { get; set; } = true;
+        public bool OverrideBeehiveSound { get; set; } = false;
 
         /// <summary>
         /// Override vanilla lightning-nodistance.ogg with louder version.
         /// Requires EnableSoundOverrides=true.
         /// </summary>
-        public bool OverrideLightningSound { get; set; } = true;
+        public bool OverrideLightningSound { get; set; } = false;
 
         // ============================================================
         // RESONATOR ENHANCEMENTS
