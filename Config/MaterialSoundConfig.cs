@@ -15,7 +15,7 @@ namespace soundphysicsadapted
         /// Current material config version. Any saved config below this is regenerated from defaults.
         /// Bump this when changing defaults that should apply to all users.
         /// </summary>
-        public const int CurrentVersion = 8;
+        public const int CurrentVersion = 9;
 
         /// <summary>Config version for migration</summary>
         public int Version { get; set; } = 1;
@@ -25,6 +25,13 @@ namespace soundphysicsadapted
 
         /// <summary>Reflectivity settings (Phase 3 - how much sound bounces)</summary>
         public ReflectivitySection Reflectivity { get; set; } = new ReflectivitySection();
+
+        /// <summary>
+        /// Per-sound penetration overrides.
+        /// Allows specific sounds (by asset path pattern) to penetrate walls more than physics dictates.
+        /// Use for gameplay-critical alert sounds (bells, temporal rifts) that must be audible through walls.
+        /// </summary>
+        public SoundPenetrationSection SoundPenetration { get; set; } = new SoundPenetrationSection();
 
         // Cached compiled patterns for block overrides
         private List<(Regex pattern, float value)> _compiledOcclusionOverrides;
@@ -42,6 +49,12 @@ namespace soundphysicsadapted
 
         // Pre-cached material name lookups (avoids ToString().ToLowerInvariant() per call)
         private Dictionary<EnumBlockMaterial, float> _materialOcclusionLookup;
+
+        // Cached compiled patterns for sound penetration overrides
+        private List<(Regex pattern, SoundPenetrationOverride value)> _compiledPenetrationOverrides;
+        // Per-sound-name result cache (avoids repeated regex matching per tick)
+        private readonly Dictionary<string, SoundPenetrationOverride> _penetrationResultCache = new Dictionary<string, SoundPenetrationOverride>(64);
+        private static readonly SoundPenetrationOverride _noPenetrationOverride = new SoundPenetrationOverride { OcclusionMultiplier = 1.0f, MinFilterFloor = -1f };
 
         /// <summary>
         /// Clear the per-block-ID result cache. Called when overrides change.
@@ -286,6 +299,71 @@ namespace soundphysicsadapted
             }
         }
 
+        // ════════════════════════════════════════════════════════════════
+        // Sound Penetration Overrides — per-sound-asset occlusion scaling
+        // ════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Get penetration override for a sound by its asset path.
+        /// Returns a cached override with OcclusionMultiplier and MinFilterFloor.
+        /// Sounds without overrides get multiplier=1.0 and floor=-1 (no override).
+        /// Cached per unique sound name to avoid repeated regex on every tick.
+        /// </summary>
+        public SoundPenetrationOverride GetSoundPenetration(string soundName)
+        {
+            if (string.IsNullOrEmpty(soundName) || SoundPenetration?.Overrides == null || SoundPenetration.Overrides.Count == 0)
+                return _noPenetrationOverride;
+
+            if (_penetrationResultCache.TryGetValue(soundName, out var cached))
+                return cached;
+
+            // Cache miss — compile patterns if needed and run regex
+            EnsurePenetrationOverridesCompiled();
+
+            foreach (var (pattern, value) in _compiledPenetrationOverrides)
+            {
+                if (pattern.IsMatch(soundName))
+                {
+                    _penetrationResultCache[soundName] = value;
+                    return value;
+                }
+            }
+
+            _penetrationResultCache[soundName] = _noPenetrationOverride;
+            return _noPenetrationOverride;
+        }
+
+        private void EnsurePenetrationOverridesCompiled()
+        {
+            if (_compiledPenetrationOverrides != null) return;
+
+            _compiledPenetrationOverrides = new List<(Regex, SoundPenetrationOverride)>();
+            if (SoundPenetration?.Overrides == null) return;
+
+            foreach (var kvp in SoundPenetration.Overrides)
+            {
+                // Convert wildcard pattern to regex: "game:sounds/effect/bell*" → "^game:sounds/effect/bell.*$"
+                string pattern = "^" + Regex.Escape(kvp.Key).Replace("\\*", ".*") + "$";
+                _compiledPenetrationOverrides.Add((new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase), kvp.Value));
+            }
+        }
+
+        /// <summary>
+        /// Add or overwrite a sound penetration override at runtime.
+        /// </summary>
+        public void SetSoundPenetration(string soundPattern, float occlusionMultiplier, float minFilterFloor)
+        {
+            SoundPenetration ??= new SoundPenetrationSection();
+            SoundPenetration.Overrides ??= new Dictionary<string, SoundPenetrationOverride>();
+            SoundPenetration.Overrides[soundPattern] = new SoundPenetrationOverride
+            {
+                OcclusionMultiplier = occlusionMultiplier,
+                MinFilterFloor = minFilterFloor
+            };
+            _compiledPenetrationOverrides = null; // Force recompile
+            _penetrationResultCache.Clear();
+        }
+
         /// <summary>
         /// Create default config with all VS materials
         /// </summary>
@@ -428,6 +506,23 @@ namespace soundphysicsadapted
                         { "leaves", 0.1f },
                         { "plant", 0.1f }
                     }
+                },
+                SoundPenetration = new SoundPenetrationSection
+                {
+                    Overrides = new Dictionary<string, SoundPenetrationOverride>
+                    {
+                        // Bells — proximity alert triggers that spawn enemies.
+                        // Players behind 4-5 stone walls must still hear the activation.
+                        // 0.25 multiplier: 4 stone walls (occ=4.0) acts like 1 wall (occ=1.0).
+                        // 0.15 floor: never drops below 15% audibility.
+                        { "game:sounds/effect/bell*", new SoundPenetrationOverride { OcclusionMultiplier = 0.25f, MinFilterFloor = 0.15f } },
+                        // Temporal rifts — warning sounds that alert player to danger
+                        { "game:sounds/effect/temporalrift*", new SoundPenetrationOverride { OcclusionMultiplier = 0.3f, MinFilterFloor = 0.10f } },
+                        // Temporal storm horn — storm approach warning
+                        { "game:sounds/weather/storm*", new SoundPenetrationOverride { OcclusionMultiplier = 0.3f, MinFilterFloor = 0.10f } },
+                        // Harp/horn — gameplay alert instruments
+                        { "game:sounds/effect/horn*", new SoundPenetrationOverride { OcclusionMultiplier = 0.35f, MinFilterFloor = 0.08f } },
+                    }
                 }
             };
         }
@@ -453,5 +548,42 @@ namespace soundphysicsadapted
     {
         /// <summary>Reflectivity multiplier per material for reverb (Phase 3)</summary>
         public Dictionary<string, float> Materials { get; set; } = new Dictionary<string, float>();
+    }
+
+    /// <summary>
+    /// Per-sound penetration overrides.
+    /// Allows specific sounds to be heard through walls more than physics dictates.
+    /// Use for gameplay-critical alert sounds that the game expects the player to hear.
+    /// </summary>
+    public class SoundPenetrationSection
+    {
+        /// <summary>
+        /// Sound asset path pattern → penetration override.
+        /// Patterns support * wildcards (matched against sound Location path).
+        /// Example: "game:sounds/effect/bell*" matches all bell sound variants.
+        /// </summary>
+        public Dictionary<string, SoundPenetrationOverride> Overrides { get; set; } = new Dictionary<string, SoundPenetrationOverride>();
+    }
+
+    /// <summary>
+    /// Penetration override values for a matched sound pattern.
+    /// Both fields work together: multiplier reduces computed occlusion,
+    /// floor guarantees minimum audibility.
+    /// </summary>
+    public class SoundPenetrationOverride
+    {
+        /// <summary>
+        /// Multiplier applied to computed occlusion before filter conversion.
+        /// 0.0 = full bypass (no occlusion), 1.0 = normal physics (no change).
+        /// 0.25 = 4 stone walls act like 1 wall.
+        /// </summary>
+        public float OcclusionMultiplier { get; set; } = 1.0f;
+
+        /// <summary>
+        /// Minimum lowpass filter value for this sound, overriding the global MinLowPassFilter.
+        /// -1 = use global default. 0.15 = never drop below 15% audibility.
+        /// Range: -1 to 1.0.
+        /// </summary>
+        public float MinFilterFloor { get; set; } = -1f;
     }
 }

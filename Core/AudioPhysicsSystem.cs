@@ -597,6 +597,22 @@ namespace soundphysicsadapted
             }
 
             float occlusion = OcclusionCalculator.Calculate(acousticPos, playerPos, blockAccessor);
+
+            // Per-sound penetration override: gameplay-critical sounds (bells, temporal rifts)
+            // get reduced occlusion so they remain audible through thick walls.
+            var materialConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
+            var penetrationOverride = materialConfig?.GetSoundPenetration(soundName);
+            float penetrationFloor = -1f;
+            if (penetrationOverride != null && penetrationOverride.OcclusionMultiplier < 1.0f)
+            {
+                float rawOcclusion = occlusion;
+                occlusion *= penetrationOverride.OcclusionMultiplier;
+                penetrationFloor = penetrationOverride.MinFilterFloor;
+                if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                        $"[PENETRATION] {soundName} rawOcc={rawOcclusion:F2} x{penetrationOverride.OcclusionMultiplier:F2} = {occlusion:F2} floor={penetrationFloor:F2}");
+            }
+
             float directFilter = occlusion <= 0 ? 1.0f : OcclusionCalculator.OcclusionToFilter(occlusion);
 
             // Interval compensation factor for EMA smoothing below.
@@ -976,6 +992,10 @@ namespace soundphysicsadapted
 
             // Cache filter for potential future fade-out (throttle eviction).
             cache.CachedFilterForFade = finalFilter;
+
+            // Per-sound penetration floor: guarantee minimum audibility for gameplay-critical sounds.
+            if (penetrationFloor > 0f)
+                finalFilter = Math.Max(finalFilter, penetrationFloor);
 
             // Apply throttle fade-in lerp: if ThrottleFade < 1 (just got a slot back),
             // blend from minFilter toward the computed filter.

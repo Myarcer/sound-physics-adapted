@@ -171,7 +171,7 @@ namespace soundphysicsadapted
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");
-                api.Logger.Notification($"[SoundPhysicsAdapted] Material config loaded - {materialConfig.Occlusion.Materials.Count} materials, {materialConfig.Occlusion.BlockOverrides.Count} overrides, {materialConfig.Occlusion.TreatAsFullCube?.Count ?? 0} full-cube patterns");
+                api.Logger.Notification($"[SoundPhysicsAdapted] Material config loaded - {materialConfig.Occlusion.Materials.Count} materials, {materialConfig.Occlusion.BlockOverrides.Count} overrides, {materialConfig.Occlusion.TreatAsFullCube?.Count ?? 0} full-cube patterns, {materialConfig.SoundPenetration?.Overrides?.Count ?? 0} penetration overrides");
             }
             catch (Exception ex)
             {
