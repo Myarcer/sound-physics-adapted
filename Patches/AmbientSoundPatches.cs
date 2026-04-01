@@ -178,37 +178,40 @@ namespace soundphysicsadapted
                         break; // No need to sample faces when inside
                     }
 
-                    double cx = (bbox.X1 + bbox.X2) * 0.5;
-                    double cy = (bbox.Y1 + bbox.Y2) * 0.5;
-                    double cz = (bbox.Z1 + bbox.Z2) * 0.5;
+                    // Cuboidi is INCLUSIVE: block X2 occupies world [X2, X2+1).
+                    // So world extent is [X1, X2+1], world center = (X1 + X2 + 1) / 2.
+                    double cx = (bbox.X1 + bbox.X2 + 1) * 0.5;
+                    double cy = (bbox.Y1 + bbox.Y2 + 1) * 0.5;
+                    double cz = (bbox.Z1 + bbox.Z2 + 1) * 0.5;
 
-                    int sizeX = bbox.X2 - bbox.X1;
-                    int sizeY = bbox.Y2 - bbox.Y1;
-                    int sizeZ = bbox.Z2 - bbox.Z1;
+                    // Size in world blocks (inclusive: X1=10,X2=12 → 3 blocks).
+                    int sizeX = bbox.X2 - bbox.X1 + 1;
+                    int sizeY = bbox.Y2 - bbox.Y1 + 1;
+                    int sizeZ = bbox.Z2 - bbox.Z1 + 1;
 
-                    // -X face
+                    // -X face (world x = bbox.X1)
                     if (playerX < cx)
                         AddFaceSamples(bbox.X1 + FACE_INSET, cy, cz,
                             sizeX, sizeY, sizeZ, 'X', false);
-                    // +X face
+                    // +X face (world x = bbox.X2 + 1)
                     if (playerX > cx)
-                        AddFaceSamples(bbox.X2 - FACE_INSET, cy, cz,
+                        AddFaceSamples(bbox.X2 + 1 - FACE_INSET, cy, cz,
                             sizeX, sizeY, sizeZ, 'X', true);
-                    // -Y face
+                    // -Y face (world y = bbox.Y1)
                     if (playerY < cy)
                         AddFaceSamples(cx, bbox.Y1 + FACE_INSET, cz,
                             sizeX, sizeY, sizeZ, 'Y', false);
-                    // +Y face
+                    // +Y face (world y = bbox.Y2 + 1)
                     if (playerY > cy)
-                        AddFaceSamples(cx, bbox.Y2 - FACE_INSET, cz,
+                        AddFaceSamples(cx, bbox.Y2 + 1 - FACE_INSET, cz,
                             sizeX, sizeY, sizeZ, 'Y', true);
-                    // -Z face
+                    // -Z face (world z = bbox.Z1)
                     if (playerZ < cz)
                         AddFaceSamples(cx, cy, bbox.Z1 + FACE_INSET,
                             sizeX, sizeY, sizeZ, 'Z', false);
-                    // +Z face
+                    // +Z face (world z = bbox.Z2 + 1)
                     if (playerZ > cz)
-                        AddFaceSamples(cx, cy, bbox.Z2 - FACE_INSET,
+                        AddFaceSamples(cx, cy, bbox.Z2 + 1 - FACE_INSET,
                             sizeX, sizeY, sizeZ, 'Z', true);
                 }
 

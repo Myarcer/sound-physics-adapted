@@ -602,13 +602,16 @@ namespace soundphysicsadapted
 
                     Vec3d bestFaceCenter = null;
                     double bestFaceClarity = -1;
+                    double bestFaceRawOcc = 0;  // Raw (unclamped) avg occlusion for chosen face
                     int testedCount = 0;
 
-                    // Also track clarity for the current (hysteresis) face
+                    // Also track clarity + raw occ for the current (hysteresis) face
                     double currentLockedFaceClarity = -1;
+                    double currentLockedFaceRawOcc = 0;
 
-                    // Track per-face-center clarity accumulation
+                    // Track per-face-center clarity + raw occlusion accumulation
                     double currentFaceClaritySum = 0;
+                    double currentFaceRawOccSum = 0;  // Unclamped, mirrors sampleOcc directly
                     int currentFaceSampleCount = 0;
                     Vec3d currentFaceCenter = null;
 
@@ -623,9 +626,11 @@ namespace soundphysicsadapted
                             if (currentFaceCenter != null && currentFaceSampleCount > 0)
                             {
                                 double avgClarity = currentFaceClaritySum / currentFaceSampleCount;
+                                double avgRawOcc = currentFaceRawOccSum / currentFaceSampleCount;
                                 if (avgClarity > bestFaceClarity)
                                 {
                                     bestFaceClarity = avgClarity;
+                                    bestFaceRawOcc = avgRawOcc;
                                     bestFaceCenter = currentFaceCenter;
                                 }
                                 // Track if this is the locked face from last tick
@@ -635,10 +640,12 @@ namespace soundphysicsadapted
                                     currentFaceCenter.Z == cache.CurrentBestFaceCenter.Z)
                                 {
                                     currentLockedFaceClarity = avgClarity;
+                                    currentLockedFaceRawOcc = avgRawOcc;
                                 }
                             }
                             currentFaceCenter = fc;
                             currentFaceClaritySum = 0;
+                            currentFaceRawOccSum = 0;
                             currentFaceSampleCount = 0;
                         }
 
@@ -647,6 +654,7 @@ namespace soundphysicsadapted
                         float clarity = Math.Max(0f, 1f - sampleOcc);
 
                         currentFaceClaritySum += clarity;
+                        currentFaceRawOccSum += sampleOcc;  // Unclamped: preserves multi-block scale
                         currentFaceSampleCount++;
                         testedCount++;
                     }
@@ -655,9 +663,11 @@ namespace soundphysicsadapted
                     if (currentFaceCenter != null && currentFaceSampleCount > 0)
                     {
                         double avgClarity = currentFaceClaritySum / currentFaceSampleCount;
+                        double avgRawOcc = currentFaceRawOccSum / currentFaceSampleCount;
                         if (avgClarity > bestFaceClarity)
                         {
                             bestFaceClarity = avgClarity;
+                            bestFaceRawOcc = avgRawOcc;
                             bestFaceCenter = currentFaceCenter;
                         }
                         if (cache.CurrentBestFaceCenter != null &&
@@ -666,6 +676,7 @@ namespace soundphysicsadapted
                             currentFaceCenter.Z == cache.CurrentBestFaceCenter.Z)
                         {
                             currentLockedFaceClarity = avgClarity;
+                            currentLockedFaceRawOcc = avgRawOcc;
                         }
                     }
 
@@ -675,6 +686,7 @@ namespace soundphysicsadapted
                         // Prevents L/R oscillation when two faces have similar clarity.
                         Vec3d chosenFace = bestFaceCenter;
                         double chosenClarity = bestFaceClarity;
+                        double chosenRawOcc = bestFaceRawOcc;
 
                         if (cache.CurrentBestFaceCenter != null && currentLockedFaceClarity >= 0)
                         {
@@ -683,6 +695,7 @@ namespace soundphysicsadapted
                             {
                                 chosenFace = cache.CurrentBestFaceCenter;
                                 chosenClarity = currentLockedFaceClarity;
+                                chosenRawOcc = currentLockedFaceRawOcc;
                             }
                         }
                         cache.CurrentBestFaceCenter = chosenFace;
@@ -706,10 +719,13 @@ namespace soundphysicsadapted
                         cache.SmoothedAcousticPos = acousticPos;
                         cache.HasSmoothedAcousticPos = true;
 
-                        // Occlusion = 1 - bestFaceClarity (clearest path to player).
-                        // Using the best face, not average of all faces, because back-face
-                        // samples traverse the volume interior and inflate occlusion falsely.
-                        ambientDerivedOcclusion = (float)(1.0 - chosenClarity);
+                        // Use the raw (unclamped) avg occlusion of the best face.
+                        // WHY: clarity = max(0, 1-sampleOcc) clamps to 0 for sampleOcc > 1.
+                        // Using (1 - chosenClarity) caps at 1.0, but OcclusionToFilter is
+                        // exponential and expects accumulated values (e.g. 6.0 for 6 stone
+                        // blocks). Capping at 1.0 massively under-muffles vs regular sounds
+                        // that pass the full accumulated DDA value through the same formula.
+                        ambientDerivedOcclusion = (float)chosenRawOcc;
                     }
                     else
                     {
@@ -722,7 +738,7 @@ namespace soundphysicsadapted
                     {
                         if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[AMBIENT-BLEND] {soundName} tested {testedCount} samples, bestFaceClarity={bestFaceClarity:F2} " +
+                                $"[AMBIENT-BLEND] {soundName} tested {testedCount} samples, bestFaceClarity={bestFaceClarity:F2} bestRawOcc={bestFaceRawOcc:F2} " +
                                 $"derivedOcc={ambientDerivedOcclusion:F2} pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
                     }
                 }
