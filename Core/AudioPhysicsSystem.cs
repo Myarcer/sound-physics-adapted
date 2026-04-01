@@ -746,6 +746,20 @@ namespace soundphysicsadapted
                                 $"derivedOcc={ambientDerivedOcclusion:F2} pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
                     }
                 }
+                else if (volBboxes != null && volBboxCount > 0)
+                {
+                    // No face samples (e.g., rainwindow) but we have volume bboxes.
+                    // VS positioned the sound at bbox boundary — use standard DDA but exclude
+                    // the volume's own blocks so they don't self-occlude.
+                    acousticPos = soundPos; // Keep VS positioning
+                    ambientDerivedOcclusion = OcclusionCalculator.CalculatePathOcclusionExcludingBboxes(
+                        acousticPos, playerPos, blockAccessor,
+                        volBboxes, volBboxCount);
+
+                    if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"[AMBIENT-FALLBACK] {soundName} no samples, using bbox-excluded DDA, occ={ambientDerivedOcclusion:F2}");
+                }
             }
 
             // For ambient volumes with sample-derived occlusion, skip the redundant DDA.
