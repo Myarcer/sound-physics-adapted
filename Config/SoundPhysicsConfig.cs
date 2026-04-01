@@ -755,7 +755,7 @@ namespace soundphysicsadapted
         /// <summary>
         /// Block code patterns that are considered lit torches.
         /// Matched as prefix against block.Code.Path.
-        /// Blocks matching these AND containing "extinct" are excluded.
+        /// Blocks matching these AND containing "extinct" or "burnedout" are excluded.
         /// </summary>
         public string[] TorchBlockPatterns { get; set; } = new string[]
         {
