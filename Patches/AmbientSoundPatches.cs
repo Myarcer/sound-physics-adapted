@@ -192,54 +192,64 @@ namespace soundphysicsadapted
                 foreach (var bboxObj in bboxes)
                 {
                     if (bboxObj is not Cuboidi bbox) continue;
-                    _tempBboxes.Add(bbox);
+
+                    // VS stores bboxes as half-open intervals: (X, Y, Z, X+1, Y+1, Z+1)
+                    // representing block [X,X+1) x [Y,Y+1) x [Z,Z+1).
+                    // Convert to INCLUSIVE coords for DDA exclusion (subtract 1 from upper bounds).
+                    // This ensures we only exclude blocks actually inside the sound volume —
+                    // NOT adjacent blocks at +X/+Y/+Z which would cause false occ=0.
+                    var exclusionBbox = new Cuboidi(
+                        bbox.X1, bbox.Y1, bbox.Z1,
+                        bbox.X2 - 1, bbox.Y2 - 1, bbox.Z2 - 1);
+                    _tempBboxes.Add(exclusionBbox);
 
                     // Check if player is inside this bbox.
-                    // Cuboidi uses integer block positions: a block at X2 occupies [X2, X2+1) in world space.
-                    // Player position is float, so upper bound must be exclusive at blockCoord+1.
+                    // Player position is float; use original VS coords (half-open interval).
+                    // Upper bound is exclusive at blockCoord+1.
                     // Use eye Y for vertical check — that's where the listener/camera is.
-                    if (playerX >= bbox.X1 && playerX <= bbox.X2 + 1 &&
-                        playerEyeY >= bbox.Y1 && playerEyeY <= bbox.Y2 + 1 &&
-                        playerZ >= bbox.Z1 && playerZ <= bbox.Z2 + 1)
+                    if (playerX >= bbox.X1 && playerX < bbox.X2 &&
+                        playerEyeY >= bbox.Y1 && playerEyeY < bbox.Y2 &&
+                        playerZ >= bbox.Z1 && playerZ < bbox.Z2)
                     {
                         playerInside = true;
                         break; // No need to sample faces when inside
                     }
 
-                    // Cuboidi is INCLUSIVE: block X2 occupies world [X2, X2+1).
-                    // So world extent is [X1, X2+1], world center = (X1 + X2 + 1) / 2.
-                    double cx = (bbox.X1 + bbox.X2 + 1) * 0.5;
-                    double cy = (bbox.Y1 + bbox.Y2 + 1) * 0.5;
-                    double cz = (bbox.Z1 + bbox.Z2 + 1) * 0.5;
+                    // VS uses half-open interval: [X1, X2) where X2 = X1 + blockCount.
+                    // For single-block beehive at X=511910: X1=511910, X2=511911 → [511910, 511911).
+                    // World center = (X1 + X2) / 2 = 511910.5 (NOT X1 + X2 + 1).
+                    double cx = (bbox.X1 + bbox.X2) * 0.5;
+                    double cy = (bbox.Y1 + bbox.Y2) * 0.5;
+                    double cz = (bbox.Z1 + bbox.Z2) * 0.5;
 
-                    // Size in world blocks (inclusive: X1=10,X2=12 → 3 blocks).
-                    int sizeX = bbox.X2 - bbox.X1 + 1;
-                    int sizeY = bbox.Y2 - bbox.Y1 + 1;
-                    int sizeZ = bbox.Z2 - bbox.Z1 + 1;
+                    // Size in world blocks: X2 - X1 (half-open, NOT X2 - X1 + 1).
+                    int sizeX = bbox.X2 - bbox.X1;
+                    int sizeY = bbox.Y2 - bbox.Y1;
+                    int sizeZ = bbox.Z2 - bbox.Z1;
 
                     // -X face (world x = bbox.X1)
                     if (playerX < cx)
                         AddFaceSamples(bbox.X1 + FACE_INSET, cy, cz,
                             sizeX, sizeY, sizeZ, 'X', false);
-                    // +X face (world x = bbox.X2 + 1)
+                    // +X face (world x = bbox.X2)
                     if (playerX > cx)
-                        AddFaceSamples(bbox.X2 + 1 - FACE_INSET, cy, cz,
+                        AddFaceSamples(bbox.X2 - FACE_INSET, cy, cz,
                             sizeX, sizeY, sizeZ, 'X', true);
                     // -Y face (world y = bbox.Y1)
                     if (playerEyeY < cy)
                         AddFaceSamples(cx, bbox.Y1 + FACE_INSET, cz,
                             sizeX, sizeY, sizeZ, 'Y', false);
-                    // +Y face (world y = bbox.Y2 + 1)
+                    // +Y face (world y = bbox.Y2)
                     if (playerEyeY > cy)
-                        AddFaceSamples(cx, bbox.Y2 + 1 - FACE_INSET, cz,
+                        AddFaceSamples(cx, bbox.Y2 - FACE_INSET, cz,
                             sizeX, sizeY, sizeZ, 'Y', true);
                     // -Z face (world z = bbox.Z1)
                     if (playerZ < cz)
                         AddFaceSamples(cx, cy, bbox.Z1 + FACE_INSET,
                             sizeX, sizeY, sizeZ, 'Z', false);
-                    // +Z face (world z = bbox.Z2 + 1)
+                    // +Z face (world z = bbox.Z2)
                     if (playerZ > cz)
-                        AddFaceSamples(cx, cy, bbox.Z2 + 1 - FACE_INSET,
+                        AddFaceSamples(cx, cy, bbox.Z2 - FACE_INSET,
                             sizeX, sizeY, sizeZ, 'Z', true);
                 }
 
