@@ -30,8 +30,9 @@ namespace soundphysicsadapted
         private static FieldInfo _bboxField;
         private static bool _reflectionFailed;
 
-        // Reusable list to avoid allocation per tick
+        // Reusable lists to avoid allocation per tick
         private static readonly List<FaceSample> _tempSamples = new(64);
+        private static readonly List<Cuboidi> _tempBboxes = new(8);
 
         // Inset from face surface to avoid block-boundary DDA issues
         private const double FACE_INSET = 0.15;
@@ -51,6 +52,8 @@ namespace soundphysicsadapted
             public FaceSample[] Samples;
             public int Count;
             public bool PlayerInside;  // True if player is inside any bbox
+            public Cuboidi[] Bboxes;       // Volume bounding boxes for DDA exclusion
+            public int BboxCount;
         }
 
         public static void ApplyPatches(Harmony harmony, ICoreClientAPI api)
@@ -112,6 +115,21 @@ namespace soundphysicsadapted
             return null;
         }
 
+        /// <summary>
+        /// Get the bounding boxes for an ambient sound (for DDA exclusion).
+        /// </summary>
+        public static Cuboidi[] GetBboxes(ILoadedSound sound, out int bboxCount)
+        {
+            bboxCount = 0;
+            if (sound == null) return null;
+            if (_faceSamples.TryGetValue(sound, out var data))
+            {
+                bboxCount = data.BboxCount;
+                return data.Bboxes;
+            }
+            return null;
+        }
+
         // Legacy compatibility — old API still used elsewhere
         public static Vec3d[] GetFaceCandidates(ILoadedSound sound, out int count)
         {
@@ -161,17 +179,20 @@ namespace soundphysicsadapted
                 double playerZ = entityPos.Z;
 
                 // EntityPos.Y = feet position, but audio system uses eye position
-                // (Pos.XYZ + LocalEyePos). Use approximate eye height so the inside
-                // check matches the listener position the audio pipeline actually uses.
-                const double PLAYER_EYE_HEIGHT = 1.52;
-                double playerEyeY = playerY + PLAYER_EYE_HEIGHT;
+                // (Pos.XYZ + LocalEyePos). Read dynamically so mods that change
+                // player model height or allow crawling get correct results.
+                var capi = SoundPhysicsAdaptedModSystem.ClientApi;
+                double eyeOffsetY = capi?.World?.Player?.Entity?.LocalEyePos?.Y ?? 1.52;
+                double playerEyeY = playerY + eyeOffsetY;
 
                 _tempSamples.Clear();
+                _tempBboxes.Clear();
                 bool playerInside = false;
 
                 foreach (var bboxObj in bboxes)
                 {
                     if (bboxObj is not Cuboidi bbox) continue;
+                    _tempBboxes.Add(bbox);
 
                     // Check if player is inside this bbox.
                     // Cuboidi uses integer block positions: a block at X2 occupies [X2, X2+1) in world space.
@@ -222,6 +243,10 @@ namespace soundphysicsadapted
                             sizeX, sizeY, sizeZ, 'Z', true);
                 }
 
+                // Build bbox array for DDA exclusion
+                Cuboidi[] bboxArr = _tempBboxes.Count > 0 ? _tempBboxes.ToArray() : null;
+                int bboxArrCount = _tempBboxes.Count;
+
                 if (playerInside)
                 {
                     // Player inside volume — store flag, no samples needed
@@ -229,7 +254,9 @@ namespace soundphysicsadapted
                     {
                         Samples = null,
                         Count = 0,
-                        PlayerInside = true
+                        PlayerInside = true,
+                        Bboxes = bboxArr,
+                        BboxCount = bboxArrCount
                     };
                 }
                 else if (_tempSamples.Count > 0)
@@ -254,7 +281,9 @@ namespace soundphysicsadapted
                     {
                         Samples = arr,
                         Count = _tempSamples.Count,
-                        PlayerInside = false
+                        PlayerInside = false,
+                        Bboxes = bboxArr,
+                        BboxCount = bboxArrCount
                     };
                 }
                 else

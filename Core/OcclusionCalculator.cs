@@ -34,6 +34,8 @@ namespace soundphysicsadapted
         private static double _vNdy;
         private static double _vNdz;
         private static double _vLength;
+        private static Cuboidi[] _vExclusionBboxes;
+        private static int _vExclusionBboxCount;
 
         private static readonly DDABlockTraversal.BlockVisitor _runOcclusionVisitor = RunOcclusionVisitor;
 
@@ -207,6 +209,26 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Calculate path occlusion while excluding blocks inside the given bounding boxes.
+        /// Used for ambient volume sounds so a volume's own blocks don't self-occlude.
+        /// </summary>
+        public static float CalculatePathOcclusionExcludingBboxes(
+            Vec3d from, Vec3d to, IBlockAccessor blockAccessor,
+            Cuboidi[] bboxes, int bboxCount)
+        {
+            var config = SoundPhysicsAdaptedModSystem.Config;
+            if (config == null || !config.Enabled)
+                return 0f;
+
+            _vExclusionBboxes = bboxes;
+            _vExclusionBboxCount = bboxCount;
+            float result = RunOcclusion(from, to, blockAccessor, config);
+            _vExclusionBboxes = null;
+            _vExclusionBboxCount = 0;
+            return result;
+        }
+
+        /// <summary>
         /// [LEGACY] Fast path occlusion ÔÇö solid-face-only check, ignores partial blocks.
         /// Kept for reference. New code should use CalculateWeatherPathOcclusion instead.
         /// </summary>
@@ -343,6 +365,24 @@ namespace soundphysicsadapted
 
         private static bool RunOcclusionVisitor(ref DDABlockTraversal.TraversalContext ctx)
         {
+            // Skip blocks inside exclusion bounding boxes (ambient volume self-occlusion)
+            if (_vExclusionBboxCount > 0)
+            {
+                for (int i = 0; i < _vExclusionBboxCount; i++)
+                {
+                    var bbox = _vExclusionBboxes[i];
+                    // Cuboidi uses inclusive integer coords
+                    if (ctx.X >= bbox.X1 && ctx.X <= bbox.X2 &&
+                        ctx.Y >= bbox.Y1 && ctx.Y <= bbox.Y2 &&
+                        ctx.Z >= bbox.Z1 && ctx.Z <= bbox.Z2)
+                    {
+                        if (_vVerboseLog)
+                            _vDdaTrace.Append($"  DDA skip-bbox: {ctx.Block?.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) inside volume bbox\n");
+                        return false; // Continue — skip this block
+                    }
+                }
+            }
+
             Block block = ctx.Block;
 
             if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)

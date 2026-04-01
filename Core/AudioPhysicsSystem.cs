@@ -575,6 +575,7 @@ namespace soundphysicsadapted
             if (isAmbientVolume)
             {
                 var samples = AmbientSoundPatches.GetFaceSamples(sound, out int sampleCount, out bool playerInside);
+                var volBboxes = AmbientSoundPatches.GetBboxes(sound, out int volBboxCount);
 
                 if (playerInside)
                 {
@@ -649,8 +650,11 @@ namespace soundphysicsadapted
                             currentFaceSampleCount = 0;
                         }
 
-                        float sampleOcc = OcclusionCalculator.CalculatePathOcclusion(
-                            samples[i].SamplePoint, playerPos, blockAccessor);
+                        float sampleOcc = (volBboxes != null && volBboxCount > 0)
+                            ? OcclusionCalculator.CalculatePathOcclusionExcludingBboxes(
+                                samples[i].SamplePoint, playerPos, blockAccessor, volBboxes, volBboxCount)
+                            : OcclusionCalculator.CalculatePathOcclusion(
+                                samples[i].SamplePoint, playerPos, blockAccessor);
                         float clarity = Math.Max(0f, 1f - sampleOcc);
 
                         currentFaceClaritySum += clarity;
