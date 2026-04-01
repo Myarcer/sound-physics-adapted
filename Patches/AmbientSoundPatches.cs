@@ -160,6 +160,12 @@ namespace soundphysicsadapted
                 double playerY = entityPos.Y;
                 double playerZ = entityPos.Z;
 
+                // EntityPos.Y = feet position, but audio system uses eye position
+                // (Pos.XYZ + LocalEyePos). Use approximate eye height so the inside
+                // check matches the listener position the audio pipeline actually uses.
+                const double PLAYER_EYE_HEIGHT = 1.52;
+                double playerEyeY = playerY + PLAYER_EYE_HEIGHT;
+
                 _tempSamples.Clear();
                 bool playerInside = false;
 
@@ -170,8 +176,9 @@ namespace soundphysicsadapted
                     // Check if player is inside this bbox.
                     // Cuboidi uses integer block positions: a block at X2 occupies [X2, X2+1) in world space.
                     // Player position is float, so upper bound must be exclusive at blockCoord+1.
+                    // Use eye Y for vertical check — that's where the listener/camera is.
                     if (playerX >= bbox.X1 && playerX <= bbox.X2 + 1 &&
-                        playerY >= bbox.Y1 && playerY <= bbox.Y2 + 1 &&
+                        playerEyeY >= bbox.Y1 && playerEyeY <= bbox.Y2 + 1 &&
                         playerZ >= bbox.Z1 && playerZ <= bbox.Z2 + 1)
                     {
                         playerInside = true;
@@ -198,11 +205,11 @@ namespace soundphysicsadapted
                         AddFaceSamples(bbox.X2 + 1 - FACE_INSET, cy, cz,
                             sizeX, sizeY, sizeZ, 'X', true);
                     // -Y face (world y = bbox.Y1)
-                    if (playerY < cy)
+                    if (playerEyeY < cy)
                         AddFaceSamples(cx, bbox.Y1 + FACE_INSET, cz,
                             sizeX, sizeY, sizeZ, 'Y', false);
                     // +Y face (world y = bbox.Y2 + 1)
-                    if (playerY > cy)
+                    if (playerEyeY > cy)
                         AddFaceSamples(cx, bbox.Y2 + 1 - FACE_INSET, cz,
                             sizeX, sizeY, sizeZ, 'Y', true);
                     // -Z face (world z = bbox.Z1)
