@@ -9,7 +9,7 @@ namespace soundphysicsadapted.Core
     /// When enabled via config, registers replacement .ogg files to supersede vanilla sounds.
     /// 
     /// VS automatically loads mod assets that match vanilla domain paths.
-    /// We place sounds in resources/assets/survival/sounds/ to override survival domain.
+    /// We place sounds in resources/assets/game/sounds/ to override game domain.
     /// Config controls whether this feature is active (logged at startup).
     /// </summary>
     public static class SoundOverrideManager
@@ -43,7 +43,7 @@ namespace soundphysicsadapted.Core
             // Check individual overrides
             if (config.OverrideBeehiveSound)
             {
-                activeOverrides.Add("survival:sounds/creature/beehive-wild");
+                activeOverrides.Add("game:sounds/creature/beehive-wild");
             }
 
             if (config.OverrideLightningSound)
@@ -67,7 +67,7 @@ namespace soundphysicsadapted.Core
             // Verify asset resolution — check which origin actually provides the beehive sound
             try
             {
-                var beehiveAsset = api.Assets.TryGet(new AssetLocation("survival", "sounds/creature/beehive-wild.ogg"));
+                var beehiveAsset = api.Assets.TryGet(new AssetLocation("game", "sounds/creature/beehive-wild.ogg"));
                 if (beehiveAsset != null)
                 {
                     api.Logger.Notification($"[SoundPhysicsAdapted] Beehive asset resolved: origin={beehiveAsset.Origin?.OriginPath ?? "unknown"}, size={beehiveAsset.Data?.Length ?? -1} bytes");
