@@ -639,7 +639,7 @@ namespace soundphysicsadapted
         /// At close range pitch=1.0 (bright crack), at max distance pitch drops to this value
         /// (deeper, bassier rumble). Simulates high-frequency atmospheric attenuation.
         /// </summary>
-        public float ThunderCrackPitchMin { get; set; } = 0.72f;
+        public float ThunderCrackPitchMin { get; set; } = 0.5f;
 
         /// <summary>
         /// Random pitch variation applied to each thunder event (±this value).
@@ -647,6 +647,121 @@ namespace soundphysicsadapted
         /// Applied to both crack (nodistance.ogg) and rumble (verynear/near/distant.ogg) sounds.
         /// </summary>
         public float ThunderPitchRandomness { get; set; } = 0.06f;
+
+        // ============================================================
+        // RAIN SURFACE IMPACTS
+        // Plays localized rain impact sounds on specific block types
+        // (anvils, metal blocks, etc.) when exposed to rain.
+        // Uses VS's built-in ambient sound system — same clustering
+        // mechanism as leaded glass panes (BlockRainAmbient).
+        // Adjacent matching blocks merge into one louder source.
+        // ============================================================
+
+        /// <summary>
+        /// Section header visible in JSON config file.
+        /// </summary>
+        public string _RainSurfaceImpactSystem { get; set; } = "--- Rain impact sounds on metal surfaces. Uses VS ambient clustering (same as glass panes). ---";
+
+        /// <summary>
+        /// Master toggle for rain surface impact sounds.
+        /// When enabled: blocks matching RainSurfaceBlockPatterns play rain impact loops
+        /// when exposed to rain. Adjacent blocks cluster into one sound source.
+        /// </summary>
+        public bool EnableRainSurfaceImpacts { get; set; } = true;
+
+        /// <summary>
+        /// Volume multiplier for rain surface impact sounds.
+        /// Combined with rainfall intensity: final VolumeMul = rainfall * this.
+        /// The per-block volume also scales with cluster size (VS AmbientBlockCount ratio).
+        /// </summary>
+        public float RainSurfaceVolume { get; set; } = 0.5f;
+
+        /// <summary>
+        /// Block code patterns that trigger rain surface impacts.
+        /// Matched as prefix against block.Code.Path (e.g., "anvil" matches "anvil-copper").
+        /// Add patterns for any block type you want rain impact sounds on.
+        /// </summary>
+        public string[] RainSurfaceBlockPatterns { get; set; } = new string[]
+        {
+            // --- Smithing / storage piles ---
+            "anvil",            // game:anvil-{metal}, game:anvilpart-{base|top}-{metal}
+            "ingotpile",        // game:ingotpile
+            "platepile",        // game:platepile
+            "metalpartpile",    // game:metalpartpile (scraps/parts pile)
+            "metalsheet",       // game:metalsheet-{metal}-{facing}
+
+            // --- Metal blocks / plates / sheets ---
+            "metalblock",       // game:metalblock-{type}-{metal}
+            "metalplate",       // game:metalplate-{metal}  (if used by mods)
+
+            // --- Metal machines / containers ---
+            "hopper",           // game:hopper-{metal}-{facing}
+            "chute",            // game:chute, chute-cross, chute-straight, chute-t
+            "verticalboiler",   // game:verticalboiler
+            "condenser",        // game:condenser
+            "cokeovendoor",     // game:cokeovendoor-{metal}
+
+            // --- Metal furniture / decor ---
+            "ironfence",        // game:ironfence-{metal}-{config}
+            "supportchain",     // game:supportchain-{metal}-{facing}
+            "supportbeam-tarnishedmetal", // game:supportbeam-tarnishedmetal-{config}
+            "chandelier",       // game:chandelier-{metal}
+            "lantern",          // game:lantern-{metal}-{facing}   (TODO: own sound?)
+            "metaldoor",        // game:metaldoor-{metal}-{config}
+            "trapdoor",         // game:trapdoor-{metal}-{config}
+            "plaque",           // game:plaque-{metal}-{facing}
+            "shingleblock",     // game:shingleblock-{metal}-{facing}  (metal roof shingles)
+            "lightningrod",     // game:lightningrod-{metal}
+
+            // Note: mechanics (angledgears, largegear3, helvehammerbase, transmission,
+            // brake, crank, pulverizerframe etc.) are all wood — skip.
+            // bloomerybase/bloomerychimney are clay/stone — skip.
+            // forge is stone — skip.
+            // Add any of these back when a rain-on-wood / rain-on-stone sound is available.
+        };
+
+        // ============================================================
+        // TORCH AMBIENT
+        // Adds ambient crackling sound to placed torches.
+        // Uses VS's built-in ambient sound system for clustering.
+        // Mono downmixed by our LoadSoundPatch (positional = auto mono).
+        // ============================================================
+
+        /// <summary>
+        /// Section header visible in JSON config file.
+        /// </summary>
+        public string _TorchAmbientSystem { get; set; } = "--- Ambient crackling for placed torches. Uses VS ambient clustering. ---";
+
+        /// <summary>
+        /// Master toggle for torch ambient sounds.
+        /// When enabled: placed lit torches emit a quiet crackling loop.
+        /// Extinct/unlit torches are automatically excluded.
+        /// </summary>
+        public bool EnableTorchAmbient { get; set; } = true;
+
+        /// <summary>
+        /// Base volume for torch ambient sounds (returned by GetAmbientSoundStrength).
+        /// Lower than held torch to avoid overwhelming nearby areas.
+        /// </summary>
+        public float TorchAmbientVolume { get; set; } = 0.35f;
+
+        /// <summary>
+        /// Sound asset path for torch ambient. Uses the same idle crackling
+        /// sound that plays when a player holds a torch in hand.
+        /// Format: "domain:path" (without .ogg extension).
+        /// </summary>
+        public string TorchAmbientSoundPath { get; set; } = "game:sounds/held/torch-idle";
+
+        /// <summary>
+        /// Block code patterns that are considered lit torches.
+        /// Matched as prefix against block.Code.Path.
+        /// Blocks matching these AND containing "extinct" or "burnedout" are excluded.
+        /// </summary>
+        public string[] TorchBlockPatterns { get; set; } = new string[]
+        {
+            "torch",
+            "walltorch"
+        };
 
         // ============================================================
         // PERFORMANCE

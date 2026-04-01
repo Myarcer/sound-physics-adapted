@@ -171,7 +171,7 @@ namespace soundphysicsadapted
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");
-                api.Logger.Notification($"[SoundPhysicsAdapted] Material config loaded - {materialConfig.Occlusion.Materials.Count} materials, {materialConfig.Occlusion.BlockOverrides.Count} overrides, {materialConfig.Occlusion.TreatAsFullCube?.Count ?? 0} full-cube patterns");
+                api.Logger.Notification($"[SoundPhysicsAdapted] Material config loaded - {materialConfig.Occlusion.Materials.Count} materials, {materialConfig.Occlusion.BlockOverrides.Count} overrides, {materialConfig.Occlusion.TreatAsFullCube?.Count ?? 0} full-cube patterns, {materialConfig.SoundPenetration?.Overrides?.Count ?? 0} penetration overrides");
             }
             catch (Exception ex)
             {
@@ -451,6 +451,10 @@ namespace soundphysicsadapted
 
                 // Ambient sound bbox face-sampling patches (beehive/water occlusion fix)
                 AmbientSoundPatches.ApplyPatches(harmony, api);
+
+                // Block ambient injection: rain surface impacts + torch ambient
+                // Patches GetAmbientSoundStrength to control when injected sounds play
+                BlockAmbientInjector.ApplyPatches(harmony, api);
             }
             catch (Exception ex)
             {
@@ -468,6 +472,10 @@ namespace soundphysicsadapted
             {
                 api.Logger.Warning($"[SoundPhysicsAdapted] PatchAll failed (non-critical): {ex.Message}");
             }
+
+            // Block ambient injection: set Sounds.Ambient on matching blocks
+            // Must run after patches are applied but before first ambient scan
+            BlockAmbientInjector.InjectAmbientSounds(api);
 
             // Note: Universal mono downmix is handled by MonoDownmixManager +
             // LoadSoundPatch.StartPlayingAudioMonoPrefix (auto-detects positional stereo sounds)
@@ -1046,6 +1054,9 @@ namespace soundphysicsadapted
 
             // Clear ambient face-sampling data
             AmbientSoundPatches.Clear();
+
+            // Clear block ambient injection data
+            BlockAmbientInjector.Clear();
 
             // Unpatch Harmony
             harmony?.UnpatchAll(HARMONY_ID);

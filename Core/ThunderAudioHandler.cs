@@ -1447,30 +1447,21 @@ namespace soundphysicsadapted
         private float CalculateCrackPitch(float distance)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
-            float minPitch = config?.ThunderCrackPitchMin ?? 0.72f;
+            float minPitch = config?.ThunderCrackPitchMin ?? 0.5f;
             float randomness = config?.ThunderPitchRandomness ?? 0.06f;
 
-            // Smooth pitch curve: full brightness at close range, deepening with distance
+            // Pitch curve: full brightness at close range, single sqrt curve 30-1000m to minPitch
             // 0-30: 1.0 (no change — close crack is sharp)
-            // 30-300: 1.0 → lerp toward minPitch (most audible range)
-            // 300-1000: continue toward minPitch (distant rumble territory)
+            // 30-1000: sqrt curve 1.0 → minPitch
             float pitchFactor;
             if (distance <= 30f)
             {
                 pitchFactor = 1.0f;
             }
-            else if (distance <= 300f)
-            {
-                // Smooth ease-in: sqrt curve so initial drop is gentle
-                float t = (distance - 30f) / 270f;
-                pitchFactor = 1.0f - (float)Math.Sqrt(t) * (1.0f - minPitch) * 0.7f;
-            }
             else
             {
-                // 300-1000: linear tail to minPitch
-                float t = Math.Min((distance - 300f) / 700f, 1.0f);
-                float at300 = 1.0f - (float)Math.Sqrt(1.0f) * (1.0f - minPitch) * 0.7f;
-                pitchFactor = at300 - t * (at300 - minPitch);
+                float t = Math.Min((distance - 30f) / 970f, 1.0f);
+                pitchFactor = 1.0f - (float)Math.Sqrt(t) * (1.0f - minPitch);
             }
 
             // Add random variation per event
