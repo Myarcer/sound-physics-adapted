@@ -511,17 +511,18 @@ namespace soundphysicsadapted
                 {
                     Overrides = new Dictionary<string, SoundPenetrationOverride>
                     {
-                        // Bells — proximity alert triggers that spawn enemies.
+                        // Bell creature — proximity alert that spawns enemies through walls.
+                        // Sound path: sounds/creature/bell/alarm.ogg (and walk, bell, etc.)
                         // Players behind 4-5 stone walls must still hear the activation.
                         // 0.25 multiplier: 4 stone walls (occ=4.0) acts like 1 wall (occ=1.0).
                         // 0.15 floor: never drops below 15% audibility.
-                        { "game:sounds/effect/bell*", new SoundPenetrationOverride { OcclusionMultiplier = 0.25f, MinFilterFloor = 0.15f } },
-                        // Temporal rifts — warning sounds that alert player to danger
-                        { "game:sounds/effect/temporalrift*", new SoundPenetrationOverride { OcclusionMultiplier = 0.3f, MinFilterFloor = 0.10f } },
-                        // Temporal storm horn — storm approach warning
-                        { "game:sounds/weather/storm*", new SoundPenetrationOverride { OcclusionMultiplier = 0.3f, MinFilterFloor = 0.10f } },
-                        // Harp/horn — gameplay alert instruments
-                        { "game:sounds/effect/horn*", new SoundPenetrationOverride { OcclusionMultiplier = 0.35f, MinFilterFloor = 0.08f } },
+                        { "sounds/creature/bell/*", new SoundPenetrationOverride { OcclusionMultiplier = 0.25f, MinFilterFloor = 0.15f } },
+                        // Deep bell effect sound
+                        { "sounds/effect/deepbell*", new SoundPenetrationOverride { OcclusionMultiplier = 0.3f, MinFilterFloor = 0.12f } },
+                        // Temporal rift — warning sound near rifts
+                        { "sounds/effect/rift*", new SoundPenetrationOverride { OcclusionMultiplier = 0.3f, MinFilterFloor = 0.10f } },
+                        // Temporal stability warnings — drain and low stability alerts
+                        { "sounds/effect/tempstab-*", new SoundPenetrationOverride { OcclusionMultiplier = 0.35f, MinFilterFloor = 0.08f } },
                     }
                 }
             };
