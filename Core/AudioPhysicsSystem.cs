@@ -640,8 +640,13 @@ namespace soundphysicsadapted
                         float clarity = Math.Max(0f, 1f - faceOcc);
                         facesTested++;
 
-                        if (clarity > bestFaceClarity)
+                        if (clarity > bestFaceClarity ||
+                            (clarity == bestFaceClarity && faceOcc < bestFaceRawOcc))
                         {
+                            // Prefer higher clarity; when tied (e.g., all faces at clarity=0
+                            // behind walls), prefer lower raw occlusion. This selects the
+                            // player-facing face (perpendicular through wall = occ 1.0) over
+                            // side faces (diagonal through wall = occ 2.0+).
                             bestFaceClarity = clarity;
                             bestFaceRawOcc = faceOcc;
                             bestFaceCenter = fc;
@@ -672,24 +677,37 @@ namespace soundphysicsadapted
 
                             if (clarityDelta < FACE_SWITCH_THRESHOLD)
                             {
-                                // Clarity is similar — check distance tiebreaker.
-                                // When faces have equal clarity (e.g., all occ=0 in open air),
-                                // hysteresis alone would lock the face forever. Switch to the
-                                // closer face if it's significantly nearer to the player.
-                                double bestDist = bestFaceCenter.DistanceTo(playerPos);
-                                double lockedDist = cache.CurrentBestFaceCenter.DistanceTo(playerPos);
+                                // Clarity is similar — check tiebreakers.
 
-                                if (bestDist < lockedDist - 1.5)
+                                // 1. RAW OCCLUSION tiebreaker: when all faces are occluded
+                                // (clarity=0), prefer lower raw occ. Side faces send diagonal
+                                // rays through walls (occ=2+), player-facing face goes
+                                // perpendicular (occ=1). Use >0.3 threshold to avoid jitter.
+                                double occDelta = currentLockedFaceRawOcc - bestFaceRawOcc;
+                                if (occDelta > 0.3)
                                 {
-                                    // New face is >1.5 blocks closer — override hysteresis
+                                    // New face has significantly lower occ — switch to it
                                     // chosenFace already = bestFaceCenter
                                 }
+                                // 2. DISTANCE tiebreaker: when clarities AND occ are similar,
+                                // switch to closer face if >1.5 blocks nearer.
                                 else
                                 {
-                                    // Keep locked face
-                                    chosenFace = cache.CurrentBestFaceCenter;
-                                    chosenClarity = currentLockedFaceClarity;
-                                    chosenRawOcc = currentLockedFaceRawOcc;
+                                    double bestDist = bestFaceCenter.DistanceTo(playerPos);
+                                    double lockedDist = cache.CurrentBestFaceCenter.DistanceTo(playerPos);
+
+                                    if (bestDist < lockedDist - 1.5)
+                                    {
+                                        // New face is >1.5 blocks closer — override hysteresis
+                                        // chosenFace already = bestFaceCenter
+                                    }
+                                    else
+                                    {
+                                        // Keep locked face
+                                        chosenFace = cache.CurrentBestFaceCenter;
+                                        chosenClarity = currentLockedFaceClarity;
+                                        chosenRawOcc = currentLockedFaceRawOcc;
+                                    }
                                 }
                             }
                         }
