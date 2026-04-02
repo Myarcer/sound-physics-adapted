@@ -230,16 +230,18 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Multi-ray minimum occlusion with bbox exclusion. For ambient volume face centers.
-        /// Runs 9 convergent rays (center + 8 offsets) and returns the MINIMUM occlusion.
+        /// Multi-ray median occlusion with bbox exclusion. For ambient volume face centers.
+        /// Runs 9 convergent rays (center + 8 offsets) and returns the MEDIAN occlusion.
         ///
-        /// WHY MINIMUM, NOT VOTING: DDA edge-clipping at block corners causes a single wall
-        /// to read as 2.0 on some ray angles. With voting (Calculate-style), center ray ≥ 0.5
-        /// early-exits and trusts the double-counted value. With minimum: most rays correctly
-        /// read 1.0, the few that corner-clip read 2.0, min = 1.0 = correct.
-        /// For true 2-wall occlusion, ALL rays see ~2.0, so min still returns ~2.0.
+        /// WHY MEDIAN: DDA edge-clipping produces two kinds of outliers:
+        ///   - Corner-clipping: ray crosses block corner, counts one wall as 2.0
+        ///   - Edge-slipping: offset ray slips past wall edge, reads 0.0 through a real wall
+        /// Minimum catches corner-clips but is fooled by edge-slips (returns 0 through walls).
+        /// Voting trusts center when >=0.5 but center itself corner-clips.
+        /// Median is robust to both: needs >4 of 9 rays to agree, filtering 1-4 outliers
+        /// of either type. Results: 1 wall→1.0, 2 walls→2.0, clear→0.0.
         ///
-        /// Only used for ambient volumes where position stability matters for continuous sound.
+        /// Only used for ambient volumes where occlusion stability matters for continuous sound.
         /// Regular sounds use Calculate() with voting + EMA smoothing instead.
         /// </summary>
         public static float CalculateExcludingBboxes(
@@ -263,8 +265,7 @@ namespace soundphysicsadapted
                 return centerOcclusion;
             }
 
-            // Blocked or ambiguous: run all 8 offset rays to find minimum
-            // This filters out DDA corner-clipping where one wall reads as 2.0
+            // Blocked or ambiguous: run all 8 offset rays, take median of all 9
             float variation = config.OcclusionVariation;
             if (variation <= 0f)
             {
@@ -273,7 +274,10 @@ namespace soundphysicsadapted
                 return centerOcclusion;
             }
 
-            float minOcclusion = centerOcclusion;
+            // Fixed-size array for 9 rays (center + 8 offsets), insertion-sorted
+            Span<float> rays = stackalloc float[9];
+            rays[0] = centerOcclusion;
+            int rayCount = 1;
 
             for (int x = -1; x <= 1; x += 2)
             {
@@ -282,26 +286,30 @@ namespace soundphysicsadapted
                     for (int z = -1; z <= 1; z += 2)
                     {
                         Vec3d offset = new Vec3d(x * variation, y * variation, z * variation);
-                        float rayOcclusion = RunOcclusion(
+                        rays[rayCount++] = RunOcclusion(
                             soundPos.AddCopy(offset), playerPos, blockAccessor, config);
-
-                        if (rayOcclusion < minOcclusion)
-                            minOcclusion = rayOcclusion;
-
-                        // Early exit: if any ray finds clear LOS, that's the minimum
-                        if (minOcclusion < 0.3f)
-                        {
-                            _vExclusionBboxes = null;
-                            _vExclusionBboxCount = 0;
-                            return minOcclusion;
-                        }
                     }
                 }
             }
 
             _vExclusionBboxes = null;
             _vExclusionBboxCount = 0;
-            return Math.Min(minOcclusion, config.MaxOcclusion);
+
+            // Insertion sort 9 elements (trivial cost)
+            for (int i = 1; i < 9; i++)
+            {
+                float key = rays[i];
+                int j = i - 1;
+                while (j >= 0 && rays[j] > key)
+                {
+                    rays[j + 1] = rays[j];
+                    j--;
+                }
+                rays[j + 1] = key;
+            }
+
+            // Median = middle element (index 4 of 9)
+            return Math.Min(rays[4], config.MaxOcclusion);
         }
 
         /// <summary>
