@@ -211,6 +211,7 @@ namespace soundphysicsadapted
         /// <summary>
         /// Calculate path occlusion while excluding blocks inside the given bounding boxes.
         /// Used for ambient volume sounds so a volume's own blocks don't self-occlude.
+        /// Single-ray version for individual path queries (e.g., weather occlusion fallback).
         /// </summary>
         public static float CalculatePathOcclusionExcludingBboxes(
             Vec3d from, Vec3d to, IBlockAccessor blockAccessor,
@@ -226,6 +227,104 @@ namespace soundphysicsadapted
             _vExclusionBboxes = null;
             _vExclusionBboxCount = 0;
             return result;
+        }
+
+        /// <summary>
+        /// Multi-ray voted occlusion with bbox exclusion. Mirrors Calculate() but excludes
+        /// blocks inside the given bounding boxes. Used for ambient volume face-center
+        /// occlusion where DDA edge-clipping on a single wall produces unstable 1x/2x/3x
+        /// values depending on exact ray angle. The 9-ray convergent voting stabilizes this:
+        /// center ray is authoritative, offsets detect thin walls via supermajority vote.
+        /// </summary>
+        public static float CalculateExcludingBboxes(
+            Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor,
+            Cuboidi[] bboxes, int bboxCount)
+        {
+            var config = SoundPhysicsAdaptedModSystem.Config;
+            if (config == null || !config.Enabled)
+                return 0f;
+
+            _vExclusionBboxes = bboxes;
+            _vExclusionBboxCount = bboxCount;
+
+            float centerOcclusion = RunOcclusion(soundPos, playerPos, blockAccessor, config);
+
+            if (centerOcclusion >= config.InaudibleOcclusionThreshold)
+            {
+                _vExclusionBboxes = null;
+                _vExclusionBboxCount = 0;
+                return centerOcclusion;
+            }
+
+            // Center blocked: trust it (same logic as Calculate)
+            if (centerOcclusion >= 0.5f)
+            {
+                _vExclusionBboxes = null;
+                _vExclusionBboxCount = 0;
+                return Math.Min(centerOcclusion, config.MaxOcclusion);
+            }
+
+            // Center clear (<0.3): confirmed clear, skip offsets
+            if (centerOcclusion < 0.3f)
+            {
+                _vExclusionBboxes = null;
+                _vExclusionBboxCount = 0;
+                return centerOcclusion;
+            }
+
+            // Ambiguous (0.3-0.5): check offset rays for thin walls
+            float variation = config.OcclusionVariation;
+            if (variation <= 0f)
+            {
+                _vExclusionBboxes = null;
+                _vExclusionBboxCount = 0;
+                return centerOcclusion;
+            }
+
+            int raysBlocked = 0;
+            float totalOcclusion = centerOcclusion;
+            int totalRays = 1;
+            float maxOffsetOcclusion = 0f;
+
+            for (int x = -1; x <= 1; x += 2)
+            {
+                for (int y = -1; y <= 1; y += 2)
+                {
+                    for (int z = -1; z <= 1; z += 2)
+                    {
+                        Vec3d offset = new Vec3d(x * variation, y * variation, z * variation);
+                        float rayOcclusion = RunOcclusion(
+                            soundPos.AddCopy(offset), playerPos, blockAccessor, config);
+
+                        totalOcclusion += rayOcclusion;
+                        totalRays++;
+
+                        if (rayOcclusion >= 0.5f)
+                        {
+                            raysBlocked++;
+                            maxOffsetOcclusion = Math.Max(maxOffsetOcclusion, rayOcclusion);
+                        }
+
+                        if (raysBlocked >= 6 && maxOffsetOcclusion >= config.InaudibleOcclusionThreshold)
+                        {
+                            _vExclusionBboxes = null;
+                            _vExclusionBboxCount = 0;
+                            return maxOffsetOcclusion;
+                        }
+                    }
+                }
+            }
+
+            _vExclusionBboxes = null;
+            _vExclusionBboxCount = 0;
+
+            if (raysBlocked >= 6)
+            {
+                float avgOcclusion = totalOcclusion / totalRays;
+                return Math.Min(avgOcclusion, config.MaxOcclusion);
+            }
+
+            return centerOcclusion;
         }
 
         /// <summary>

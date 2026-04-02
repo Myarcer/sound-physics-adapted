@@ -595,10 +595,17 @@ namespace soundphysicsadapted
                 }
                 else if (samples != null && sampleCount > 0)
                 {
-                    // Per-sample DDA gives occlusion from each surface point to player.
-                    // We aggregate per face center to find the face with best clarity.
+                    // Multi-ray voted occlusion per face center.
+                    // Previously: per-sample single-ray DDA → averaged per face. This was
+                    // unstable: DDA edge-clipping on a single wall produced occ=1/2/3 depending
+                    // on exact ray angle through block corners. Now: one multi-ray convergent
+                    // (9-ray voted) call per face center with bbox exclusion. The voting system
+                    // stabilizes wall-counting: center ray is authoritative, offsets detect thin
+                    // walls via supermajority. Early exits make this efficient: occluded walls
+                    // return after 1 ray, clear paths after 1 ray, only ambiguous 0.3-0.5 range
+                    // spawns all 9.
                     //
-                    // KEY DESIGN: Occlusion = 1 - bestFaceClarity (clearest path), NOT average
+                    // KEY DESIGN: Occlusion = bestFaceOcc (least-occluded path), NOT average
                     // of all faces. Back-faces traverse the entire volume and would drag the
                     // average up, causing false muffling when standing right next to a clear face.
                     //
@@ -609,88 +616,49 @@ namespace soundphysicsadapted
 
                     Vec3d bestFaceCenter = null;
                     double bestFaceClarity = -1;
-                    double bestFaceRawOcc = 0;  // Raw (unclamped) avg occlusion for chosen face
-                    int testedCount = 0;
+                    double bestFaceRawOcc = 0;
+                    int facesTested = 0;
 
                     // Also track clarity + raw occ for the current (hysteresis) face
                     double currentLockedFaceClarity = -1;
                     double currentLockedFaceRawOcc = 0;
 
-                    // Track per-face-center clarity + raw occlusion accumulation
-                    double currentFaceClaritySum = 0;
-                    double currentFaceRawOccSum = 0;  // Unclamped, mirrors sampleOcc directly
-                    int currentFaceSampleCount = 0;
-                    Vec3d currentFaceCenter = null;
-
+                    // Extract unique face centers from samples (grouped by face from AddFaceSamples)
+                    Vec3d prevFaceCenter = null;
                     for (int i = 0; i < sampleCount; i++)
                     {
                         var fc = samples[i].FaceCenter;
+                        if (prevFaceCenter != null && fc == prevFaceCenter)
+                            continue; // Same face, skip — we only need one DDA per face center
+                        prevFaceCenter = fc;
 
-                        // Detect face center change (samples are grouped by face from AddFaceSamples)
-                        if (currentFaceCenter == null || fc != currentFaceCenter)
+                        // Multi-ray voted DDA from face center to player, excluding volume bboxes
+                        float faceOcc = (volBboxes != null && volBboxCount > 0)
+                            ? OcclusionCalculator.CalculateExcludingBboxes(
+                                fc, playerPos, blockAccessor, volBboxes, volBboxCount)
+                            : OcclusionCalculator.Calculate(fc, playerPos, blockAccessor);
+                        float clarity = Math.Max(0f, 1f - faceOcc);
+                        facesTested++;
+
+                        if (clarity > bestFaceClarity)
                         {
-                            // Finalize previous face
-                            if (currentFaceCenter != null && currentFaceSampleCount > 0)
-                            {
-                                double avgClarity = currentFaceClaritySum / currentFaceSampleCount;
-                                double avgRawOcc = currentFaceRawOccSum / currentFaceSampleCount;
-                                if (avgClarity > bestFaceClarity)
-                                {
-                                    bestFaceClarity = avgClarity;
-                                    bestFaceRawOcc = avgRawOcc;
-                                    bestFaceCenter = currentFaceCenter;
-                                }
-                                // Track if this is the locked face from last tick
-                                if (cache.CurrentBestFaceCenter != null &&
-                                    currentFaceCenter.X == cache.CurrentBestFaceCenter.X &&
-                                    currentFaceCenter.Y == cache.CurrentBestFaceCenter.Y &&
-                                    currentFaceCenter.Z == cache.CurrentBestFaceCenter.Z)
-                                {
-                                    currentLockedFaceClarity = avgClarity;
-                                    currentLockedFaceRawOcc = avgRawOcc;
-                                }
-                            }
-                            currentFaceCenter = fc;
-                            currentFaceClaritySum = 0;
-                            currentFaceRawOccSum = 0;
-                            currentFaceSampleCount = 0;
+                            bestFaceClarity = clarity;
+                            bestFaceRawOcc = faceOcc;
+                            bestFaceCenter = fc;
                         }
 
-                        float sampleOcc = (volBboxes != null && volBboxCount > 0)
-                            ? OcclusionCalculator.CalculatePathOcclusionExcludingBboxes(
-                                samples[i].SamplePoint, playerPos, blockAccessor, volBboxes, volBboxCount)
-                            : OcclusionCalculator.CalculatePathOcclusion(
-                                samples[i].SamplePoint, playerPos, blockAccessor);
-                        float clarity = Math.Max(0f, 1f - sampleOcc);
-
-                        currentFaceClaritySum += clarity;
-                        currentFaceRawOccSum += sampleOcc;  // Unclamped: preserves multi-block scale
-                        currentFaceSampleCount++;
-                        testedCount++;
-                    }
-
-                    // Finalize last face
-                    if (currentFaceCenter != null && currentFaceSampleCount > 0)
-                    {
-                        double avgClarity = currentFaceClaritySum / currentFaceSampleCount;
-                        double avgRawOcc = currentFaceRawOccSum / currentFaceSampleCount;
-                        if (avgClarity > bestFaceClarity)
-                        {
-                            bestFaceClarity = avgClarity;
-                            bestFaceRawOcc = avgRawOcc;
-                            bestFaceCenter = currentFaceCenter;
-                        }
+                        // Track if this is the locked face from last tick
                         if (cache.CurrentBestFaceCenter != null &&
-                            currentFaceCenter.X == cache.CurrentBestFaceCenter.X &&
-                            currentFaceCenter.Y == cache.CurrentBestFaceCenter.Y &&
-                            currentFaceCenter.Z == cache.CurrentBestFaceCenter.Z)
+                            fc.X == cache.CurrentBestFaceCenter.X &&
+                            fc.Y == cache.CurrentBestFaceCenter.Y &&
+                            fc.Z == cache.CurrentBestFaceCenter.Z)
                         {
-                            currentLockedFaceClarity = avgClarity;
-                            currentLockedFaceRawOcc = avgRawOcc;
+                            currentLockedFaceClarity = clarity;
+                            currentLockedFaceRawOcc = faceOcc;
                         }
                     }
 
-                    if (bestFaceCenter != null && testedCount > 0)
+                    if (bestFaceCenter != null && facesTested > 0)
                     {
                         // Face hysteresis: keep current face unless new one is significantly better.
                         // Prevents L/R oscillation when two faces have similar clarity.
@@ -765,7 +733,7 @@ namespace soundphysicsadapted
                     {
                         if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[AMBIENT-BLEND] {soundName} tested {testedCount} samples, bestFaceClarity={bestFaceClarity:F2} bestRawOcc={bestFaceRawOcc:F2} " +
+                                $"[AMBIENT-BLEND] {soundName} tested {facesTested} faces (multi-ray voted), bestFaceClarity={bestFaceClarity:F2} bestRawOcc={bestFaceRawOcc:F2} " +
                                 $"derivedOcc={ambientDerivedOcclusion:F2} pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
                     }
                 }
