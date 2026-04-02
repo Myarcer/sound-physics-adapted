@@ -58,6 +58,24 @@ namespace soundphysicsadapted
         private static Vec3d _reusableRayDir = new Vec3d();
         private static BlockPos _decorCheckPos = new BlockPos(0, 0, 0, 0);
 
+        // Pre-allocated reusable objects for ProbeForOpenings (GC pressure reduction)
+        private static Vec3d _reusableToSound = new Vec3d();
+        private static Vec3d _reusableProbeDirNorm = new Vec3d();
+        private static Vec3d _reusablePerp1 = new Vec3d();
+        private static Vec3d _reusablePerp2 = new Vec3d();
+        private static Vec3d _reusableProbeDir = new Vec3d();
+        private static Vec3d _reusableOpeningCenter = new Vec3d();
+        private static Vec3d _reusableDirToOpening = new Vec3d();
+        private static Vec3d _reusableNormalizedDir = new Vec3d();
+        private static Random _probeRng = new Random(0);
+
+        // Pre-allocated reusable objects for main ray loop
+        private static Vec3d _reusableMainRayDir = new Vec3d();
+        private static Vec3d _reusableDirectDir = new Vec3d();
+        private static Vec3d _reusableDirectDNorm = new Vec3d();
+        private static Vec3d _reusableCacheDirectDir = new Vec3d();
+        private static Vec3d _reusableCacheDirNorm = new Vec3d();
+
         /// <summary>
         /// Calculate reverb parameters for a sound at given position.
         /// Backward-compatible wrapper - delegates to CalculateWithPathsCacheable, discards path results.
@@ -305,7 +323,7 @@ namespace soundphysicsadapted
                     {
                         Vec3d newRayDir = Reflect(lastRayDir, lastHitNormal);
                         var nextHit = RaycastToSurface(lastHitPos, newRayDir, maxDistance, blockAccessor, lastHitBlock);
-                        if (!nextHit.HasValue) break;
+                        if (!nextHit.HasValue) { raysEscaped++; break; }
 
                         // Viz: capture bounce ray segment
                         if (vizCaptureRays)
@@ -369,20 +387,20 @@ namespace soundphysicsadapted
                     float directDist = (float)soundPos.DistanceTo(playerPos);
                     float directWeight = directPermeation / (directDist * directDist + 0.01f);
 
-                    Vec3d directDir = new Vec3d(
+                    _reusableDirectDir.Set(
                         soundPos.X - playerPos.X,
                         soundPos.Y - playerPos.Y,
                         soundPos.Z - playerPos.Z
                     );
-                    double ddirLen = directDir.Length();
+                    double ddirLen = _reusableDirectDir.Length();
                     if (ddirLen > 0.01)
                     {
-                        Vec3d dNorm = new Vec3d(
-                            directDir.X / ddirLen,
-                            directDir.Y / ddirLen,
-                            directDir.Z / ddirLen
+                        _reusableDirectDNorm.Set(
+                            _reusableDirectDir.X / ddirLen,
+                            _reusableDirectDir.Y / ddirLen,
+                            _reusableDirectDir.Z / ddirLen
                         );
-                        pathResolver.AddPath(dNorm, directDist, directWeight, directOcclusion, config.PermeationOcclusionThreshold);
+                        pathResolver.AddPath(_reusableDirectDNorm, directDist, directWeight, directOcclusion, config.PermeationOcclusionThreshold);
                     }
                 }
 
@@ -418,13 +436,26 @@ namespace soundphysicsadapted
                     SoundPhysicsAdaptedModSystem.ReverbDebugLog(
                         $"REVERB+PATH: g0={sendGain0:F2} g1={sendGain1:F2} " +
                         $"shared={sharedAirspaceCount}/{totalBouncePoints} ({sharedAirspaceRatio:P0}) " +
-                        $"direct={hasDirectAirspace} {pathInfo}");
+                        $"encl={raysHit}/{raysHit + raysEscaped} direct={hasDirectAirspace} {pathInfo}");
             }
+
+            // SPR-style enclosure factor: rays that escape to open sky reduce reverb energy.
+            // SPR tracks outdoorLeak/outdoorLeakDenom across ALL bounces and uses the ratio
+            // as a confidence multiplier on volume. We do the same: escaped rays = less enclosure
+            // = less reverb energy trapped around the player.
+            float totalCasts = raysHit + raysEscaped;
+            float enclosure = totalCasts > 0 ? (float)raysHit / totalCasts : 1f;
+            // pow(1.5) steepens the curve: 50% escape → 0.35 multiplier, 25% escape → 0.65
+            float enclosureFactor = MathF.Pow(enclosure, 1.5f);
+            sendGain0 *= enclosureFactor;
+            sendGain1 *= enclosureFactor;
+            sendGain2 *= enclosureFactor;
+            sendGain3 *= enclosureFactor;
 
             // SPR-style per-slot reverb cutoff: muffled reverb through walls instead of silence.
             // sharedAirspace = how much of the reverb path is in open air vs behind walls.
-            // Higher weight → more open → cutoff approaches 1.0 (unfiltered).
-            // Lower weight → more occluded → cutoff approaches exp(-occ * absorption) (heavily filtered).
+            // Higher weight → more open → cutoff approaches airspaceCeiling (capped by direct occlusion).
+            // Lower weight → more occluded → cutoff approaches exp(-occ * absorption * 3) (heavily filtered).
             float sharedAirspace = sharedAirspaceCount * 64f * rcpTotalRays;
             float weight0 = Math.Clamp(sharedAirspace / 20f, 0f, 1f);  // early reflections: need MORE airspace
             float weight1 = Math.Clamp(sharedAirspace / 15f, 0f, 1f);
@@ -432,19 +463,22 @@ namespace soundphysicsadapted
             float weight3 = Math.Clamp(sharedAirspace / 10f, 0f, 1f);
 
             float blockAbsorption = config.BlockAbsorption;
+            // airspaceCeiling: even with full shared airspace, the reverb HF can't exceed
+            // what the direct occlusion allows. Lerp target was 1.0 (bug), now capped.
+            float airspaceCeiling = MathF.Exp(-directOcclusion * blockAbsorption);
             float occludedCutoff = MathF.Exp(-directOcclusion * blockAbsorption * 3.0f);
-            float sendCutoff0 = occludedCutoff * (1f - weight0) + weight0;
-            float sendCutoff1 = occludedCutoff * (1f - weight1) + weight1;
-            float sendCutoff2 = occludedCutoff * (1f - weight2) + weight2;
-            float sendCutoff3 = occludedCutoff * (1f - weight3) + weight3;
+            float sendCutoff0 = occludedCutoff * (1f - weight0) + weight0 * airspaceCeiling;
+            float sendCutoff1 = occludedCutoff * (1f - weight1) + weight1 * airspaceCeiling;
+            float sendCutoff2 = occludedCutoff * (1f - weight2) + weight2 * airspaceCeiling;
+            float sendCutoff3 = occludedCutoff * (1f - weight3) + weight3 * airspaceCeiling;
 
             // SPR-style reverb send volume attenuation by occlusion.
             // sendCutoff filters HF (darkness), this reduces overall volume (quietness).
-            // pow(cutoff, 0.1) is gentle: cutoff=0.05 → 0.74 (26% quieter).
-            sendGain0 *= MathF.Pow(Math.Max(sendCutoff0, 0.001f), 0.1f);
-            sendGain1 *= MathF.Pow(Math.Max(sendCutoff1, 0.001f), 0.1f);
-            sendGain2 *= MathF.Pow(Math.Max(sendCutoff2, 0.001f), 0.1f);
-            sendGain3 *= MathF.Pow(Math.Max(sendCutoff3, 0.001f), 0.1f);
+            // pow(0.4): cutoff=0.018 → 0.11 gain (89% reduction for fully occluded source).
+            sendGain0 *= MathF.Pow(Math.Max(sendCutoff0, 0.001f), 0.4f);
+            sendGain1 *= MathF.Pow(Math.Max(sendCutoff1, 0.001f), 0.4f);
+            sendGain2 *= MathF.Pow(Math.Max(sendCutoff2, 0.001f), 0.4f);
+            sendGain3 *= MathF.Pow(Math.Max(sendCutoff3, 0.001f), 0.4f);
 
             var reverbResult = new ReverbResult(sendGain0, sendGain1, sendGain2, sendGain3,
                                                 sendCutoff0, sendCutoff1, sendCutoff2, sendCutoff3);
@@ -478,20 +512,20 @@ namespace soundphysicsadapted
             float directDist = (float)soundPos.DistanceTo(playerPos);
             float directWeight = directPermeation / (directDist * directDist + 0.01f);
 
-            Vec3d directDir = new Vec3d(
+            _reusableCacheDirectDir.Set(
                 soundPos.X - playerPos.X,
                 soundPos.Y - playerPos.Y,
                 soundPos.Z - playerPos.Z
             );
-            double dirLen = directDir.Length();
+            double dirLen = _reusableCacheDirectDir.Length();
             if (dirLen > 0.01)
             {
-                Vec3d dirNorm = new Vec3d(
-                    directDir.X / dirLen,
-                    directDir.Y / dirLen,
-                    directDir.Z / dirLen
+                _reusableCacheDirNorm.Set(
+                    _reusableCacheDirectDir.X / dirLen,
+                    _reusableCacheDirectDir.Y / dirLen,
+                    _reusableCacheDirectDir.Z / dirLen
                 );
-                pathResolver.AddPath(dirNorm, directDist, directWeight, directOcclusion, config.PermeationOcclusionThreshold);
+                pathResolver.AddPath(_reusableCacheDirNorm, directDist, directWeight, directOcclusion, config.PermeationOcclusionThreshold);
             }
 
             // At >25m behind a wall, bounce directions are unreliable (no opening probes).
@@ -610,22 +644,24 @@ namespace soundphysicsadapted
         /// </summary>
         private static void ProbeForOpenings(Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor, SoundPhysicsConfig config)
         {
-            Vec3d toSound = new Vec3d(
+            _reusableToSound.Set(
                 soundPos.X - playerPos.X,
                 soundPos.Y - playerPos.Y,
                 soundPos.Z - playerPos.Z
             );
-            double dist = toSound.Length();
+            double dist = _reusableToSound.Length();
             if (dist < 1.0) return;
 
-
-            Vec3d dirNorm = new Vec3d(toSound.X / dist, toSound.Y / dist, toSound.Z / dist);
+            Vec3d toSound = _reusableToSound;
+            _reusableProbeDirNorm.Set(toSound.X / dist, toSound.Y / dist, toSound.Z / dist);
+            Vec3d dirNorm = _reusableProbeDirNorm;
 
             int probeCount = 12;
             int openingsFound = 0;
             int posHash = (int)(soundPos.X * 73856093 + soundPos.Y * 19349663 + soundPos.Z * 83492791
                          + playerPos.X * 37139213 + playerPos.Y * 57853711 + playerPos.Z * 29475827);
-            Random rng = new Random(posHash);
+            _probeRng = new Random(posHash);
+            Random rng = _probeRng;
 
             _openingDedup.Clear();
 
@@ -642,30 +678,32 @@ namespace soundphysicsadapted
                     double theta = rng.NextDouble() * Math.PI * 2;
                     double phi = rng.NextDouble() * jitterAngle;
 
-                    Vec3d perp1, perp2;
                     if (Math.Abs(dirNorm.Y) < 0.9)
-                        perp1 = new Vec3d(-dirNorm.Z, 0, dirNorm.X);
+                        _reusablePerp1.Set(-dirNorm.Z, 0, dirNorm.X);
                     else
-                        perp1 = new Vec3d(1, 0, 0);
+                        _reusablePerp1.Set(1, 0, 0);
 
-                    double p1Len = perp1.Length();
+                    double p1Len = _reusablePerp1.Length();
                     if (p1Len > 0.001)
                     {
-                        perp1.X /= p1Len; perp1.Y /= p1Len; perp1.Z /= p1Len;
+                        _reusablePerp1.X /= p1Len; _reusablePerp1.Y /= p1Len; _reusablePerp1.Z /= p1Len;
                     }
-                    perp2 = new Vec3d(
+                    Vec3d perp1 = _reusablePerp1;
+                    _reusablePerp2.Set(
                         dirNorm.Y * perp1.Z - dirNorm.Z * perp1.Y,
                         dirNorm.Z * perp1.X - dirNorm.X * perp1.Z,
                         dirNorm.X * perp1.Y - dirNorm.Y * perp1.X
                     );
+                    Vec3d perp2 = _reusablePerp2;
 
                     double sinPhi = Math.Sin(phi);
                     double cosPhi = Math.Cos(phi);
-                    probeDir = new Vec3d(
+                    _reusableProbeDir.Set(
                         dirNorm.X * cosPhi + (perp1.X * Math.Cos(theta) + perp2.X * Math.Sin(theta)) * sinPhi,
                         dirNorm.Y * cosPhi + (perp1.Y * Math.Cos(theta) + perp2.Y * Math.Sin(theta)) * sinPhi,
                         dirNorm.Z * cosPhi + (perp1.Z * Math.Cos(theta) + perp2.Z * Math.Sin(theta)) * sinPhi
                     );
+                    probeDir = _reusableProbeDir;
                 }
 
                 var hit = RaycastToSurface(playerPos, probeDir, (float)dist, blockAccessor);
@@ -700,7 +738,8 @@ namespace soundphysicsadapted
                         neighborBlock.BlockMaterial == EnumBlockMaterial.Air ||
                         neighborBlock.BlockMaterial == EnumBlockMaterial.Plant)
                     {
-                        Vec3d openingCenter = new Vec3d(cx + 0.5, cy + 0.5, cz + 0.5);
+                        _reusableOpeningCenter.Set(cx + 0.5, cy + 0.5, cz + 0.5);
+                        Vec3d openingCenter = _reusableOpeningCenter;
 
                         float occToPlayer = OcclusionCalculator.CalculatePathOcclusion(openingCenter, playerPos, blockAccessor);
                         if (occToPlayer > 2.0f) continue;
@@ -730,22 +769,22 @@ namespace soundphysicsadapted
                         float combinedPermeation = playerSidePermeation * permeation;
                         float weight = combinedPermeation * openingBoost / (totalPathDist * totalPathDist + 0.01f);
 
-                        Vec3d dirToOpening = new Vec3d(
+                        _reusableDirToOpening.Set(
                             openingCenter.X - playerPos.X,
                             openingCenter.Y - playerPos.Y,
                             openingCenter.Z - playerPos.Z
                         );
-                        double opDirLen = dirToOpening.Length();
+                        double opDirLen = _reusableDirToOpening.Length();
                         if (opDirLen > 0.01)
                         {
-                            Vec3d normalizedDir = new Vec3d(
-                                dirToOpening.X / opDirLen,
-                                dirToOpening.Y / opDirLen,
-                                dirToOpening.Z / opDirLen
+                            _reusableNormalizedDir.Set(
+                                _reusableDirToOpening.X / opDirLen,
+                                _reusableDirToOpening.Y / opDirLen,
+                                _reusableDirToOpening.Z / opDirLen
                             );
 
                             float totalOcclusion = occToPlayer + diffractionPenalty + occToSound;
-                            pathResolver.AddPath(normalizedDir, totalPathDist, weight, totalOcclusion, config.PermeationOcclusionThreshold);
+                            pathResolver.AddPath(_reusableNormalizedDir, totalPathDist, weight, totalOcclusion, config.PermeationOcclusionThreshold);
                             openingsFound++;
 
                             if (probeLogCount < 20 && config.DebugSoundPaths)
