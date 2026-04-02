@@ -579,13 +579,15 @@ namespace soundphysicsadapted
 
                 if (playerInside)
                 {
-                    // Player is inside the volume — no occlusion, VS handles positioning natively.
-                    acousticPos = soundPos;
+                    // Player is inside the volume — center the sound on the player.
+                    // This eliminates L/R panning entirely, creating an immersive enveloping effect.
+                    // The proximity blend below will smooth the transition as the player enters.
+                    acousticPos = playerPos;
                     ambientDerivedOcclusion = 0f;
 
                     if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[AMBIENT-INSIDE] {soundName} playerInside=true, occ=0, using vanilla pos");
+                            $"[AMBIENT-INSIDE] {soundName} playerInside=true, occ=0, centered on player");
                 }
                 else if (samples != null && sampleCount > 0)
                 {
@@ -759,6 +761,30 @@ namespace soundphysicsadapted
                     if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
                             $"[AMBIENT-FALLBACK] {soundName} no samples, using bbox-excluded DDA, occ={ambientDerivedOcclusion:F2}");
+                }
+            }
+
+            // PROXIMITY CENTER BLEND (Steam Audio approach):
+            // As the player approaches an ambient volume, blend the acoustic position
+            // toward the player's own position. This progressively reduces stereo panning,
+            // preventing L/R flip-flop at bbox boundaries and adjacent bbox transitions.
+            // When fully inside: sound is centered (zero panning = immersive envelope).
+            // When >BLEND_START blocks away: full directional positioning from face-sampling.
+            if (isAmbientVolume && ambientDerivedOcclusion >= 0f)
+            {
+                const float BLEND_START = 2.5f; // Start blending when within 2.5 blocks of surface
+                float distToSound = (float)playerPos.DistanceTo(acousticPos);
+
+                if (distToSound < BLEND_START)
+                {
+                    // t=0 at surface (fully centered) → t=1 at BLEND_START (fully directional)
+                    float t = distToSound / BLEND_START;
+                    // Ease-in: panning ramps up slowly near the volume, preserving centering longer
+                    t = t * t;
+                    acousticPos = new Vec3d(
+                        playerPos.X + (acousticPos.X - playerPos.X) * t,
+                        playerPos.Y + (acousticPos.Y - playerPos.Y) * t,
+                        playerPos.Z + (acousticPos.Z - playerPos.Z) * t);
                 }
             }
 
