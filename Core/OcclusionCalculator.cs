@@ -230,11 +230,17 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Multi-ray voted occlusion with bbox exclusion. Mirrors Calculate() but excludes
-        /// blocks inside the given bounding boxes. Used for ambient volume face-center
-        /// occlusion where DDA edge-clipping on a single wall produces unstable 1x/2x/3x
-        /// values depending on exact ray angle. The 9-ray convergent voting stabilizes this:
-        /// center ray is authoritative, offsets detect thin walls via supermajority vote.
+        /// Multi-ray minimum occlusion with bbox exclusion. For ambient volume face centers.
+        /// Runs 9 convergent rays (center + 8 offsets) and returns the MINIMUM occlusion.
+        ///
+        /// WHY MINIMUM, NOT VOTING: DDA edge-clipping at block corners causes a single wall
+        /// to read as 2.0 on some ray angles. With voting (Calculate-style), center ray ≥ 0.5
+        /// early-exits and trusts the double-counted value. With minimum: most rays correctly
+        /// read 1.0, the few that corner-clip read 2.0, min = 1.0 = correct.
+        /// For true 2-wall occlusion, ALL rays see ~2.0, so min still returns ~2.0.
+        ///
+        /// Only used for ambient volumes where position stability matters for continuous sound.
+        /// Regular sounds use Calculate() with voting + EMA smoothing instead.
         /// </summary>
         public static float CalculateExcludingBboxes(
             Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor,
@@ -249,22 +255,7 @@ namespace soundphysicsadapted
 
             float centerOcclusion = RunOcclusion(soundPos, playerPos, blockAccessor, config);
 
-            if (centerOcclusion >= config.InaudibleOcclusionThreshold)
-            {
-                _vExclusionBboxes = null;
-                _vExclusionBboxCount = 0;
-                return centerOcclusion;
-            }
-
-            // Center blocked: trust it (same logic as Calculate)
-            if (centerOcclusion >= 0.5f)
-            {
-                _vExclusionBboxes = null;
-                _vExclusionBboxCount = 0;
-                return Math.Min(centerOcclusion, config.MaxOcclusion);
-            }
-
-            // Center clear (<0.3): confirmed clear, skip offsets
+            // Clear LOS: no need for offsets, center is reliable when unblocked
             if (centerOcclusion < 0.3f)
             {
                 _vExclusionBboxes = null;
@@ -272,7 +263,8 @@ namespace soundphysicsadapted
                 return centerOcclusion;
             }
 
-            // Ambiguous (0.3-0.5): check offset rays for thin walls
+            // Blocked or ambiguous: run all 8 offset rays to find minimum
+            // This filters out DDA corner-clipping where one wall reads as 2.0
             float variation = config.OcclusionVariation;
             if (variation <= 0f)
             {
@@ -281,10 +273,7 @@ namespace soundphysicsadapted
                 return centerOcclusion;
             }
 
-            int raysBlocked = 0;
-            float totalOcclusion = centerOcclusion;
-            int totalRays = 1;
-            float maxOffsetOcclusion = 0f;
+            float minOcclusion = centerOcclusion;
 
             for (int x = -1; x <= 1; x += 2)
             {
@@ -296,20 +285,15 @@ namespace soundphysicsadapted
                         float rayOcclusion = RunOcclusion(
                             soundPos.AddCopy(offset), playerPos, blockAccessor, config);
 
-                        totalOcclusion += rayOcclusion;
-                        totalRays++;
+                        if (rayOcclusion < minOcclusion)
+                            minOcclusion = rayOcclusion;
 
-                        if (rayOcclusion >= 0.5f)
-                        {
-                            raysBlocked++;
-                            maxOffsetOcclusion = Math.Max(maxOffsetOcclusion, rayOcclusion);
-                        }
-
-                        if (raysBlocked >= 6 && maxOffsetOcclusion >= config.InaudibleOcclusionThreshold)
+                        // Early exit: if any ray finds clear LOS, that's the minimum
+                        if (minOcclusion < 0.3f)
                         {
                             _vExclusionBboxes = null;
                             _vExclusionBboxCount = 0;
-                            return maxOffsetOcclusion;
+                            return minOcclusion;
                         }
                     }
                 }
@@ -317,14 +301,7 @@ namespace soundphysicsadapted
 
             _vExclusionBboxes = null;
             _vExclusionBboxCount = 0;
-
-            if (raysBlocked >= 6)
-            {
-                float avgOcclusion = totalOcclusion / totalRays;
-                return Math.Min(avgOcclusion, config.MaxOcclusion);
-            }
-
-            return centerOcclusion;
+            return Math.Min(minOcclusion, config.MaxOcclusion);
         }
 
         /// <summary>
