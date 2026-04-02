@@ -86,6 +86,12 @@ namespace soundphysicsadapted
             public int ThrottleTransitionCount;
             public long ThrottleWindowStartMs;
             public bool ThrottleFrozen;
+
+            // Face-sampled acoustic position for ambient volumes.
+            // EMA-smoothed to prevent jitter; hysteresis prevents face-flip L/R panning.
+            public Vec3d SmoothedAcousticPos;
+            public bool HasSmoothedAcousticPos;
+            public Vec3d CurrentBestFaceCenter; // For hysteresis: don't switch unless significantly better
         }
 
         private Dictionary<ILoadedSound, SoundCacheEntry> soundCache = new Dictionary<ILoadedSound, SoundCacheEntry>();
@@ -555,48 +561,245 @@ namespace soundphysicsadapted
             // All blocks (including doors) are treated uniformly — AABB collision geometry
             // determines occlusion naturally. No special door handling.
 
-            // AMBIENT FACE SAMPLING: For ambient volume sounds (beehives, water, lava),
-            // VS repositions the sound to the nearest bbox surface — which may land on an
-            // occluded face while other faces have clear LOS. Sample all player-facing face
-            // centers and use the least-occluded one as the acoustic origin for DDA.
-            bool isAmbientVolume = sound.Params?.SoundType == EnumSoundType.Ambient;
+            // AMBIENT FACE-SAMPLED OCCLUSION: For ambient volume sounds (beehives, water, lava,
+            // rainwindow), VS positions the sound at the nearest bbox surface — which may land
+            // on an occluded face. We multi-sample all player-facing faces to determine:
+            //   1. Acoustic position = face center with highest total clarity (ON the surface)
+            //   2. Occlusion = derived directly from sample clarity (no second DDA needed)
+            // This avoids the interior-point bug where averaging face centers produces a point
+            // inside the bbox volume that always hits the volume's own blocks.
+            // NOTE: Rainwindow uses SoundType.Weather, not Ambient — must include both.
+            var soundType = sound.Params?.SoundType;
+            bool isAmbientVolume = soundType == EnumSoundType.Ambient
+                                || soundType == EnumSoundType.AmbientGlitchunaffected
+                                || soundType == EnumSoundType.Weather;
             Vec3d acousticPos = soundPos;
+            float ambientDerivedOcclusion = -1f; // -1 = not computed (use normal Calculate path)
 
             if (isAmbientVolume)
             {
-                var candidates = AmbientSoundPatches.GetFaceCandidates(sound, out int candidateCount);
-                if (candidates != null && candidateCount > 0)
-                {
-                    // Screen candidates with cheap single-ray DDA.
-                    // Pick the face with the clearest path to the player.
-                    float bestOcc = float.MaxValue;
-                    Vec3d bestPos = soundPos;
+                var samples = AmbientSoundPatches.GetFaceSamples(sound, out int sampleCount, out bool playerInside);
+                var volBboxes = AmbientSoundPatches.GetBboxes(sound, out int volBboxCount);
 
-                    for (int i = 0; i < candidateCount; i++)
+                if (playerInside)
+                {
+                    // Player is inside the volume — center the sound on the player.
+                    // This eliminates L/R panning entirely, creating an immersive enveloping effect.
+                    // The proximity blend below will smooth the transition as the player enters.
+                    acousticPos = playerPos;
+                    ambientDerivedOcclusion = 0f;
+
+                    if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"[AMBIENT-INSIDE] {soundName} playerInside=true, occ=0, centered on player");
+                }
+                else if (samples != null && sampleCount > 0)
+                {
+                    // Multi-ray voted occlusion per face center.
+                    // Previously: per-sample single-ray DDA → averaged per face. This was
+                    // unstable: DDA edge-clipping on a single wall produced occ=1/2/3 depending
+                    // on exact ray angle through block corners. Now: one multi-ray convergent
+                    // (9-ray voted) call per face center with bbox exclusion. The voting system
+                    // stabilizes wall-counting: center ray is authoritative, offsets detect thin
+                    // walls via supermajority. Early exits make this efficient: occluded walls
+                    // return after 1 ray, clear paths after 1 ray, only ambiguous 0.3-0.5 range
+                    // spawns all 9.
+                    //
+                    // KEY DESIGN: Occlusion = bestFaceOcc (least-occluded path), NOT average
+                    // of all faces. Back-faces traverse the entire volume and would drag the
+                    // average up, causing false muffling when standing right next to a clear face.
+                    //
+                    // Position = best face center with hysteresis to prevent L/R flip-flop.
+
+                    // Hysteresis threshold: don't switch face unless new one is this much better.
+                    const double FACE_SWITCH_THRESHOLD = 0.15;
+
+                    Vec3d bestFaceCenter = null;
+                    double bestFaceClarity = -1;
+                    double bestFaceRawOcc = 0;
+                    int facesTested = 0;
+
+                    // Also track clarity + raw occ for the current (hysteresis) face
+                    double currentLockedFaceClarity = -1;
+                    double currentLockedFaceRawOcc = 0;
+
+                    // Extract unique face centers from samples (grouped by face from AddFaceSamples)
+                    Vec3d prevFaceCenter = null;
+                    for (int i = 0; i < sampleCount; i++)
                     {
-                        float candOcc = OcclusionCalculator.CalculatePathOcclusion(
-                            candidates[i], playerPos, blockAccessor);
-                        if (candOcc < bestOcc)
+                        var fc = samples[i].FaceCenter;
+                        if (prevFaceCenter != null && fc == prevFaceCenter)
+                            continue; // Same face, skip — we only need one DDA per face center
+                        prevFaceCenter = fc;
+
+                        // Multi-ray voted DDA from face center to player, excluding volume bboxes
+                        float faceOcc = (volBboxes != null && volBboxCount > 0)
+                            ? OcclusionCalculator.CalculateExcludingBboxes(
+                                fc, playerPos, blockAccessor, volBboxes, volBboxCount)
+                            : OcclusionCalculator.Calculate(fc, playerPos, blockAccessor);
+                        float clarity = Math.Max(0f, 1f - faceOcc);
+                        facesTested++;
+
+                        if (clarity > bestFaceClarity ||
+                            (clarity == bestFaceClarity && faceOcc < bestFaceRawOcc))
                         {
-                            bestOcc = candOcc;
-                            bestPos = candidates[i];
-                            if (bestOcc <= 0f) break; // fully clear, no point checking more
+                            // Prefer higher clarity; when tied (e.g., all faces at clarity=0
+                            // behind walls), prefer lower raw occlusion. This selects the
+                            // player-facing face (perpendicular through wall = occ 1.0) over
+                            // side faces (diagonal through wall = occ 2.0+).
+                            bestFaceClarity = clarity;
+                            bestFaceRawOcc = faceOcc;
+                            bestFaceCenter = fc;
+                        }
+
+                        // Track if this is the locked face from last tick
+                        if (cache.CurrentBestFaceCenter != null &&
+                            fc.X == cache.CurrentBestFaceCenter.X &&
+                            fc.Y == cache.CurrentBestFaceCenter.Y &&
+                            fc.Z == cache.CurrentBestFaceCenter.Z)
+                        {
+                            currentLockedFaceClarity = clarity;
+                            currentLockedFaceRawOcc = faceOcc;
                         }
                     }
 
-                    acousticPos = bestPos;
+                    if (bestFaceCenter != null && facesTested > 0)
+                    {
+                        // Face hysteresis: keep current face unless new one is significantly better.
+                        // Prevents L/R oscillation when two faces have similar clarity.
+                        Vec3d chosenFace = bestFaceCenter;
+                        double chosenClarity = bestFaceClarity;
+                        double chosenRawOcc = bestFaceRawOcc;
+
+                        if (cache.CurrentBestFaceCenter != null && currentLockedFaceClarity >= 0)
+                        {
+                            double clarityDelta = bestFaceClarity - currentLockedFaceClarity;
+
+                            if (clarityDelta < FACE_SWITCH_THRESHOLD)
+                            {
+                                // Clarity is similar — check tiebreakers.
+
+                                // 1. RAW OCCLUSION tiebreaker: when all faces are occluded
+                                // (clarity=0), prefer lower raw occ. Side faces send diagonal
+                                // rays through walls (occ=2+), player-facing face goes
+                                // perpendicular (occ=1). Use >0.3 threshold to avoid jitter.
+                                double occDelta = currentLockedFaceRawOcc - bestFaceRawOcc;
+                                if (occDelta > 0.3)
+                                {
+                                    // New face has significantly lower occ — switch to it
+                                    // chosenFace already = bestFaceCenter
+                                }
+                                // 2. DISTANCE tiebreaker: when clarities AND occ are similar,
+                                // switch to closer face if >1.5 blocks nearer.
+                                else
+                                {
+                                    double bestDist = bestFaceCenter.DistanceTo(playerPos);
+                                    double lockedDist = cache.CurrentBestFaceCenter.DistanceTo(playerPos);
+
+                                    if (bestDist < lockedDist - 1.5)
+                                    {
+                                        // New face is >1.5 blocks closer — override hysteresis
+                                        // chosenFace already = bestFaceCenter
+                                    }
+                                    else
+                                    {
+                                        // Keep locked face
+                                        chosenFace = cache.CurrentBestFaceCenter;
+                                        chosenClarity = currentLockedFaceClarity;
+                                        chosenRawOcc = currentLockedFaceRawOcc;
+                                    }
+                                }
+                            }
+                        }
+                        cache.CurrentBestFaceCenter = chosenFace;
+
+                        // EMA temporal smoothing on position.
+                        // Alpha 0.15 = ~300ms convergence at 50ms ticks.
+                        const float ACOUSTIC_POS_EMA = 0.15f;
+                        if (cache.HasSmoothedAcousticPos)
+                        {
+                            var prev = cache.SmoothedAcousticPos;
+                            acousticPos = new Vec3d(
+                                prev.X + (chosenFace.X - prev.X) * ACOUSTIC_POS_EMA,
+                                prev.Y + (chosenFace.Y - prev.Y) * ACOUSTIC_POS_EMA,
+                                prev.Z + (chosenFace.Z - prev.Z) * ACOUSTIC_POS_EMA);
+                        }
+                        else
+                        {
+                            acousticPos = chosenFace;
+                        }
+
+                        cache.SmoothedAcousticPos = acousticPos;
+                        cache.HasSmoothedAcousticPos = true;
+
+                        // Use the raw (unclamped) avg occlusion of the best face.
+                        // WHY: clarity = max(0, 1-sampleOcc) clamps to 0 for sampleOcc > 1.
+                        // Using (1 - chosenClarity) caps at 1.0, but OcclusionToFilter is
+                        // exponential and expects accumulated values (e.g. 6.0 for 6 stone
+                        // blocks). Capping at 1.0 massively under-muffles vs regular sounds
+                        // that pass the full accumulated DDA value through the same formula.
+                        ambientDerivedOcclusion = (float)chosenRawOcc;
+                    }
+                    else
+                    {
+                        // All samples fully occluded — use VS position as fallback
+                        acousticPos = soundPos;
+                        ambientDerivedOcclusion = 1f;
+                    }
 
                     if (updatedThisTick == 0)
                     {
                         if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[AMBIENT-FACE] {soundName} tested {candidateCount} faces, bestOcc={bestOcc:F2} " +
-                                $"pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
+                                $"[AMBIENT-BLEND] {soundName} tested {facesTested} faces (multi-ray voted), bestFaceClarity={bestFaceClarity:F2} bestRawOcc={bestFaceRawOcc:F2} " +
+                                $"derivedOcc={ambientDerivedOcclusion:F2} pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
                     }
+                }
+                else if (volBboxes != null && volBboxCount > 0)
+                {
+                    // No face samples (e.g., rainwindow) but we have volume bboxes.
+                    // VS positioned the sound at bbox boundary — use standard DDA but exclude
+                    // the volume's own blocks so they don't self-occlude.
+                    acousticPos = soundPos; // Keep VS positioning
+                    ambientDerivedOcclusion = OcclusionCalculator.CalculatePathOcclusionExcludingBboxes(
+                        acousticPos, playerPos, blockAccessor,
+                        volBboxes, volBboxCount);
+
+                    if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"[AMBIENT-FALLBACK] {soundName} no samples, using bbox-excluded DDA, occ={ambientDerivedOcclusion:F2}");
                 }
             }
 
-            float occlusion = OcclusionCalculator.Calculate(acousticPos, playerPos, blockAccessor);
+            // PROXIMITY CENTER BLEND (Steam Audio approach):
+            // As the player approaches an ambient volume, blend the acoustic position
+            // toward the player's own position. This progressively reduces stereo panning,
+            // preventing L/R flip-flop at bbox boundaries and adjacent bbox transitions.
+            // When fully inside: sound is centered (zero panning = immersive envelope).
+            // When >BLEND_START blocks away: full directional positioning from face-sampling.
+            if (isAmbientVolume && ambientDerivedOcclusion >= 0f)
+            {
+                const float BLEND_START = 2.5f; // Start blending when within 2.5 blocks of surface
+                float distToSound = (float)playerPos.DistanceTo(acousticPos);
+
+                if (distToSound < BLEND_START)
+                {
+                    // t=0 at surface (fully centered) → t=1 at BLEND_START (fully directional)
+                    float t = distToSound / BLEND_START;
+                    // Ease-in: panning ramps up slowly near the volume, preserving centering longer
+                    t = t * t;
+                    acousticPos = new Vec3d(
+                        playerPos.X + (acousticPos.X - playerPos.X) * t,
+                        playerPos.Y + (acousticPos.Y - playerPos.Y) * t,
+                        playerPos.Z + (acousticPos.Z - playerPos.Z) * t);
+                }
+            }
+
+            // For ambient volumes with sample-derived occlusion, skip the redundant DDA.
+            // The sample data already accounts for all paths from surface to player.
+            float occlusion = ambientDerivedOcclusion >= 0f
+                ? ambientDerivedOcclusion
+                : OcclusionCalculator.Calculate(acousticPos, playerPos, blockAccessor);
 
             // Per-sound penetration override: gameplay-critical sounds (bells, temporal rifts)
             // get reduced occlusion so they remain audible through thick walls.
@@ -801,7 +1004,10 @@ namespace soundphysicsadapted
                 if (skipRepositioning)
                 {
                     // Clear LOS or ambient volume: sound stays at original position.
-                    AudioRenderer.ResetSoundPosition(sound, soundPos);
+                    // For ambient volumes: use face-sampled acousticPos (stable, EMA-smoothed)
+                    // instead of vanilla soundPos which flip-flops between bbox faces at edges.
+                    Vec3d resetPos = isAmbientVolume ? acousticPos : soundPos;
+                    AudioRenderer.ResetSoundPosition(sound, resetPos);
 
                     // SMOOTH TRANSITION: When switching from occluded→clear, don't snap
                     // the filter. Instead, EMA-smooth toward the direct occlusion value.

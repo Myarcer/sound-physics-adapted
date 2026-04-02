@@ -34,6 +34,8 @@ namespace soundphysicsadapted
         private static double _vNdy;
         private static double _vNdz;
         private static double _vLength;
+        private static Cuboidi[] _vExclusionBboxes;
+        private static int _vExclusionBboxCount;
 
         private static readonly DDABlockTraversal.BlockVisitor _runOcclusionVisitor = RunOcclusionVisitor;
 
@@ -207,6 +209,110 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Calculate path occlusion while excluding blocks inside the given bounding boxes.
+        /// Used for ambient volume sounds so a volume's own blocks don't self-occlude.
+        /// Single-ray version for individual path queries (e.g., weather occlusion fallback).
+        /// </summary>
+        public static float CalculatePathOcclusionExcludingBboxes(
+            Vec3d from, Vec3d to, IBlockAccessor blockAccessor,
+            Cuboidi[] bboxes, int bboxCount)
+        {
+            var config = SoundPhysicsAdaptedModSystem.Config;
+            if (config == null || !config.Enabled)
+                return 0f;
+
+            _vExclusionBboxes = bboxes;
+            _vExclusionBboxCount = bboxCount;
+            float result = RunOcclusion(from, to, blockAccessor, config);
+            _vExclusionBboxes = null;
+            _vExclusionBboxCount = 0;
+            return result;
+        }
+
+        /// <summary>
+        /// Multi-ray median occlusion with bbox exclusion. For ambient volume face centers.
+        /// Runs 9 convergent rays (center + 8 offsets) and returns the MEDIAN occlusion.
+        ///
+        /// WHY MEDIAN: DDA edge-clipping produces two kinds of outliers:
+        ///   - Corner-clipping: ray crosses block corner, counts one wall as 2.0
+        ///   - Edge-slipping: offset ray slips past wall edge, reads 0.0 through a real wall
+        /// Minimum catches corner-clips but is fooled by edge-slips (returns 0 through walls).
+        /// Voting trusts center when >=0.5 but center itself corner-clips.
+        /// Median is robust to both: needs >4 of 9 rays to agree, filtering 1-4 outliers
+        /// of either type. Results: 1 wall→1.0, 2 walls→2.0, clear→0.0.
+        ///
+        /// Only used for ambient volumes where occlusion stability matters for continuous sound.
+        /// Regular sounds use Calculate() with voting + EMA smoothing instead.
+        /// </summary>
+        public static float CalculateExcludingBboxes(
+            Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor,
+            Cuboidi[] bboxes, int bboxCount)
+        {
+            var config = SoundPhysicsAdaptedModSystem.Config;
+            if (config == null || !config.Enabled)
+                return 0f;
+
+            _vExclusionBboxes = bboxes;
+            _vExclusionBboxCount = bboxCount;
+
+            float centerOcclusion = RunOcclusion(soundPos, playerPos, blockAccessor, config);
+
+            // Clear LOS: no need for offsets, center is reliable when unblocked
+            if (centerOcclusion < 0.3f)
+            {
+                _vExclusionBboxes = null;
+                _vExclusionBboxCount = 0;
+                return centerOcclusion;
+            }
+
+            // Blocked or ambiguous: run all 8 offset rays, take median of all 9
+            float variation = config.OcclusionVariation;
+            if (variation <= 0f)
+            {
+                _vExclusionBboxes = null;
+                _vExclusionBboxCount = 0;
+                return centerOcclusion;
+            }
+
+            // Fixed-size array for 9 rays (center + 8 offsets), insertion-sorted
+            Span<float> rays = stackalloc float[9];
+            rays[0] = centerOcclusion;
+            int rayCount = 1;
+
+            for (int x = -1; x <= 1; x += 2)
+            {
+                for (int y = -1; y <= 1; y += 2)
+                {
+                    for (int z = -1; z <= 1; z += 2)
+                    {
+                        Vec3d offset = new Vec3d(x * variation, y * variation, z * variation);
+                        rays[rayCount++] = RunOcclusion(
+                            soundPos.AddCopy(offset), playerPos, blockAccessor, config);
+                    }
+                }
+            }
+
+            _vExclusionBboxes = null;
+            _vExclusionBboxCount = 0;
+
+            // Insertion sort 9 elements (trivial cost)
+            for (int i = 1; i < 9; i++)
+            {
+                float key = rays[i];
+                int j = i - 1;
+                while (j >= 0 && rays[j] > key)
+                {
+                    rays[j + 1] = rays[j];
+                    j--;
+                }
+                rays[j + 1] = key;
+            }
+
+            // Median = middle element (index 4 of 9)
+            return Math.Min(rays[4], config.MaxOcclusion);
+        }
+
+        /// <summary>
         /// [LEGACY] Fast path occlusion ÔÇö solid-face-only check, ignores partial blocks.
         /// Kept for reference. New code should use CalculateWeatherPathOcclusion instead.
         /// </summary>
@@ -343,6 +449,24 @@ namespace soundphysicsadapted
 
         private static bool RunOcclusionVisitor(ref DDABlockTraversal.TraversalContext ctx)
         {
+            // Skip blocks inside exclusion bounding boxes (ambient volume self-occlusion)
+            if (_vExclusionBboxCount > 0)
+            {
+                for (int i = 0; i < _vExclusionBboxCount; i++)
+                {
+                    var bbox = _vExclusionBboxes[i];
+                    // Cuboidi uses inclusive integer coords
+                    if (ctx.X >= bbox.X1 && ctx.X <= bbox.X2 &&
+                        ctx.Y >= bbox.Y1 && ctx.Y <= bbox.Y2 &&
+                        ctx.Z >= bbox.Z1 && ctx.Z <= bbox.Z2)
+                    {
+                        if (_vVerboseLog)
+                            _vDdaTrace.Append($"  DDA skip-bbox: {ctx.Block?.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) inside volume bbox\n");
+                        return false; // Continue — skip this block
+                    }
+                }
+            }
+
             Block block = ctx.Block;
 
             if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
