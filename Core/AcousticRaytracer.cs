@@ -323,7 +323,7 @@ namespace soundphysicsadapted
                     {
                         Vec3d newRayDir = Reflect(lastRayDir, lastHitNormal);
                         var nextHit = RaycastToSurface(lastHitPos, newRayDir, maxDistance, blockAccessor, lastHitBlock);
-                        if (!nextHit.HasValue) break;
+                        if (!nextHit.HasValue) { raysEscaped++; break; }
 
                         // Viz: capture bounce ray segment
                         if (vizCaptureRays)
@@ -436,13 +436,26 @@ namespace soundphysicsadapted
                     SoundPhysicsAdaptedModSystem.ReverbDebugLog(
                         $"REVERB+PATH: g0={sendGain0:F2} g1={sendGain1:F2} " +
                         $"shared={sharedAirspaceCount}/{totalBouncePoints} ({sharedAirspaceRatio:P0}) " +
-                        $"direct={hasDirectAirspace} {pathInfo}");
+                        $"encl={raysHit}/{raysHit + raysEscaped} direct={hasDirectAirspace} {pathInfo}");
             }
+
+            // SPR-style enclosure factor: rays that escape to open sky reduce reverb energy.
+            // SPR tracks outdoorLeak/outdoorLeakDenom across ALL bounces and uses the ratio
+            // as a confidence multiplier on volume. We do the same: escaped rays = less enclosure
+            // = less reverb energy trapped around the player.
+            float totalCasts = raysHit + raysEscaped;
+            float enclosure = totalCasts > 0 ? (float)raysHit / totalCasts : 1f;
+            // pow(1.5) steepens the curve: 50% escape → 0.35 multiplier, 25% escape → 0.65
+            float enclosureFactor = MathF.Pow(enclosure, 1.5f);
+            sendGain0 *= enclosureFactor;
+            sendGain1 *= enclosureFactor;
+            sendGain2 *= enclosureFactor;
+            sendGain3 *= enclosureFactor;
 
             // SPR-style per-slot reverb cutoff: muffled reverb through walls instead of silence.
             // sharedAirspace = how much of the reverb path is in open air vs behind walls.
-            // Higher weight → more open → cutoff approaches 1.0 (unfiltered).
-            // Lower weight → more occluded → cutoff approaches exp(-occ * absorption) (heavily filtered).
+            // Higher weight → more open → cutoff approaches airspaceCeiling (capped by direct occlusion).
+            // Lower weight → more occluded → cutoff approaches exp(-occ * absorption * 3) (heavily filtered).
             float sharedAirspace = sharedAirspaceCount * 64f * rcpTotalRays;
             float weight0 = Math.Clamp(sharedAirspace / 20f, 0f, 1f);  // early reflections: need MORE airspace
             float weight1 = Math.Clamp(sharedAirspace / 15f, 0f, 1f);
@@ -450,19 +463,22 @@ namespace soundphysicsadapted
             float weight3 = Math.Clamp(sharedAirspace / 10f, 0f, 1f);
 
             float blockAbsorption = config.BlockAbsorption;
+            // airspaceCeiling: even with full shared airspace, the reverb HF can't exceed
+            // what the direct occlusion allows. Lerp target was 1.0 (bug), now capped.
+            float airspaceCeiling = MathF.Exp(-directOcclusion * blockAbsorption);
             float occludedCutoff = MathF.Exp(-directOcclusion * blockAbsorption * 3.0f);
-            float sendCutoff0 = occludedCutoff * (1f - weight0) + weight0;
-            float sendCutoff1 = occludedCutoff * (1f - weight1) + weight1;
-            float sendCutoff2 = occludedCutoff * (1f - weight2) + weight2;
-            float sendCutoff3 = occludedCutoff * (1f - weight3) + weight3;
+            float sendCutoff0 = occludedCutoff * (1f - weight0) + weight0 * airspaceCeiling;
+            float sendCutoff1 = occludedCutoff * (1f - weight1) + weight1 * airspaceCeiling;
+            float sendCutoff2 = occludedCutoff * (1f - weight2) + weight2 * airspaceCeiling;
+            float sendCutoff3 = occludedCutoff * (1f - weight3) + weight3 * airspaceCeiling;
 
             // SPR-style reverb send volume attenuation by occlusion.
             // sendCutoff filters HF (darkness), this reduces overall volume (quietness).
-            // pow(cutoff, 0.1) is gentle: cutoff=0.05 → 0.74 (26% quieter).
-            sendGain0 *= MathF.Pow(Math.Max(sendCutoff0, 0.001f), 0.1f);
-            sendGain1 *= MathF.Pow(Math.Max(sendCutoff1, 0.001f), 0.1f);
-            sendGain2 *= MathF.Pow(Math.Max(sendCutoff2, 0.001f), 0.1f);
-            sendGain3 *= MathF.Pow(Math.Max(sendCutoff3, 0.001f), 0.1f);
+            // pow(0.4): cutoff=0.018 → 0.11 gain (89% reduction for fully occluded source).
+            sendGain0 *= MathF.Pow(Math.Max(sendCutoff0, 0.001f), 0.4f);
+            sendGain1 *= MathF.Pow(Math.Max(sendCutoff1, 0.001f), 0.4f);
+            sendGain2 *= MathF.Pow(Math.Max(sendCutoff2, 0.001f), 0.4f);
+            sendGain3 *= MathF.Pow(Math.Max(sendCutoff3, 0.001f), 0.4f);
 
             var reverbResult = new ReverbResult(sendGain0, sendGain1, sendGain2, sendGain3,
                                                 sendCutoff0, sendCutoff1, sendCutoff2, sendCutoff3);
