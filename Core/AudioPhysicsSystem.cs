@@ -696,12 +696,29 @@ namespace soundphysicsadapted
 
                         if (cache.CurrentBestFaceCenter != null && currentLockedFaceClarity >= 0)
                         {
-                            // Stick with current face unless new face exceeds it by threshold
-                            if (bestFaceClarity - currentLockedFaceClarity < FACE_SWITCH_THRESHOLD)
+                            double clarityDelta = bestFaceClarity - currentLockedFaceClarity;
+
+                            if (clarityDelta < FACE_SWITCH_THRESHOLD)
                             {
-                                chosenFace = cache.CurrentBestFaceCenter;
-                                chosenClarity = currentLockedFaceClarity;
-                                chosenRawOcc = currentLockedFaceRawOcc;
+                                // Clarity is similar — check distance tiebreaker.
+                                // When faces have equal clarity (e.g., all occ=0 in open air),
+                                // hysteresis alone would lock the face forever. Switch to the
+                                // closer face if it's significantly nearer to the player.
+                                double bestDist = bestFaceCenter.DistanceTo(playerPos);
+                                double lockedDist = cache.CurrentBestFaceCenter.DistanceTo(playerPos);
+
+                                if (bestDist < lockedDist - 1.5)
+                                {
+                                    // New face is >1.5 blocks closer — override hysteresis
+                                    // chosenFace already = bestFaceCenter
+                                }
+                                else
+                                {
+                                    // Keep locked face
+                                    chosenFace = cache.CurrentBestFaceCenter;
+                                    chosenClarity = currentLockedFaceClarity;
+                                    chosenRawOcc = currentLockedFaceRawOcc;
+                                }
                             }
                         }
                         cache.CurrentBestFaceCenter = chosenFace;
