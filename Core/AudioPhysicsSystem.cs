@@ -1005,14 +1005,12 @@ namespace soundphysicsadapted
                 // (the stone-throw panning bug: 40 bounce rays outvoted 1 direct path → 16° shift).
                 bool skipRepositioning = occlusion < 0.3f;
 
-                // OPTION E: Ambient volume sounds (beehives, water, lava) skip probes entirely.
-                // VS plays these as dynamic bounding-box volumes whose position tracks the player
-                // (nearest point on bbox). Face-sampling (above) picks the best acoustic origin
-                // from all player-facing bbox faces, so the direct ray already has the correct
-                // occlusion. Probes still run inside the raytracer (reverb shares the same call)
-                // but pathResult is discarded here.
-                // isAmbientVolume is detected earlier for face-sampling.
-                if (isAmbientVolume)
+                // OPTION E: Ambient volume sounds (beehives, water, lava) skip probes
+                // ONLY when LOS is essentially clear (occ < 0.3). If the volume is behind
+                // a wall (occ >= 0.3), allow probe-based repositioning toward openings —
+                // otherwise the sound stays pinned at the face-sampled point behind the wall
+                // while reverb/gain opens up through the opening, creating a disconnect.
+                if (isAmbientVolume && occlusion < 0.3f)
                     skipRepositioning = true;
 
                 if (skipRepositioning)
