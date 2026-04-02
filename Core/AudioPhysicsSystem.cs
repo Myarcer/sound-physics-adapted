@@ -561,14 +561,18 @@ namespace soundphysicsadapted
             // All blocks (including doors) are treated uniformly — AABB collision geometry
             // determines occlusion naturally. No special door handling.
 
-            // AMBIENT FACE-SAMPLED OCCLUSION: For ambient volume sounds (beehives, water, lava),
-            // VS positions the sound at the nearest bbox surface — which may land on an occluded
-            // face. We multi-sample all player-facing faces to determine:
+            // AMBIENT FACE-SAMPLED OCCLUSION: For ambient volume sounds (beehives, water, lava,
+            // rainwindow), VS positions the sound at the nearest bbox surface — which may land
+            // on an occluded face. We multi-sample all player-facing faces to determine:
             //   1. Acoustic position = face center with highest total clarity (ON the surface)
             //   2. Occlusion = derived directly from sample clarity (no second DDA needed)
             // This avoids the interior-point bug where averaging face centers produces a point
             // inside the bbox volume that always hits the volume's own blocks.
-            bool isAmbientVolume = sound.Params?.SoundType == EnumSoundType.Ambient;
+            // NOTE: Rainwindow uses SoundType.Weather, not Ambient — must include both.
+            var soundType = sound.Params?.SoundType;
+            bool isAmbientVolume = soundType == EnumSoundType.Ambient
+                                || soundType == EnumSoundType.AmbientGlitchunaffected
+                                || soundType == EnumSoundType.Weather;
             Vec3d acousticPos = soundPos;
             float ambientDerivedOcclusion = -1f; // -1 = not computed (use normal Calculate path)
 
