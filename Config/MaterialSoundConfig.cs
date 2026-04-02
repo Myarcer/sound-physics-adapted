@@ -50,6 +50,12 @@ namespace soundphysicsadapted
         // Pre-cached material name lookups (avoids ToString().ToLowerInvariant() per call)
         private Dictionary<EnumBlockMaterial, float> _materialOcclusionLookup;
 
+        // Per-block-ID result cache for GetReflectivity (same pattern as GetOcclusion)
+        private readonly float[] _reflectivityResultCache = new float[OCCLUSION_RESULT_CACHE_SIZE];
+        private readonly bool[] _reflectivityResultCached = new bool[OCCLUSION_RESULT_CACHE_SIZE];
+        // Pre-cached material reflectivity lookup (avoids ToString().ToLowerInvariant() per call)
+        private Dictionary<EnumBlockMaterial, float> _materialReflectivityLookup;
+
         // Cached compiled patterns for sound penetration overrides
         private List<(Regex pattern, SoundPenetrationOverride value)> _compiledPenetrationOverrides;
         // Per-sound-name result cache (avoids repeated regex matching per tick)
@@ -63,6 +69,7 @@ namespace soundphysicsadapted
         {
             Array.Clear(_occlusionResultCached, 0, OCCLUSION_RESULT_CACHE_SIZE);
             Array.Clear(_hasOverrideCache, 0, OCCLUSION_RESULT_CACHE_SIZE);
+            Array.Clear(_reflectivityResultCached, 0, OCCLUSION_RESULT_CACHE_SIZE);
         }
 
         /// <summary>
@@ -190,16 +197,40 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Get reflectivity multiplier for a block (Phase 3).
+        /// Results are cached per block ID to avoid ToString/ToLower per call.
         /// </summary>
         public float GetReflectivity(Block block)
         {
             if (block == null || Reflectivity?.Materials == null) return 0.5f;
 
-            string materialName = block.BlockMaterial.ToString().ToLowerInvariant();
-            if (Reflectivity.Materials.TryGetValue(materialName, out float reflectivity))
-                return reflectivity;
+            int blockId = block.Id;
+            if (blockId >= 0 && blockId < OCCLUSION_RESULT_CACHE_SIZE && _reflectivityResultCached[blockId])
+            {
+                return _reflectivityResultCache[blockId];
+            }
 
-            return 0.5f; // Default
+            // Cache miss — compute via pre-cached enum lookup
+            if (_materialReflectivityLookup == null)
+            {
+                _materialReflectivityLookup = new Dictionary<EnumBlockMaterial, float>();
+                foreach (EnumBlockMaterial mat in Enum.GetValues(typeof(EnumBlockMaterial)))
+                {
+                    string matName = mat.ToString().ToLowerInvariant();
+                    if (Reflectivity.Materials.TryGetValue(matName, out float val))
+                        _materialReflectivityLookup[mat] = val;
+                }
+            }
+
+            float result = _materialReflectivityLookup.TryGetValue(block.BlockMaterial, out float reflectivity)
+                ? reflectivity : 0.5f;
+
+            if (blockId >= 0 && blockId < OCCLUSION_RESULT_CACHE_SIZE)
+            {
+                _reflectivityResultCache[blockId] = result;
+                _reflectivityResultCached[blockId] = true;
+            }
+
+            return result;
         }
 
         /// <summary>
