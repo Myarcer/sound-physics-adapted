@@ -971,7 +971,10 @@ namespace soundphysicsadapted
                 if (skipRepositioning)
                 {
                     // Clear LOS or ambient volume: sound stays at original position.
-                    AudioRenderer.ResetSoundPosition(sound, soundPos);
+                    // For ambient volumes: use face-sampled acousticPos (stable, EMA-smoothed)
+                    // instead of vanilla soundPos which flip-flops between bbox faces at edges.
+                    Vec3d resetPos = isAmbientVolume ? acousticPos : soundPos;
+                    AudioRenderer.ResetSoundPosition(sound, resetPos);
 
                     // SMOOTH TRANSITION: When switching from occluded→clear, don't snap
                     // the filter. Instead, EMA-smooth toward the direct occlusion value.
