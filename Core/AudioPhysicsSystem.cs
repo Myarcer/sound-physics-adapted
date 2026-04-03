@@ -769,6 +769,18 @@ namespace soundphysicsadapted
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
                             $"[AMBIENT-FALLBACK] {soundName} no samples, using bbox-excluded DDA, occ={ambientDerivedOcclusion:F2}");
                 }
+
+                // Point-source ambients (resonators, etc.) have SoundType.Ambient but no
+                // bbox volumes and no face samples. They should NOT skip repositioning —
+                // treat them as regular sounds so probe rays can reposition around walls.
+                if (ambientDerivedOcclusion < 0f)
+                {
+                    isAmbientVolume = false;
+
+                    if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"[AMBIENT-DOWNGRADE] {soundName} has SoundType.Ambient but no bbox/samples — treating as point source");
+                }
             }
 
             // PROXIMITY CENTER BLEND (Steam Audio approach):
