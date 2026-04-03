@@ -4,6 +4,30 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2.3] - 2026-04-03
+
+### Added
+- Face-sampled ambient volume occlusion — ambient sounds (water, lava, beehives) now use multi-face sampling to determine the least-occluded bbox face center as the acoustic origin, replacing the old averaged-position method that produced buggy interior points and unstable occlusion
+- Proximity center blend — as the player approaches an ambient volume, the acoustic position blends toward the player for an immersive enveloping effect with smooth panning transition at boundaries
+- Bbox-excluding DDA methods (`CalculatePathOcclusionExcludingBboxes`, `CalculateExcludingBboxes`) — occlusion rays now skip blocks inside the ambient volume's own bounding boxes, preventing self-occlusion artifacts
+- Median-of-9-rays occlusion for ambient face centers — robust to both DDA corner-clipping (occ=2 outliers) and edge-slipping (occ=0 outliers), producing stable wall counts (1 wall→1.0, 2 walls→2.0)
+- Face hysteresis with distance and raw occlusion tiebreakers — prevents L/R flip-flop when faces have similar clarity; perpendicular paths (occ=1) preferred over diagonal paths (occ=2+)
+- EMA temporal smoothing on acoustic position (α=0.15, ~300ms convergence) — damps face-switching jitter
+
+### Fixed
+- Reverb leak through occluded sources — 3 SPR-style fixes prevent reverb from bleeding through fully muffled walls
+- Beehive sound override domain — moved from `survival:` to `game:` domain so the override actually matches the vanilla sound key
+- Point-source ambients (resonators) no longer misclassified as bbox volumes — `SoundType.Ambient` sounds without bbox data now fall through to normal repositioning with probe rays instead of being stuck with no repositioning
+- Exclusion state leak safety — `try/finally` around `RunOcclusion` in bbox-excluding DDA ensures static exclusion state is always cleared even if an exception occurs
+- Unclamped early return in `CalculateExcludingBboxes` — now consistently capped to `MaxOcclusion`
+
+### Performance
+- `GetReflectivity` cached per block ID — eliminates redundant material lookups in `ProbeForOpenings`
+- `Vec3d`/`Random` allocations eliminated from `ProbeForOpenings` hot path
+
+### Config
+- `SoundOverrides` defaults to `false` (was `true`) — custom sound replacements opt-in only
+
 ## [0.2.2.1] - 2026-03-27
 
 ### Fixed
