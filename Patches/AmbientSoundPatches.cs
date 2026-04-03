@@ -230,27 +230,27 @@ namespace soundphysicsadapted
                     // -X face (world x = bbox.X1)
                     if (playerX < cx)
                         AddFaceSamples(bbox.X1 + FACE_INSET, cy, cz,
-                            sizeX, sizeY, sizeZ, 'X', false);
+                            sizeX, sizeY, sizeZ, 'X');
                     // +X face (world x = bbox.X2)
                     if (playerX > cx)
                         AddFaceSamples(bbox.X2 - FACE_INSET, cy, cz,
-                            sizeX, sizeY, sizeZ, 'X', true);
+                            sizeX, sizeY, sizeZ, 'X');
                     // -Y face (world y = bbox.Y1)
                     if (playerEyeY < cy)
                         AddFaceSamples(cx, bbox.Y1 + FACE_INSET, cz,
-                            sizeX, sizeY, sizeZ, 'Y', false);
+                            sizeX, sizeY, sizeZ, 'Y');
                     // +Y face (world y = bbox.Y2)
                     if (playerEyeY > cy)
                         AddFaceSamples(cx, bbox.Y2 - FACE_INSET, cz,
-                            sizeX, sizeY, sizeZ, 'Y', true);
+                            sizeX, sizeY, sizeZ, 'Y');
                     // -Z face (world z = bbox.Z1)
                     if (playerZ < cz)
                         AddFaceSamples(cx, cy, bbox.Z1 + FACE_INSET,
-                            sizeX, sizeY, sizeZ, 'Z', false);
+                            sizeX, sizeY, sizeZ, 'Z');
                     // +Z face (world z = bbox.Z2)
                     if (playerZ > cz)
                         AddFaceSamples(cx, cy, bbox.Z2 - FACE_INSET,
-                            sizeX, sizeY, sizeZ, 'Z', true);
+                            sizeX, sizeY, sizeZ, 'Z');
                 }
 
                 // Build bbox array for DDA exclusion
@@ -315,7 +315,7 @@ namespace soundphysicsadapted
         private static void AddFaceSamples(
             double faceX, double faceY, double faceZ,
             int bboxSizeX, int bboxSizeY, int bboxSizeZ,
-            char normalAxis, bool positive)
+            char normalAxis)
         {
             // Determine the two tangent axes and their sizes
             int tangent1Size, tangent2Size;

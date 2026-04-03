@@ -223,10 +223,15 @@ namespace soundphysicsadapted
 
             _vExclusionBboxes = bboxes;
             _vExclusionBboxCount = bboxCount;
-            float result = RunOcclusion(from, to, blockAccessor, config);
-            _vExclusionBboxes = null;
-            _vExclusionBboxCount = 0;
-            return result;
+            try
+            {
+                return RunOcclusion(from, to, blockAccessor, config);
+            }
+            finally
+            {
+                _vExclusionBboxes = null;
+                _vExclusionBboxCount = 0;
+            }
         }
 
         /// <summary>
@@ -271,7 +276,7 @@ namespace soundphysicsadapted
             {
                 _vExclusionBboxes = null;
                 _vExclusionBboxCount = 0;
-                return centerOcclusion;
+                return Math.Min(centerOcclusion, config.MaxOcclusion);
             }
 
             // Fixed-size array for 9 rays (center + 8 offsets), insertion-sorted
