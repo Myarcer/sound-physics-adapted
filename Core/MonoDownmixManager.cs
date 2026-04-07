@@ -14,8 +14,8 @@ namespace soundphysicsadapted
     /// resulting in flat 2D audio with no directionality (explosions, block sounds, etc.).
     /// 
     /// This manager provides:
-    /// 1. Auto-detection: positional + stereo + non-relative → needs mono
-    /// 2. Cached downmix: each stereo asset is only converted once, then cached
+    /// 1. Auto-detection: positional + multi-channel + non-relative → needs mono
+    /// 2. Cached downmix: each multi-channel asset is only converted once, then cached
     /// 3. Universal hook: patches StartPlaying(AudioData, SoundParams, AssetLocation)
     ///    which is the convergence point for BOTH PlaySoundAtInternal and LoadSound paths
     /// 4. Legacy support: ForceMonoNextLoad and RequestMonoForAsset still work
@@ -60,7 +60,8 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Check if a sound should be auto-downmixed to mono for proper 3D spatialization.
-        /// Returns true if: positional (non-null, non-zero position) + non-relative + stereo.
+        /// Returns true if: positional (non-null, non-zero position) + non-relative + multi-channel.
+        /// Handles stereo (2ch), 5.1 (6ch), 7.1 (8ch), and any other multi-channel format.
         /// </summary>
         public static bool ShouldAutoDownmix(SoundParams sparams, AudioData audiodata)
         {
@@ -71,7 +72,7 @@ namespace soundphysicsadapted
             if (sparams.Position == null) return false;
             if (sparams.Position.X == 0f && sparams.Position.Y == 0f && sparams.Position.Z == 0f) return false;
 
-            // Check if the audio data is stereo
+            // Check if the audio data is multi-channel
             var meta = audiodata as AudioMetaData;
             if (meta == null) return false;
 
@@ -82,8 +83,8 @@ namespace soundphysicsadapted
                 return false;
             }
 
-            // Only downmix if stereo (2 channels)
-            return meta.Channels == 2;
+            // Downmix any multi-channel source (stereo, 5.1, 7.1, etc.)
+            return meta.Channels >= 2;
         }
 
         #endregion
@@ -93,7 +94,7 @@ namespace soundphysicsadapted
         /// <summary>
         /// Unified entry point: ensure AudioData is mono if the sound should be positional.
         /// Returns the original AudioData if already mono or non-positional.
-        /// Returns a cached mono clone if stereo and positional.
+        /// Returns a cached mono clone if multi-channel and positional.
         /// Zero-cost passthrough for already-mono sounds.
         /// </summary>
         public static AudioData EnsureMono(AudioData audiodata, SoundParams sparams)
@@ -112,33 +113,34 @@ namespace soundphysicsadapted
                 explicitRequest = CheckAndConsumeMonoRequest(sparams.Location);
             }
 
-            // Auto-detection: positional + stereo → needs mono
+            // Auto-detection: positional + multi-channel → needs mono
             if (!explicitRequest && !ShouldAutoDownmix(sparams, audiodata))
             {
                 return audiodata; // No downmix needed
             }
 
-            // Get the stereo AudioMetaData
-            var stereoMeta = audiodata as AudioMetaData;
-            if (stereoMeta == null) return audiodata;
+            // Get the multi-channel AudioMetaData
+            var sourceMeta = audiodata as AudioMetaData;
+            if (sourceMeta == null) return audiodata;
 
             // Already mono — no conversion needed
-            if (stereoMeta.Channels != 2) return audiodata;
+            if (sourceMeta.Channels < 2) return audiodata;
 
             // Get or create mono version
-            return GetOrCreateMonoVersion(stereoMeta);
+            return GetOrCreateMonoVersion(sourceMeta);
         }
 
         /// <summary>
-        /// Get or create a mono-downmixed clone of the given stereo AudioMetaData.
+        /// Get or create a mono-downmixed clone of the given multi-channel AudioMetaData.
         /// The clone is cached by asset location to avoid repeated downmixing.
-        /// The original AudioMetaData is NOT modified (other sounds keep using stereo).
+        /// The original AudioMetaData is NOT modified (other sounds keep using their native format).
+        /// Handles stereo (2ch), 5.1 surround (6ch), 7.1 (8ch), and any N-channel layout.
         /// </summary>
-        public static AudioMetaData GetOrCreateMonoVersion(AudioMetaData stereoMeta)
+        public static AudioMetaData GetOrCreateMonoVersion(AudioMetaData sourceMeta)
         {
-            if (stereoMeta == null) return null;
+            if (sourceMeta == null) return null;
 
-            string key = stereoMeta.Asset?.Location?.ToString() ?? "";
+            string key = sourceMeta.Asset?.Location?.ToString() ?? "";
 
             if (monoCache.TryGetValue(key, out var cached))
             {
@@ -146,27 +148,29 @@ namespace soundphysicsadapted
             }
 
             // Ensure the source data is loaded
-            if (stereoMeta.Loaded < 2)
+            if (sourceMeta.Loaded < 2)
             {
-                stereoMeta.Load();
+                sourceMeta.Load();
             }
 
-            if (stereoMeta.Channels != 2 || stereoMeta.Pcm == null)
+            if (sourceMeta.Channels < 2 || sourceMeta.Pcm == null)
             {
                 // Already mono or no data — return as-is
-                return stereoMeta;
+                return sourceMeta;
             }
 
             try
             {
+                int sourceChannels = sourceMeta.Channels;
+
                 // Create a new AudioMetaData with mono PCM
                 // Uses the same asset reference (just for metadata — won't trigger re-decode
                 // because we're setting Loaded=2 which skips DoLoad)
-                var monoMeta = new AudioMetaData(stereoMeta.Asset);
-                monoMeta.Pcm = DownmixStereoToMono(stereoMeta.Pcm);
+                var monoMeta = new AudioMetaData(sourceMeta.Asset);
+                monoMeta.Pcm = DownmixToMono(sourceMeta.Pcm, sourceChannels);
                 monoMeta.Channels = 1;
-                monoMeta.Rate = stereoMeta.Rate;
-                monoMeta.BitsPerSample = stereoMeta.BitsPerSample;
+                monoMeta.Rate = sourceMeta.Rate;
+                monoMeta.BitsPerSample = sourceMeta.BitsPerSample;
                 monoMeta.Loaded = 2; // Mark as loaded — skip DoLoad(), go straight to createSoundSource()
 
                 monoCache[key] = monoMeta;
@@ -174,7 +178,7 @@ namespace soundphysicsadapted
                 autoDownmixCount++;
                 SoundPhysicsAdaptedModSystem.DebugLog(
                     $"[MonoDownmix] Created mono version #{autoDownmixCount} for '{key}' " +
-                    $"(stereo {stereoMeta.Pcm.Length}B -> mono {monoMeta.Pcm.Length}B, " +
+                    $"({sourceChannels}ch {sourceMeta.Pcm.Length}B -> mono {monoMeta.Pcm.Length}B, " +
                     $"rate={monoMeta.Rate}, bits={monoMeta.BitsPerSample})");
 
                 return monoMeta;
@@ -182,31 +186,47 @@ namespace soundphysicsadapted
             catch (Exception ex)
             {
                 SoundPhysicsAdaptedModSystem.DebugLog($"[MonoDownmix] Failed to create mono version of '{key}': {ex.Message}");
-                return stereoMeta; // Fallback to stereo
+                return sourceMeta; // Fallback to original
             }
         }
 
         /// <summary>
-        /// Convert stereo 16-bit PCM to mono by averaging L+R channels.
+        /// Convert N-channel 16-bit PCM to mono by averaging all channels per frame.
+        /// Handles stereo (2ch), 5.1 (6ch), 7.1 (8ch), and any arbitrary channel count.
+        /// For 5.1 surround: averages FL+FR+FC+LFE+RL+RR equally (simple mean).
         /// </summary>
-        public static byte[] DownmixStereoToMono(byte[] stereoPcm)
+        public static byte[] DownmixToMono(byte[] pcmData, int channels)
         {
-            int sampleCount = stereoPcm.Length / 2; // 2 bytes per sample
-            int monoSampleCount = sampleCount / 2;  // Half the samples for mono
-            byte[] monoPcm = new byte[monoSampleCount * 2]; // 2 bytes per sample
+            const int bytesPerSample = 2; // 16-bit PCM
+            int frameSize = channels * bytesPerSample;
+            int frameCount = pcmData.Length / frameSize;
+            byte[] monoPcm = new byte[frameCount * bytesPerSample];
 
-            for (int i = 0; i < monoSampleCount; i++)
+            for (int i = 0; i < frameCount; i++)
             {
-                int leftIndex = i * 4;
-                short left = (short)(stereoPcm[leftIndex] | (stereoPcm[leftIndex + 1] << 8));
-                short right = (short)(stereoPcm[leftIndex + 2] | (stereoPcm[leftIndex + 3] << 8));
-                short mono = (short)((left + right) / 2);
-                int monoIndex = i * 2;
-                monoPcm[monoIndex] = (byte)(mono & 0xFF);
-                monoPcm[monoIndex + 1] = (byte)((mono >> 8) & 0xFF);
+                int sum = 0;
+                int frameOffset = i * frameSize;
+                for (int ch = 0; ch < channels; ch++)
+                {
+                    int sampleOffset = frameOffset + ch * bytesPerSample;
+                    sum += (short)(pcmData[sampleOffset] | (pcmData[sampleOffset + 1] << 8));
+                }
+                short mono = (short)(sum / channels);
+                int monoOffset = i * bytesPerSample;
+                monoPcm[monoOffset] = (byte)(mono & 0xFF);
+                monoPcm[monoOffset + 1] = (byte)((mono >> 8) & 0xFF);
             }
 
             return monoPcm;
+        }
+
+        /// <summary>
+        /// Legacy wrapper: Convert stereo 16-bit PCM to mono.
+        /// Delegates to the generalized DownmixToMono with channels=2.
+        /// </summary>
+        public static byte[] DownmixStereoToMono(byte[] stereoPcm)
+        {
+            return DownmixToMono(stereoPcm, 2);
         }
 
         #endregion
