@@ -88,11 +88,19 @@ namespace soundphysicsadapted
         
         // Mod compatibility detection
         private static bool carryOnModLoaded = false;
+        private static bool surroundSoundModLoaded = false;
         
         /// <summary>
         /// True if the "Carry On" mod is loaded - changes resonator pause/resume from Shift+RMB to Ctrl+RMB
         /// </summary>
         public static bool CarryOnModLoaded => carryOnModLoaded;
+
+        /// <summary>
+        /// True if "Vintage Story Surround Sound" mod is loaded - weather audio files may be
+        /// replaced with 5.1 surround (6ch) OGGs. MonoDownmixManager handles N-channel downmix.
+        /// Their experimental RainEmitterSystem may produce double positional rain if both active.
+        /// </summary>
+        public static bool SurroundSoundModLoaded => surroundSoundModLoaded;
 
         public static SoundPhysicsConfig Config => config;
         public static MaterialSoundConfig MaterialConfig => materialConfig;
@@ -413,6 +421,16 @@ namespace soundphysicsadapted
             if (carryOnModLoaded)
             {
                 api.Logger.Notification("[SoundPhysicsAdapted] Carry On mod detected - resonator pause/resume changed to Ctrl+RMB");
+            }
+
+            // Detect Surround Sound mod - replaces vanilla weather OGGs with 5.1 surround (6ch).
+            // Our N-channel MonoDownmixManager handles the 6ch->mono conversion for positional sources.
+            // Their experimental RainEmitterSystem may cause double positional rain alongside Phase 5B.
+            surroundSoundModLoaded = api.ModLoader.IsModEnabled("vintagestorysurroundsound");
+            if (surroundSoundModLoaded)
+            {
+                api.Logger.Notification("[SoundPhysicsAdapted] Surround Sound mod detected - weather audio may be 5.1 surround, N-channel mono downmix active");
+                api.Logger.Warning("[SoundPhysicsAdapted] If Surround Sound's experimental rain emitters are enabled alongside SPA positional weather, double rain audio may occur. Disable one system for best results.");
             }
 
             // Apply Harmony patches (client-side only - sounds are client-side)
