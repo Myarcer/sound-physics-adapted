@@ -698,13 +698,17 @@ namespace soundphysicsadapted
                                     // chosenFace already = bestFaceCenter
                                 }
                                 // 2. DISTANCE tiebreaker: when clarities AND occ are similar,
-                                // switch to closer face if >1.5 blocks nearer.
+                                // switch to closer face if meaningfully nearer.
+                                // Low threshold (0.3) because EMA smoothing (alpha=0.15)
+                                // already prevents position jumps. Heavy hysteresis here
+                                // blocks face tracking along multi-bbox volumes, causing
+                                // the acoustic pos to lock to a wrong bbox's face.
                                 else
                                 {
                                     double bestDist = bestFaceCenter.DistanceTo(playerPos);
                                     double lockedDist = cache.CurrentBestFaceCenter.DistanceTo(playerPos);
 
-                                    if (bestDist < lockedDist - 1.5)
+                                    if (bestDist < lockedDist - 0.3)
                                     {
                                         // New face is >1.5 blocks closer — override hysteresis
                                         // chosenFace already = bestFaceCenter
