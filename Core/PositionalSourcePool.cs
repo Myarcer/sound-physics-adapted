@@ -360,16 +360,22 @@ namespace soundphysicsadapted
             return PlayOneShot(worldPos, volume, isLeafy, 0);
         }
 
+        public bool PlayOneShot(Vec3d worldPos, float volume, bool isLeafy, int preApplyFilterId)
+        {
+            return PlayOneShot(worldPos, volume, isLeafy, preApplyFilterId, 1.0f);
+        }
+
         /// <summary>
         /// Play a one-shot positional sound at a world position (oneshot mode) with optional
-        /// pre-applied LPF filter. The filter is attached BEFORE Start() to prevent transient
+        /// pre-applied LPF filter and pitch. The filter is attached BEFORE Start() to prevent transient
         /// bypass on sharp thunder cracks heard through walls.
         /// </summary>
         /// <param name="worldPos">World position to play at</param>
         /// <param name="volume">Initial volume (0-1)</param>
         /// <param name="isLeafy">Whether current biome is leafy</param>
         /// <param name="preApplyFilterId">OpenAL EFX filter ID to attach before Start(), 0 = none</param>
-        public bool PlayOneShot(Vec3d worldPos, float volume, bool isLeafy, int preApplyFilterId)
+        /// <param name="pitch">Pitch multiplier (1.0 = normal)</param>
+        public bool PlayOneShot(Vec3d worldPos, float volume, bool isLeafy, int preApplyFilterId, float pitch)
         {
             if (!initialized || sources == null || mode != PoolMode.OneShot) return false;
             if (AssetResolver == null) return false;
@@ -405,6 +411,7 @@ namespace soundphysicsadapted
                     RelativePosition = false,
                     Position = new Vec3f((float)worldPos.X, (float)worldPos.Y, (float)worldPos.Z),
                     Volume = volume,
+                    Pitch = pitch,
                     SoundType = EnumSoundType.Weather,
                     Range = SoundRange
                 };

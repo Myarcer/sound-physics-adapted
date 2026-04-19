@@ -243,7 +243,7 @@ namespace soundphysicsadapted
                 // INDOOR WITH OPENINGS: Layer 1 rumble + Layer 2 at opening
                 float combined = CalculateCombinedEnclosure(skyCoverage, occlusionFactor, config);
                 PlayLayer1Rumble(asset, rawIntensity, pitch, skyCoverage, occlusionFactor, nearestRainDist, gameTimeMs);
-                PlayLayer2AtBestOpening(null, trackedOpenings, playerEarPos, volume, combined, config);
+                PlayLayer2AtBestOpening(null, trackedOpenings, playerEarPos, volume, combined, config, -1f);
             }
             else
             {
@@ -380,7 +380,7 @@ namespace soundphysicsadapted
                 // The opening IS the unoccluded path.
                 if (trackedOpenings != null && trackedOpenings.Count > 0)
                 {
-                    PlayLayer2AtBestOpening(boltWorldPos, trackedOpenings, playerEarPos, baseVolume, combined, config);
+                    PlayLayer2AtBestOpening(boltWorldPos, trackedOpenings, playerEarPos, baseVolume, combined, config, distance);
                 }
 
                 // Queue delayed nodistance.ogg crack (indoor, same LPF as L1)
@@ -677,7 +677,8 @@ namespace soundphysicsadapted
             Vec3d playerEarPos,
             float intensity,
             float combinedEnclosure,
-            SoundPhysicsConfig config)
+            SoundPhysicsConfig config,
+            float boltDistance)
         {
             if (oneShotPool == null || trackedOpenings == null || trackedOpenings.Count == 0)
                 return;
@@ -808,11 +809,15 @@ namespace soundphysicsadapted
             Vec3d l2Pos = PushThroughAir(bestOpening.WorldPos, pushDir, 15f, capi.World.BlockAccessor);
             float pushDist = (float)l2Pos.DistanceTo(bestOpening.WorldPos);
 
-            oneShotPool.PlayOneShot(l2Pos, layer2Vol, false, preFilterId);
+            // Distance-based pitch for L2 crack: same curve as outdoor/indoor cracks.
+            // Ambient thunder (boltDistance<0) uses mid-range default (~300 blocks).
+            float l2Pitch = CalculateCrackPitch(boltDistance >= 0f ? boltDistance : 300f);
+
+            oneShotPool.PlayOneShot(l2Pos, layer2Vol, false, preFilterId, l2Pitch);
 
             ThunderDebugLog(
                 $"  L2 at opening trackId={bestOpening.TrackingId} " +
-                $"score={bestScore:F2} vol={layer2Vol:F3} encl={combinedEnclosure:F2} " +
+                $"score={bestScore:F2} vol={layer2Vol:F3} pitch={l2Pitch:F2} encl={combinedEnclosure:F2} " +
                 $"preFilter={preFilterId > 0} hasBolt={boltWorldPos != null} " +
                 $"pushed={pushDist:F1}blocks");
         }
