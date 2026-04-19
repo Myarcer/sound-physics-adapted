@@ -617,6 +617,7 @@ namespace soundphysicsadapted
                     Vec3d bestFaceCenter = null;
                     double bestFaceClarity = -1;
                     double bestFaceRawOcc = 0;
+                    double bestFaceDist = double.MaxValue;
                     int facesTested = 0;
 
                     // Also track clarity + raw occ for the current (hysteresis) face
@@ -638,18 +639,25 @@ namespace soundphysicsadapted
                                 fc, playerPos, blockAccessor, volBboxes, volBboxCount)
                             : OcclusionCalculator.Calculate(fc, playerPos, blockAccessor);
                         float clarity = Math.Max(0f, 1f - faceOcc);
+                        double faceDist = fc.DistanceTo(playerPos);
                         facesTested++;
 
+                        // Prefer: 1) higher clarity, 2) lower raw occ (>0.01 margin),
+                        // 3) closest face to player. The distance tiebreaker is critical
+                        // for multi-bbox volumes (e.g. beehives with 2 bboxes): when all
+                        // faces have identical clarity/occ in open air, without it the
+                        // first-in-iteration face wins — often a far bbox face. This causes
+                        // the proximity blend to miss (distance > 2.5 blocks) and walking
+                        // L/R across the far bbox center flips the face → instant L/R pan.
                         if (clarity > bestFaceClarity ||
-                            (clarity == bestFaceClarity && faceOcc < bestFaceRawOcc))
+                            (clarity == bestFaceClarity && faceOcc < bestFaceRawOcc - 0.01f) ||
+                            (clarity == bestFaceClarity && Math.Abs(faceOcc - bestFaceRawOcc) <= 0.01f
+                             && faceDist < bestFaceDist))
                         {
-                            // Prefer higher clarity; when tied (e.g., all faces at clarity=0
-                            // behind walls), prefer lower raw occlusion. This selects the
-                            // player-facing face (perpendicular through wall = occ 1.0) over
-                            // side faces (diagonal through wall = occ 2.0+).
                             bestFaceClarity = clarity;
                             bestFaceRawOcc = faceOcc;
                             bestFaceCenter = fc;
+                            bestFaceDist = faceDist;
                         }
 
                         // Track if this is the locked face from last tick
