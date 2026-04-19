@@ -1472,17 +1472,18 @@ namespace soundphysicsadapted
         private float CalculateCrackPitch(float distance)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
-            float minPitch = config?.ThunderCrackPitchMin ?? 0.5f;
+            float minPitch = config?.ThunderCrackPitchMin ?? 0.35f;
 
             // Steeper pitch curve using t^0.7 (between linear and sqrt).
-            // Starts dropping immediately — even close cracks get subtle deepening.
-            // 0-30:    1.0 → 0.985  (subtle)
-            // 30-200:  0.985 → 0.72 (noticeably deeper)
-            // 200-500: 0.72 → 0.58  (clearly bass-shifted)
-            // 500-1000: 0.58 → minPitch (deep rumble)
+            // Sqrt curve from 0 blocks — aggressive pitch drop models multi-path
+            // arrival stretching the crack into a drawn-out rumble.
+            // 0-100:    1.0 → 0.79  (noticeably deeper)
+            // 100-300:  0.79 → 0.64 (clearly bass-shifted)
+            // 300-500:  0.64 → 0.54 (slow rumble)
+            // 500-1000: 0.54 → minPitch (deep drawn-out rumble, ~3x duration)
             float pitchFactor;
             float t = Math.Min(distance / 1000f, 1.0f);
-            pitchFactor = 1.0f - (float)Math.Pow(t, 0.7) * (1.0f - minPitch);
+            pitchFactor = 1.0f - (float)Math.Sqrt(t) * (1.0f - minPitch);
 
             // Distance-scaled randomness: close cracks get wide timbre variety,
             // distant cracks are already muffled so less variation needed.

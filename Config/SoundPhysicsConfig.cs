@@ -404,7 +404,7 @@ namespace soundphysicsadapted
         /// Override vanilla beehive-wild.ogg with improved version.
         /// Requires EnableSoundOverrides=true.
         /// </summary>
-        public bool OverrideBeehiveSound { get; set; } = false;
+        public bool OverrideBeehiveSound { get; set; } = true;
 
         /// <summary>
         /// Override vanilla lightning-nodistance.ogg with louder version.
@@ -639,7 +639,7 @@ namespace soundphysicsadapted
         /// At close range pitch=1.0 (bright crack), at max distance pitch drops to this value
         /// (deeper, bassier rumble). Simulates high-frequency atmospheric attenuation.
         /// </summary>
-        public float ThunderCrackPitchMin { get; set; } = 0.5f;
+        public float ThunderCrackPitchMin { get; set; } = 0.35f;
 
         /// <summary>
         /// Random pitch variation applied to each thunder event (±this value).
