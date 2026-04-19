@@ -43,7 +43,7 @@ namespace soundphysicsadapted
         /// Bump this when adding new migration blocks in MigrateConfig().
         /// Pre-migration configs (ConfigVersion == 0) are always wiped to fresh defaults.
         /// </summary>
-        private const int CurrentConfigVersion = 4;
+        private const int CurrentConfigVersion = 5;
         private static MaterialSoundConfig materialConfig;
         private static ICoreClientAPI clientApi;
         private static AudioPhysicsSystem acousticsManager;
@@ -771,8 +771,7 @@ namespace soundphysicsadapted
                                 config.MinLowPassFilter = value;
                                 break;
                             case "maxrays":
-                                config.MaxOcclusionRays = (int)value;
-                                break;
+                                return TextCommandResult.Error("maxrays is deprecated and no longer used.");
                             case "variation":
                             case "occlusionvariation":
                                 config.OcclusionVariation = value;

@@ -437,8 +437,11 @@ namespace soundphysicsadapted
             _vNdz = ndz;
             _vLength = length;
 
-            int maxDDASteps = config.MaxDDASteps;
-            DDABlockTraversal.Traverse(from, to, blockAccessor, _runOcclusionVisitor, skipFirst: skipFirstBlock, maxSteps: maxDDASteps);
+            // maxSteps=0 uses the natural Manhattan distance bound from TraverseCore.
+            // The inaudible threshold already provides early exit when enough occlusion
+            // accumulates, so an artificial step cap only risks truncating rays in open
+            // air and returning false occ=0 for distant sounds.
+            DDABlockTraversal.Traverse(from, to, blockAccessor, _runOcclusionVisitor, skipFirst: skipFirstBlock, maxSteps: 0);
             
             float occlusionAccumulation = _vOcclusionAccumulation;
 
@@ -595,7 +598,6 @@ namespace soundphysicsadapted
             int entryX = 0, entryY = 0, entryZ = 0;
             bool hasEntryPoint = false;
 
-            int maxDDASteps = config.MaxDDASteps;
             bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
@@ -622,7 +624,7 @@ namespace soundphysicsadapted
                 }
 
                 return false; // Continue
-            }, skipFirst: true, maxSteps: maxDDASteps);
+            }, skipFirst: true);
 
             entryPoint = hasEntryPoint ? new Vec3d(entryX + 0.5, entryY + 0.5, entryZ + 0.5) : null;
             return stopped ? config.MaxOcclusion : occlusionAccumulation;
@@ -695,7 +697,6 @@ namespace soundphysicsadapted
             int destY = (int)Math.Floor(to.Y);
             int destZ = (int)Math.Floor(to.Z);
 
-            int maxDDASteps = config.MaxDDASteps;
             bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
             {
                 Block block = ctx.Block;
@@ -862,7 +863,7 @@ namespace soundphysicsadapted
                 }
 
                 return false; // Continue
-            }, skipFirst: skipFirstBlock, maxSteps: maxDDASteps);
+            }, skipFirst: skipFirstBlock);
 
             entryPoint = hasEntryPoint ? new Vec3d(entryX + 0.5, entryY + 0.5, entryZ + 0.5) : null;
             float mainResult = stopped ? config.MaxOcclusion : occlusionAccum;

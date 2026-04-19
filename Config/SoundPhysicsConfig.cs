@@ -136,28 +136,6 @@ namespace soundphysicsadapted
         public float BlockAbsorption { get; set; } = 1.0f;
 
         /// <summary>
-        /// [DEPRECATED] No longer used for skipping sounds.
-        /// Reverb distance attenuation now uses per-sound SoundParams.Range from vanilla.
-        /// Kept for config file backward compatibility — will be removed in a future version.
-        /// </summary>
-        public float MaxSoundDistance { get; set; } = 64.0f;
-
-        /// <summary>
-        /// [DEPRECATED] Unused. Kept for config backward compatibility.
-        /// DDA step limit is now controlled by MaxDDASteps.
-        /// </summary>
-        public int MaxOcclusionRays { get; set; } = 16;
-
-        /// <summary>
-        /// Maximum DDA traversal steps per occlusion ray.
-        /// Hard cap on how many blocks the ray walks regardless of sound distance.
-        /// Prevents long-distance rays through open air from walking 60+ blocks.
-        /// Default 32 covers ~20 blocks in any diagonal direction.
-        /// 0 = unlimited (Manhattan distance bound only).
-        /// </summary>
-        public int MaxDDASteps { get; set; } = 32;
-
-        /// <summary>
         /// Minimum lowpass filter value (0 = silent, 1 = no filter)
         /// Prevents sounds from being completely inaudible
         /// 0.001 = 0.1% minimum volume for max occluded sounds
