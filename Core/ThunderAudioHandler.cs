@@ -66,6 +66,7 @@ namespace soundphysicsadapted
         // We create+start+dispose per event (thunder is infrequent)
         private int layer1FilterId = 0;
         private int crackFilterId = 0; // Separate, more aggressive LPF for indoor cracks
+        private int outdoorCrackFilterId = 0; // Distance-based atmospheric absorption LPF for outdoor cracks
 
         private bool initialized = false;
         private bool disposed = false;
@@ -173,6 +174,15 @@ namespace soundphysicsadapted
                 if (crackFilterId > 0)
                 {
                     EfxHelper.ConfigureLowpass(crackFilterId, 1.0f);
+                }
+
+                // Outdoor crack filter — models atmospheric HF absorption over distance.
+                // Pitch shift moves the spectrum down, this shaves the top off.
+                // Both are physically correct and non-redundant.
+                outdoorCrackFilterId = EfxHelper.GenFilter();
+                if (outdoorCrackFilterId > 0)
+                {
+                    EfxHelper.ConfigureLowpass(outdoorCrackFilterId, 1.0f);
                 }
             }
 
@@ -1019,6 +1029,11 @@ namespace soundphysicsadapted
                 // Distance-based pitch: deeper/bassier at longer range
                 float crackPitch = CalculateCrackPitch(crack.Distance);
 
+                // Distance-based atmospheric absorption LPF (orthogonal to pitch shift):
+                // Pitch shifts the whole spectrum down. LPF shaves the top off.
+                // Air absorbs HF exponentially faster — both effects happen in reality.
+                float outdoorGainHF = CalculateOutdoorCrackGainHF(crack.Distance);
+
                 try
                 {
                     var soundParams = new SoundParams()
@@ -1037,8 +1052,16 @@ namespace soundphysicsadapted
                     ILoadedSound sound = capi.World.LoadSound(soundParams);
                     if (sound != null)
                     {
-                        sound.Start();
+                        // Apply atmospheric LPF before Start() to prevent unfiltered transient
                         int sourceId = AudioRenderer.GetSourceId(sound);
+                        if (outdoorCrackFilterId > 0 && EfxHelper.IsAvailable && outdoorGainHF < 0.99f && sourceId > 0)
+                        {
+                            EfxHelper.SetLowpassGainHF(outdoorCrackFilterId, outdoorGainHF);
+                            AudioRenderer.AttachFilter(sourceId, outdoorCrackFilterId);
+                        }
+
+                        sound.Start();
+
                         if (sourceId > 0)
                         {
                             EfxHelper.ALSetSourceRolloff(sourceId, 0f);
@@ -1053,7 +1076,7 @@ namespace soundphysicsadapted
                 // Track for debug display (crack sounds ~2s)
                 outdoorCrackExpiry.Add(gameTimeMs + 2000);
 
-                ThunderDebugLog($"  DELAYED CRACK (outdoor): asset={NODISTANCE.Path} vol={finalVol:F2} pitch={crackPitch:F2} dist={crack.Distance:F0} placeDist={crackPlaceDist:F0} rolloff=0");
+                ThunderDebugLog($"  DELAYED CRACK (outdoor): asset={NODISTANCE.Path} vol={finalVol:F2} pitch={crackPitch:F2} gainHF={outdoorGainHF:F3} dist={crack.Distance:F0} placeDist={crackPlaceDist:F0} rolloff=0");
             }
             else
             {
@@ -1441,32 +1464,76 @@ namespace soundphysicsadapted
         /// <summary>
         /// Calculate pitch for nodistance.ogg crack based on bolt distance.
         /// Close cracks are bright/sharp (pitch ~1.0), distant cracks are deeper/bassier
-        /// (pitch drops toward config minimum). Simulates high-frequency atmospheric attenuation.
-        /// Adds small random variation per event for natural variety.
+        /// (pitch drops toward config minimum). Models multi-path arrival stretching
+        /// the waveform — reflections from ground/clouds spread the impulse over time.
+        /// Distance-scaled random variation: close cracks vary widely (±0.15),
+        /// distant cracks vary less (±0.06) since distance already homogenizes.
         /// </summary>
         private float CalculateCrackPitch(float distance)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
             float minPitch = config?.ThunderCrackPitchMin ?? 0.5f;
-            float randomness = config?.ThunderPitchRandomness ?? 0.06f;
 
-            // Pitch curve: full brightness at close range, single sqrt curve 30-1000m to minPitch
-            // 0-30: 1.0 (no change — close crack is sharp)
-            // 30-1000: sqrt curve 1.0 → minPitch
+            // Steeper pitch curve using t^0.7 (between linear and sqrt).
+            // Starts dropping immediately — even close cracks get subtle deepening.
+            // 0-30:    1.0 → 0.985  (subtle)
+            // 30-200:  0.985 → 0.72 (noticeably deeper)
+            // 200-500: 0.72 → 0.58  (clearly bass-shifted)
+            // 500-1000: 0.58 → minPitch (deep rumble)
             float pitchFactor;
-            if (distance <= 30f)
+            float t = Math.Min(distance / 1000f, 1.0f);
+            pitchFactor = 1.0f - (float)Math.Pow(t, 0.7) * (1.0f - minPitch);
+
+            // Distance-scaled randomness: close cracks get wide timbre variety,
+            // distant cracks are already muffled so less variation needed.
+            float randomness;
+            if (distance <= 100f)
             {
-                pitchFactor = 1.0f;
+                randomness = 0.15f;
+            }
+            else if (distance <= 400f)
+            {
+                // Lerp 0.15 → 0.06 over 100-400 blocks
+                randomness = 0.15f - ((distance - 100f) / 300f) * 0.09f;
             }
             else
             {
-                float t = Math.Min((distance - 30f) / 970f, 1.0f);
-                pitchFactor = 1.0f - (float)Math.Sqrt(t) * (1.0f - minPitch);
+                randomness = 0.06f;
             }
 
-            // Add random variation per event
             float rngOffset = ((float)rand.NextDouble() * 2f - 1f) * randomness;
-            return GameMath.Clamp(pitchFactor + rngOffset, minPitch * 0.9f, 1.1f);
+            return GameMath.Clamp(pitchFactor + rngOffset, minPitch * 0.9f, 1.15f);
+        }
+
+        /// <summary>
+        /// Calculate atmospheric absorption LPF gainHF for outdoor cracks.
+        /// Air absorbs HF exponentially faster than LF — at 1km, 8kHz is attenuated
+        /// ~100x more than 500Hz. This is orthogonal to pitch shift (which moves
+        /// the whole spectrum down). Together they produce realistic distant thunder.
+        /// </summary>
+        private float CalculateOutdoorCrackGainHF(float distance)
+        {
+            // 0-30:      1.0 (sharp, unmuffled — close strike)
+            // 30-150:    1.0 → 0.5 (progressive muffling)
+            // 150-400:   0.5 → 0.25 (clearly muffled mid-range)
+            // 400-1000:  0.25 → 0.10 (distant rumble character)
+            if (distance <= 30f)
+            {
+                return 1.0f;
+            }
+            else if (distance <= 150f)
+            {
+                return 1.0f - ((distance - 30f) / 120f) * 0.5f;
+            }
+            else if (distance <= 400f)
+            {
+                return 0.5f - ((distance - 150f) / 250f) * 0.25f;
+            }
+            else if (distance <= 1000f)
+            {
+                return 0.25f - ((distance - 400f) / 600f) * 0.15f;
+            }
+            return 0.10f;
         }
 
         /// <summary>
@@ -1611,6 +1678,13 @@ namespace soundphysicsadapted
             {
                 EfxHelper.DeleteFilter(crackFilterId);
                 crackFilterId = 0;
+            }
+
+            // Clean up outdoor crack filter
+            if (outdoorCrackFilterId > 0)
+            {
+                EfxHelper.DeleteFilter(outdoorCrackFilterId);
+                outdoorCrackFilterId = 0;
             }
 
             oneShotPool?.Dispose();
