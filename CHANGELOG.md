@@ -4,6 +4,26 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.3] - 2026-04-22
+
+### Changed
+- Versioning switched to 3-segment SemVer (was 4-segment) to match Vintage Story's parser. No more `Failed parsing version string` warning at mod load.
+- Distant thunder crack (`nodistance.ogg`) is now noticeably deeper and quieter at long range:
+  - `ThunderCrackPitchMin` default lowered `0.35` → `0.22` (deeper bass tail at >500m)
+  - Far-distance crack volume curve reshaped: ~40-50% quieter beyond 400m vs old curve. Close-range (≤100m) volume unchanged.
+  - 100-400m: now `0.75 → 0.21` (was `0.75 → 0.35`)
+  - 400-1000m: now `0.21 → 0.05` (was `0.35 → 0.10`)
+
+## [0.2.2.5] - 2026-04-22
+
+### Changed
+- Updated for Vintage Story 1.22.0 — minimum game version bumped from 1.21.0 to 1.22.0
+- `EnumBlockMaterial.Liquid` references migrated to `EnumBlockMaterial.Water` (renamed upstream in 1.22)
+- Default material config keys renamed `liquid` → `water` (occlusion + reflectivity sections)
+
+### Compatibility
+- Existing user `soundphysicsadapted_materials.json` files using the old `liquid` key continue to work — the loader transparently maps `liquid` onto the new `Water` material when no `water` key is present
+
 ## [0.2.2.3] - 2026-04-03
 
 ### Added

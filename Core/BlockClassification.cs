@@ -276,13 +276,12 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Check if a block is a liquid material (water or lava).
-        /// Future-proof helper for VS 1.22: EnumBlockMaterial.Liquid is renamed to .Water.
-        /// When upgrading, only this method needs to change (Liquid → Water).
+        /// VS 1.22: EnumBlockMaterial.Liquid was renamed to .Water.
         /// </summary>
         public static bool IsLiquidMaterial(Block block)
         {
             var mat = block.BlockMaterial;
-            return mat == EnumBlockMaterial.Liquid
+            return mat == EnumBlockMaterial.Water
                 || mat == EnumBlockMaterial.Lava;
         }
 
@@ -333,7 +332,7 @@ namespace soundphysicsadapted
                 EnumBlockMaterial.Glass => 0.1f,
                 EnumBlockMaterial.Leaves => 0.05f,
                 EnumBlockMaterial.Plant => 0.02f,
-                EnumBlockMaterial.Liquid => 0.2f,
+                EnumBlockMaterial.Water => 0.2f,
                 EnumBlockMaterial.Lava => 0.25f,
                 EnumBlockMaterial.Air => 0.0f,
                 _ => 0.5f

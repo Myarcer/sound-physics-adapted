@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>soundphysicsadapted</AssemblyName>
     <RootNamespace>soundphysicsadapted</RootNamespace>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
@@ -123,8 +123,13 @@
     <ZipDirectory SourceDirectory=".modpackage" DestinationFile="Releases\soundphysicsadapted_v$(ModVersion).zip" Overwrite="true" />
     <RemoveDir Directories=".modpackage" />
 
-    <!-- Deploy to VS mods folder -->
-    <Message Text="Deploying to $(AppData)\VintagestoryData\Mods\..." Importance="high" />
-    <Copy SourceFiles="Releases\soundphysicsadapted_v$(ModVersion).zip" DestinationFolder="$(AppData)\VintagestoryData\Mods\" />
+    <!-- Deploy to user mods folder. VintagestoryData\Mods\ is the shared user-mods dir
+         (used by both 1.21 and 1.22 installs). Game-bundled Mods inside Vintagestory1.22\
+         is reserved for shipped DLLs (do_not_add_mods_here.txt). -->
+    <PropertyGroup>
+      <DeployDir>$(AppData)\VintagestoryData\Mods\</DeployDir>
+    </PropertyGroup>
+    <Message Text="Deploying to $(DeployDir)" Importance="high" />
+    <Copy SourceFiles="Releases\soundphysicsadapted_v$(ModVersion).zip" DestinationFolder="$(DeployDir)" Condition="$([System.IO.Directory]::Exists('$(DeployDir)'))" />
   </Target>
 </Project>

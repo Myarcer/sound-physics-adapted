@@ -186,6 +186,10 @@ namespace soundphysicsadapted
                     string matName = mat.ToString().ToLowerInvariant();
                     if (Occlusion.Materials.TryGetValue(matName, out float val))
                         _materialOcclusionLookup[mat] = val;
+                    // Backward compat: VS 1.22 renamed EnumBlockMaterial.Liquid -> .Water.
+                    // Old user configs use "liquid" key; map it onto Water.
+                    else if (mat == EnumBlockMaterial.Water && Occlusion.Materials.TryGetValue("liquid", out float legacyVal))
+                        _materialOcclusionLookup[mat] = legacyVal;
                 }
             }
 
@@ -218,6 +222,9 @@ namespace soundphysicsadapted
                     string matName = mat.ToString().ToLowerInvariant();
                     if (Reflectivity.Materials.TryGetValue(matName, out float val))
                         _materialReflectivityLookup[mat] = val;
+                    // Backward compat: VS 1.22 renamed EnumBlockMaterial.Liquid -> .Water.
+                    else if (mat == EnumBlockMaterial.Water && Reflectivity.Materials.TryGetValue("liquid", out float legacyVal))
+                        _materialReflectivityLookup[mat] = legacyVal;
                 }
             }
 
@@ -416,7 +423,7 @@ namespace soundphysicsadapted
                         { "leaves", 0.05f },
                         { "stone", 1.0f },
                         { "ore", 1.0f },
-                        { "liquid", 0.8f },      // Water significantly blocks sound (air-water boundary)
+                        { "water", 0.8f },       // Water significantly blocks sound (air-water boundary). VS 1.22: was "liquid".
                         { "snow", 0.25f },
                         { "ice", 0.7f },
                         { "metal", 0.95f },
@@ -531,7 +538,7 @@ namespace soundphysicsadapted
                         { "ice", 1.0f },
                         { "wood", 0.4f },
                         { "soil", 0.3f },
-                        { "liquid", 0.5f },
+                        { "water", 0.5f },       // VS 1.22: was "liquid".
                         { "cloth", 0.1f },
                         { "snow", 0.15f },
                         { "leaves", 0.1f },
