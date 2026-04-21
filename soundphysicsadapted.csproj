@@ -123,9 +123,13 @@
     <ZipDirectory SourceDirectory=".modpackage" DestinationFile="Releases\soundphysicsadapted_v$(ModVersion).zip" Overwrite="true" />
     <RemoveDir Directories=".modpackage" />
 
-    <!-- Deploy to VS mods folder (1.22 install) -->
-    <Message Text="Deploying to $(AppData)\Vintagestory1.22\Mods\..." Importance="high" />
-    <Copy SourceFiles="Releases\soundphysicsadapted_v$(ModVersion).zip" DestinationFolder="$(AppData)\Vintagestory1.22\Mods\" Condition="Exists('$(AppData)\Vintagestory1.22\Mods\')" />
-    <Copy SourceFiles="Releases\soundphysicsadapted_v$(ModVersion).zip" DestinationFolder="$(AppData)\VintagestoryData\Mods\" Condition="!Exists('$(AppData)\Vintagestory1.22\Mods\') And Exists('$(AppData)\VintagestoryData\Mods\')" />
+    <!-- Deploy to user mods folder. VintagestoryData\Mods\ is the shared user-mods dir
+         (used by both 1.21 and 1.22 installs). Game-bundled Mods inside Vintagestory1.22\
+         is reserved for shipped DLLs (do_not_add_mods_here.txt). -->
+    <PropertyGroup>
+      <DeployDir>$(AppData)\VintagestoryData\Mods\</DeployDir>
+    </PropertyGroup>
+    <Message Text="Deploying to $(DeployDir)" Importance="high" />
+    <Copy SourceFiles="Releases\soundphysicsadapted_v$(ModVersion).zip" DestinationFolder="$(DeployDir)" Condition="$([System.IO.Directory]::Exists('$(DeployDir)'))" />
   </Target>
 </Project>

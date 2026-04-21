@@ -985,8 +985,10 @@ namespace soundphysicsadapted
         private void FireDelayedCrack(PendingDelayedCrack crack, long gameTimeMs)
         {
             // Crack volume: matches bolt intensity curve but slightly punchier.
-            // Close cracks are full blast, then gentler falloff to 1000m.
-            // Cracks are sharp transients that travel far in real life.
+            // Close cracks are full blast, then steeper falloff for far distances
+            // (~40% quieter at >400m vs original curve, with deeper pitch shift).
+            // Cracks are sharp transients but distant ones lose more energy than
+            // a clean inverse-square — air absorption + ground deflection scrub the high end.
             float crackVol;
             if (crack.Distance <= 30f)
             {
@@ -999,13 +1001,13 @@ namespace soundphysicsadapted
             }
             else if (crack.Distance <= 400f)
             {
-                // 100-400: 0.75 → 0.35 (gradual falloff, still audible)
-                crackVol = 0.75f - ((crack.Distance - 100f) / 300f) * 0.40f;
+                // 100-400: 0.75 → 0.21 (steeper mid falloff, smooth handoff to far tail)
+                crackVol = 0.75f - ((crack.Distance - 100f) / 300f) * 0.54f;
             }
             else if (crack.Distance <= 1000f)
             {
-                // 400-1000: 0.35 → 0.10 (gentle tail, distant but present)
-                crackVol = 0.35f - ((crack.Distance - 400f) / 600f) * 0.25f;
+                // 400-1000: 0.21 → 0.05 (~40-50% quieter than old curve, gentle tail)
+                crackVol = 0.21f - ((crack.Distance - 400f) / 600f) * 0.16f;
             }
             else
             {
@@ -1477,7 +1479,7 @@ namespace soundphysicsadapted
         private float CalculateCrackPitch(float distance)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
-            float minPitch = config?.ThunderCrackPitchMin ?? 0.35f;
+            float minPitch = config?.ThunderCrackPitchMin ?? 0.22f;
 
             // Steeper pitch curve using t^0.7 (between linear and sqrt).
             // Sqrt curve from 0 blocks — aggressive pitch drop models multi-path
