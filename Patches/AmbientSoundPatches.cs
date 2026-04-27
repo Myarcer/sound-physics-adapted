@@ -25,6 +25,9 @@ namespace soundphysicsadapted
         // Per-sound face sample data, updated every updatePosition call.
         private static readonly Dictionary<ILoadedSound, FaceSampleData> _faceSamples = new();
 
+        // Tracks which sounds we've already dumped bbox info for (one-time diagnostic)
+        private static readonly HashSet<ILoadedSound> _bboxDumped = new();
+
         // Cached reflection for AmbientSound fields
         private static FieldInfo _soundField;
         private static FieldInfo _bboxField;
@@ -33,6 +36,9 @@ namespace soundphysicsadapted
         // Reusable lists to avoid allocation per tick
         private static readonly List<FaceSample> _tempSamples = new(64);
         private static readonly List<Cuboidi> _tempBboxes = new(8);
+
+        // Throttle counter for always-on diagnostic logging
+        private static int _diagTicks;
 
         // Inset from face surface to avoid block-boundary DDA issues
         private const double FACE_INSET = 0.15;
@@ -51,9 +57,12 @@ namespace soundphysicsadapted
         {
             public FaceSample[] Samples;
             public int Count;
-            public bool PlayerInside;  // True if player is inside any bbox
+            public bool PlayerInside;  // True if player is inside any bbox or bbox envelope
             public Cuboidi[] Bboxes;       // Volume bounding boxes for DDA exclusion
             public int BboxCount;
+            // Envelope of all bboxes (for checking if block-level sounds fall inside)
+            public int EnvMinX, EnvMinY, EnvMinZ;
+            public int EnvMaxX, EnvMaxY, EnvMaxZ;
         }
 
         public static void ApplyPatches(Harmony harmony, ICoreClientAPI api)
@@ -138,6 +147,38 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Check if a world position falls inside any active AmbientSound envelope
+        /// where the player is also "inside". Used to suppress directional panning
+        /// on block-level point-source sounds (e.g. individual beehive blocks) when
+        /// the player is already within the volume's acoustic field.
+        /// </summary>
+        public static bool IsInsideActiveVolume(Vec3d pos)
+        {
+            foreach (var kvp in _faceSamples)
+            {
+                var data = kvp.Value;
+                if (!data.PlayerInside) continue;
+                // Check if pos falls within the envelope (half-open interval)
+                if (pos.X >= data.EnvMinX && pos.X < data.EnvMaxX &&
+                    pos.Y >= data.EnvMinY && pos.Y < data.EnvMaxY &&
+                    pos.Z >= data.EnvMinZ && pos.Z < data.EnvMaxZ)
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Count how many tracked volumes currently have PlayerInside=true (diagnostic).
+        /// </summary>
+        public static int GetActiveInsideVolumeCount()
+        {
+            int count = 0;
+            foreach (var kvp in _faceSamples)
+                if (kvp.Value.PlayerInside) count++;
+            return count;
+        }
+
+        /// <summary>
         /// Remove tracking for a disposed sound. Called during periodic cleanup.
         /// </summary>
         public static void RemoveSound(ILoadedSound sound)
@@ -152,6 +193,8 @@ namespace soundphysicsadapted
         public static void Clear()
         {
             _faceSamples.Clear();
+            _bboxDumped.Clear();
+            _diagTicks = 0;
         }
 
         /// <summary>
@@ -174,6 +217,25 @@ namespace soundphysicsadapted
                 var bboxes = _bboxField.GetValue(__instance) as System.Collections.IList;
                 if (bboxes == null || bboxes.Count == 0) return;
 
+                // ONE-TIME bbox dump: log exact bbox structure the first time we see this sound.
+                // Always fires (not gated behind debug toggle) so we can diagnose bbox layout.
+                if (!_bboxDumped.Contains(sound))
+                {
+                    _bboxDumped.Add(sound);
+                    var capi0 = SoundPhysicsAdaptedModSystem.ClientApi;
+                    if (capi0 != null)
+                    {
+                        var sb = new System.Text.StringBuilder();
+                        sb.Append($"[SPA-BBOX-DUMP] sound has {bboxes.Count} bbox(es): ");
+                        foreach (var b in bboxes)
+                        {
+                            if (b is Cuboidi c)
+                                sb.Append($"[({c.X1},{c.Y1},{c.Z1})-({c.X2},{c.Y2},{c.Z2})] ");
+                        }
+                        capi0.Logger.Debug(sb.ToString());
+                    }
+                }
+
                 double playerX = entityPos.X;
                 double playerY = entityPos.Y;
                 double playerZ = entityPos.Z;
@@ -189,9 +251,18 @@ namespace soundphysicsadapted
                 _tempBboxes.Clear();
                 bool playerInside = false;
 
+                // Track the axis-aligned envelope of ALL bboxes for gap detection.
+                // If a sound has multiple bboxes (e.g. row of beehives), the player
+                // standing in a gap between them should still be treated as "inside"
+                // the volume to prevent L/R panning artifacts.
+                int envMinX = int.MaxValue, envMinY = int.MaxValue, envMinZ = int.MaxValue;
+                int envMaxX = int.MinValue, envMaxY = int.MinValue, envMaxZ = int.MinValue;
+                int bboxCount = 0;
+
                 foreach (var bboxObj in bboxes)
                 {
                     if (bboxObj is not Cuboidi bbox) continue;
+                    bboxCount++;
 
                     // VS stores bboxes as half-open intervals: (X, Y, Z, X+1, Y+1, Z+1)
                     // representing block [X,X+1) x [Y,Y+1) x [Z,Z+1).
@@ -203,19 +274,24 @@ namespace soundphysicsadapted
                         bbox.X2 - 1, bbox.Y2 - 1, bbox.Z2 - 1);
                     _tempBboxes.Add(exclusionBbox);
 
-                    // Check if player is inside this bbox.
+                    // Expand envelope
+                    if (bbox.X1 < envMinX) envMinX = bbox.X1;
+                    if (bbox.Y1 < envMinY) envMinY = bbox.Y1;
+                    if (bbox.Z1 < envMinZ) envMinZ = bbox.Z1;
+                    if (bbox.X2 > envMaxX) envMaxX = bbox.X2;
+                    if (bbox.Y2 > envMaxY) envMaxY = bbox.Y2;
+                    if (bbox.Z2 > envMaxZ) envMaxZ = bbox.Z2;
+
+                    // Check if player is inside this individual bbox.
                     // Player position is float; use original VS coords (half-open interval).
                     // Upper bound is exclusive at blockCoord+1.
                     //
-                    // Y-axis uses FEET position, not eye position. Single-block-high volumes
-                    // (beehives, Y range [5,6)) have eye position (6.52) always above the bbox,
-                    // so the inside check would never trigger. Using feet (5.0 when standing on
-                    // the same Y level) correctly detects the player as "inside" the volume's
-                    // horizontal footprint, which is what matters for immersive centering.
-                    // We also extend the Y check upward by player height so standing next to
-                    // a waist-high beehive counts as "inside" its acoustic field.
+                    // Y-axis overlap: check if player body [feetY, eyeY] overlaps bbox [Y1, Y2).
+                    // Player at Y=3 with eyes at 4.52 overlaps a beehive at Y=[4,5) — their
+                    // head is inside the bbox. Player at Y=6 with eyes at 7.52 does NOT overlap
+                    // a beehive at Y=[4,5).
                     if (playerX >= bbox.X1 && playerX < bbox.X2 &&
-                        playerY >= bbox.Y1 && playerY < bbox.Y2 + eyeOffsetY &&
+                        playerEyeY >= bbox.Y1 && playerY < bbox.Y2 &&
                         playerZ >= bbox.Z1 && playerZ < bbox.Z2)
                     {
                         playerInside = true;
@@ -264,6 +340,37 @@ namespace soundphysicsadapted
                 Cuboidi[] bboxArr = _tempBboxes.Count > 0 ? _tempBboxes.ToArray() : null;
                 int bboxArrCount = _tempBboxes.Count;
 
+                // ENVELOPE CHECK: If the player isn't inside any individual bbox but IS
+                // inside the axis-aligned envelope of all bboxes, treat as "inside".
+                // This handles gaps between adjacent beehives/volumes belonging to the
+                // same AmbientSound — the player in a 1-block gap between two beehive
+                // bboxes should hear centered (non-directional) audio, not face-sampled
+                // panning that flips L/R as they move.
+                if (!playerInside && bboxCount > 1)
+                {
+                    // Use the player's full vertical extent (feet to eyes) for overlap.
+                    // Player at Y=3 with eyes at 4.52 overlaps beehive bbox at Y=[4,5).
+                    // Check: any part of [playerY, playerEyeY] intersects [envMinY, envMaxY]?
+                    if (playerX >= envMinX && playerX < envMaxX &&
+                        playerEyeY >= envMinY && playerY < envMaxY &&
+                        playerZ >= envMinZ && playerZ < envMaxZ)
+                    {
+                        playerInside = true;
+                        _tempSamples.Clear(); // Discard any face samples already collected
+                    }
+                }
+
+                // ALWAYS-ON throttled diagnostic: log playerInside result ~once/second.
+                // This is critical for debugging the beehive panning issue.
+                if (_diagTicks++ % 20 == 0) // ~50ms ticks × 20 = ~1s
+                {
+                    var capi1 = SoundPhysicsAdaptedModSystem.ClientApi;
+                    capi1?.Logger.Debug(
+                        $"[SPA-AMBIENT-STATE] inside={playerInside} bboxes={bboxCount} samples={_tempSamples.Count} " +
+                        $"env=[({envMinX},{envMinY},{envMinZ})-({envMaxX},{envMaxY},{envMaxZ})] " +
+                        $"plr=({playerX:F2},{playerY:F2},{playerZ:F2}) eyeY={playerEyeY:F2}");
+                }
+
                 if (playerInside)
                 {
                     // Player inside volume — store flag, no samples needed
@@ -273,7 +380,9 @@ namespace soundphysicsadapted
                         Count = 0,
                         PlayerInside = true,
                         Bboxes = bboxArr,
-                        BboxCount = bboxArrCount
+                        BboxCount = bboxArrCount,
+                        EnvMinX = envMinX, EnvMinY = envMinY, EnvMinZ = envMinZ,
+                        EnvMaxX = envMaxX, EnvMaxY = envMaxY, EnvMaxZ = envMaxZ
                     };
                 }
                 else if (_tempSamples.Count > 0)
@@ -300,7 +409,9 @@ namespace soundphysicsadapted
                         Count = _tempSamples.Count,
                         PlayerInside = false,
                         Bboxes = bboxArr,
-                        BboxCount = bboxArrCount
+                        BboxCount = bboxArrCount,
+                        EnvMinX = envMinX, EnvMinY = envMinY, EnvMinZ = envMinZ,
+                        EnvMaxX = envMaxX, EnvMaxY = envMaxY, EnvMaxZ = envMaxZ
                     };
                 }
                 else

@@ -856,6 +856,31 @@ namespace soundphysicsadapted
                 }
             }
 
+            // BLOCK-LEVEL SOUND CENTERING: VS creates individual point-source sounds for
+            // each ambient block (e.g. one beehive-wild.ogg per beehive block). When the
+            // player is inside the AmbientSound volume envelope, these block-level sounds
+            // cause L/R panning because they're positioned at the block, not the player.
+            // Detect this case and center them, matching what we do for the volume itself.
+            if (!isAmbientVolume && ambientDerivedOcclusion < 0f)
+            {
+                bool inVolume = AmbientSoundPatches.IsInsideActiveVolume(soundPos);
+                int activeInsideCount = AmbientSoundPatches.GetActiveInsideVolumeCount();
+
+                if (inVolume)
+                {
+                    acousticPos = playerPos;
+                    ambientDerivedOcclusion = 0f;
+                }
+
+                // Always log for beehive sounds to diagnose (no updatedThisTick gate)
+                if (soundName != null && soundName.Contains("beehive"))
+                {
+                    SoundPhysicsAdaptedModSystem.ClientApi?.Logger.Debug(
+                        $"[SPA-BLOCK-CHECK] {soundName} inVolume={inVolume} activeInsideVolumes={activeInsideCount} " +
+                        $"sndPos=({soundPos.X:F2},{soundPos.Y:F2},{soundPos.Z:F2}) centered={inVolume}");
+                }
+            }
+
             // For ambient volumes with sample-derived occlusion, skip the redundant DDA.
             // The sample data already accounts for all paths from surface to player.
             float occlusion = ambientDerivedOcclusion >= 0f
