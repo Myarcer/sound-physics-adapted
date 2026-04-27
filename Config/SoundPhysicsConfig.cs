@@ -744,17 +744,6 @@ namespace soundphysicsadapted
         /// </summary>
         public string TorchAmbientSoundPath { get; set; } = "game:sounds/held/torch-idle";
 
-        /// <summary>
-        /// Block code patterns that are considered lit torches.
-        /// Matched as prefix against block.Code.Path.
-        /// Blocks matching these AND containing "extinct" or "burnedout" are excluded.
-        /// </summary>
-        public string[] TorchBlockPatterns { get; set; } = new string[]
-        {
-            "torch",
-            "walltorch"
-        };
-
         // ============================================================
         // PERFORMANCE
         // Per-tick processing budget to prevent frame drops during

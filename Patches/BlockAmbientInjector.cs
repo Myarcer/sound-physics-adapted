@@ -99,8 +99,8 @@ namespace soundphysicsadapted.Patches
 
             if (materialConfig?.RainSurfaceBlockPatterns != null)
                 api.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: Rain patterns: [{string.Join(", ", materialConfig.RainSurfaceBlockPatterns)}]");
-            if (config.TorchBlockPatterns != null)
-                api.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: Torch patterns: [{string.Join(", ", config.TorchBlockPatterns)}]");
+            if (materialConfig?.TorchBlockPatterns != null)
+                api.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: Torch patterns: [{string.Join(", ", materialConfig.TorchBlockPatterns)}]");
 
             foreach (var block in api.World.Blocks)
             {
@@ -121,9 +121,9 @@ namespace soundphysicsadapted.Patches
                 }
 
                 // Torch ambient injection (exclude extinct/burnedout variants)
-                if (config.EnableTorchAmbient && config.TorchBlockPatterns != null)
+                if (config.EnableTorchAmbient && materialConfig?.TorchBlockPatterns != null)
                 {
-                    if (MatchesAnyPattern(path, config.TorchBlockPatterns) && !path.Contains("extinct") && !path.Contains("burnedout"))
+                    if (MatchesAnyPattern(path, materialConfig.TorchBlockPatterns) && !path.Contains("extinct") && !path.Contains("burnedout"))
                     {
                         bool injected = TryInjectTorchAmbient(block, config);
                         if (!injected) torchSkippedExistingAmbient++;

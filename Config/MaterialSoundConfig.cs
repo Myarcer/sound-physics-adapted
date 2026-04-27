@@ -41,6 +41,15 @@ namespace soundphysicsadapted
         /// </summary>
         public string[] RainSurfaceBlockPatterns { get; set; } = null;
 
+        /// <summary>
+        /// Block code patterns that are considered lit torches for ambient crackling.
+        /// Matched as prefix against block.Code.Path.
+        /// Blocks matching these AND containing "extinct" or "burnedout" are excluded.
+        /// Add modded torch block codes here to get ambient crackling.
+        /// Works alongside EnableTorchAmbient and TorchAmbientVolume in the main config.
+        /// </summary>
+        public string[] TorchBlockPatterns { get; set; } = null;
+
         // Cached compiled patterns for block overrides
         private List<(Regex pattern, float value)> _compiledOcclusionOverrides;
         private List<Regex> _compiledTreatAsFullCube;
@@ -552,6 +561,11 @@ namespace soundphysicsadapted
                         { "leaves", 0.1f },
                         { "plant", 0.1f }
                     }
+                },
+                TorchBlockPatterns = new string[]
+                {
+                    "torch",
+                    "walltorch"
                 },
                 RainSurfaceBlockPatterns = new string[]
                 {
