@@ -4,6 +4,20 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.4] - 2026-04-27
+
+### Added
+- **Distance Model overrides** — per-source OpenAL attenuation tuning (default ON):
+  - `SoundRangeMultiplier` (default `1.4`): scales `AL_MAX_DISTANCE`. Sounds carry farther — safe to extend now that real occlusion prevents wall bleed-through.
+  - `AirAbsorptionFactor` (default `1.0`): EFX `AL_AIR_ABSORPTION_FACTOR` per source. Distant sounds lose treble naturally (deeper thunder, muffled distant footsteps). `0.0` = vanilla.
+  - `DistanceRolloffFactor` (default `1.0`): scales `AL_ROLLOFF_FACTOR` for curve shaping.
+  - `DistanceModelExcludeMusic` (default `true`): music sound types skip the overrides.
+  - Master toggle: `EnableDistanceModelOverrides` (default `true`).
+- Applied universally on every sound start via `SoundStartPostfix`. Idempotent per source — safe with re-attachments.
+
+### Changed
+- Mod is now `requiredOnClient: true` so clients auto-download from ModDB when joining a server that has it. Server-side remains optional (`requiredOnServer: false`) — server can run without the mod and clients with it still get all clientside patches.
+
 ## [0.2.3] - 2026-04-22
 
 ### Changed

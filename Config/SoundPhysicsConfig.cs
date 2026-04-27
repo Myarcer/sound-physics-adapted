@@ -216,6 +216,64 @@ namespace soundphysicsadapted
         public float ReverbGain { get; set; } = 1.0f;
 
         // ============================================================
+        // DISTANCE MODEL
+        // Per-source overrides for OpenAL distance attenuation.
+        // VS vanilla uses a hard cutoff at SoundParams.Range (default 32 blocks)
+        // with no real air absorption. Since this mod adds proper occlusion,
+        // sounds can safely carry farther without bleeding through walls.
+        //
+        // - SoundRangeMultiplier: scales AL_MAX_DISTANCE per source.
+        // - AirAbsorptionFactor: physically-based HF attenuation over distance
+        //   (EFX AL_AIR_ABSORPTION_FACTOR; SPR-equivalent ≈ 1.0).
+        // - DistanceRolloffFactor: scales AL_ROLLOFF_FACTOR (gentler curve <1.0).
+        // ============================================================
+
+        /// <summary>
+        /// Section header visible in JSON config file.
+        /// </summary>
+        public string _DistanceModelSystem { get; set; } = "--- Per-source distance attenuation overrides. Carry farther + realistic air absorption. Set EnableDistanceModelOverrides=false to keep vanilla. ---";
+
+        /// <summary>
+        /// Master toggle for distance model overrides.
+        /// When enabled: applies SoundRangeMultiplier, AirAbsorptionFactor, and
+        /// DistanceRolloffFactor to each newly started positional source.
+        /// When disabled: vanilla VS distance behavior is untouched.
+        /// </summary>
+        public bool EnableDistanceModelOverrides { get; set; } = true;
+
+        /// <summary>
+        /// Multiplier applied to AL_MAX_DISTANCE on each source.
+        /// 1.0 = vanilla (~32 blocks for most sounds).
+        /// 1.4 = sounds carry ~40% farther (recommended with occlusion enabled).
+        /// >2.0 may cause OpenAL voice saturation in busy areas.
+        /// </summary>
+        public float SoundRangeMultiplier { get; set; } = 1.4f;
+
+        /// <summary>
+        /// EFX air absorption factor (AL_AIR_ABSORPTION_FACTOR), 0.0-10.0.
+        /// 0.0 = vanilla (no HF damping over distance).
+        /// 1.0 = SPR-equivalent default (≈1 dB/m at 5kHz). Distant sounds lose
+        ///       treble naturally — bass rumble for thunder, muffled distant footsteps.
+        /// Higher values exaggerate the effect (humid jungle / dense atmosphere feel).
+        /// </summary>
+        public float AirAbsorptionFactor { get; set; } = 1.0f;
+
+        /// <summary>
+        /// Multiplier applied to AL_ROLLOFF_FACTOR on each source.
+        /// 1.0 = vanilla curve.
+        /// &lt;1.0 = gentler falloff (sounds carry farther without changing Range).
+        /// &gt;1.0 = steeper falloff (sounds get quiet faster with distance).
+        /// </summary>
+        public float DistanceRolloffFactor { get; set; } = 1.0f;
+
+        /// <summary>
+        /// When true, music sounds (EnumSoundType.Music / MusicGlitchunaffected)
+        /// are exempt from distance model overrides. Recommended — music tracks
+        /// are typically non-positional or carefully tuned.
+        /// </summary>
+        public bool DistanceModelExcludeMusic { get; set; } = true;
+
+        // ============================================================
         // SUBMERSION AUDIO
         // Replaces default submersion audio (lowpass + pitch) for water and lava.
         // Stacks properly with occlusion and is fully configurable.

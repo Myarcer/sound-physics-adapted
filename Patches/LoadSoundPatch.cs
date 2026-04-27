@@ -452,6 +452,99 @@ namespace soundphysicsadapted
             }
         }
 
+        // Track which sourceIds we've already applied the distance model to,
+        // so re-attaches (e.g., after underwater state change) don't double-multiply.
+        // OpenAL recycles source IDs, so the entry is overwritten naturally on reuse.
+        private static readonly Dictionary<int, int> _distanceModelApplied = new Dictionary<int, int>();
+        private static int _distanceModelGen = 0;
+
+        /// <summary>
+        /// Apply per-source distance attenuation overrides:
+        ///  - SoundRangeMultiplier → AL_MAX_DISTANCE multiplier
+        ///  - DistanceRolloffFactor → AL_ROLLOFF_FACTOR multiplier
+        ///  - AirAbsorptionFactor → AL_AIR_ABSORPTION_FACTOR (EFX, 0 = vanilla)
+        /// Skips music sounds when DistanceModelExcludeMusic is true.
+        /// Idempotent per-source: only applies once per Start() to avoid stacking.
+        /// </summary>
+        private static void ApplyDistanceModel(ILoadedSound sound, int sourceId, string soundName)
+        {
+            try
+            {
+                if (sourceId <= 0) return;
+
+                var config = SoundPhysicsAdaptedModSystem.Config;
+                if (config == null || !config.Enabled) return;
+                if (!config.EnableDistanceModelOverrides) return;
+
+                // Filter by sound type — music tracks are typically non-positional
+                // or pre-tuned, leave them alone if user prefers.
+                if (config.DistanceModelExcludeMusic)
+                {
+                    var stype = sound?.Params?.SoundType ?? EnumSoundType.Sound;
+                    if (stype == EnumSoundType.Music || stype == EnumSoundType.MusicGlitchunaffected)
+                        return;
+                }
+
+                // De-dup against re-attachments / our own SoundStartPostfix double-fire.
+                // Generation counter rolls every ~1B starts to avoid pathological stale state.
+                int gen = _distanceModelGen;
+                if (_distanceModelApplied.TryGetValue(sourceId, out int prevGen) && prevGen == gen)
+                    return;
+                _distanceModelApplied[sourceId] = gen;
+
+                if (!EfxHelper.IsAvailable) return;
+
+                // Range multiplier — affects AL_MAX_DISTANCE.
+                // VS sets MaxDistance = SoundParams.Range when starting the source.
+                if (config.SoundRangeMultiplier > 0f &&
+                    Math.Abs(config.SoundRangeMultiplier - 1.0f) > 0.001f)
+                {
+                    float curMax = EfxHelper.ALGetSourceMaxDistance(sourceId);
+                    if (curMax > 0f && !float.IsNaN(curMax) && !float.IsInfinity(curMax))
+                    {
+                        float newMax = curMax * config.SoundRangeMultiplier;
+                        // Clamp to a sane upper bound — OpenAL accepts huge values but
+                        // they cause voice contention and stress the mixer.
+                        if (newMax > 4096f) newMax = 4096f;
+                        EfxHelper.ALSetSourceMaxDistance(sourceId, newMax);
+                    }
+                }
+
+                // Rolloff multiplier — affects AL_ROLLOFF_FACTOR (curve steepness).
+                if (config.DistanceRolloffFactor > 0f &&
+                    Math.Abs(config.DistanceRolloffFactor - 1.0f) > 0.001f)
+                {
+                    float curRoll = EfxHelper.ALGetSourceRolloff(sourceId);
+                    if (curRoll > 0f && !float.IsNaN(curRoll) && !float.IsInfinity(curRoll))
+                    {
+                        float newRoll = curRoll * config.DistanceRolloffFactor;
+                        if (newRoll < 0f) newRoll = 0f;
+                        if (newRoll > 10f) newRoll = 10f;
+                        EfxHelper.ALSetSourceRolloff(sourceId, newRoll);
+                    }
+                }
+
+                // Air absorption (EFX). 0 = vanilla. SPR uses ~1.0.
+                // Silently no-ops if the OpenAL binding lacks the enum value.
+                if (config.AirAbsorptionFactor > 0.001f && EfxHelper.IsAirAbsorptionSupported)
+                {
+                    EfxHelper.ALSetSourceAirAbsorption(sourceId, config.AirAbsorptionFactor);
+                }
+
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                {
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"[DistModel] {soundName} src={sourceId} rangeMul={config.SoundRangeMultiplier:F2} " +
+                        $"rolloffMul={config.DistanceRolloffFactor:F2} airAbs={config.AirAbsorptionFactor:F2}");
+                }
+            }
+            catch (Exception ex)
+            {
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"ApplyDistanceModel error: {ex.Message}");
+            }
+        }
+
         /// <summary>
         /// UNIVERSAL PREFIX for ClientMain.StartPlaying(AudioData, SoundParams, AssetLocation).
         /// This is the convergence point where BOTH PlaySoundAtInternal and LoadSound paths land.
@@ -1126,6 +1219,10 @@ namespace soundphysicsadapted
                 {
                     AudioRenderer.ReattachFilter(loadedSound);
                 }
+
+                // Apply distance model overrides (range mult, rolloff, air absorption).
+                // Source must be in valid state — Postfix runs after AL.SourcePlay so it is.
+                ApplyDistanceModel(loadedSound, sourceId, soundName);
 
                 // Apply reverb only after world is fully loaded and warmed up.
                 // During loading, tick system will handle reverb with budget limits.

@@ -21,6 +21,13 @@
         { "code": "ReverbMaxDistance",             "type": "float",   "default": 256.0,  "ingui": "Reverb Max Distance",        "comment": "Maximum distance for reverb ray detection (blocks).",                        "range": { "min": 32.0,   "max": 512.0,  "step": 16.0  } },
         { "code": "ReverbGain",                    "type": "float",   "default": 1.0,    "ingui": "Reverb Gain",                "comment": "Master reverb gain multiplier. 1.0=normal, 0.5=half, 2.0=double.",           "range": { "min": 0.0,    "max": 3.0,    "step": 0.05  } },
 
+        { "type": "separator", "title": "Distance Model" },
+        { "code": "EnableDistanceModelOverrides",  "type": "boolean", "default": true,   "ingui": "Enable Distance Overrides",  "comment": "Per-source distance attenuation overrides. Disable to keep vanilla VS behavior." },
+        { "code": "SoundRangeMultiplier",          "type": "float",   "default": 1.4,    "ingui": "Sound Range Multiplier",     "comment": "Scales AL_MAX_DISTANCE per source. 1.0=vanilla, 1.4=carry 40 percent farther.",      "range": { "min": 0.5,    "max": 3.0,    "step": 0.05  } },
+        { "code": "AirAbsorptionFactor",           "type": "float",   "default": 1.0,    "ingui": "Air Absorption Factor",      "comment": "EFX HF damping over distance. 0=off, 1.0≈SPR default (treble loss with distance).", "range": { "min": 0.0, "max": 10.0, "step": 0.1 } },
+        { "code": "DistanceRolloffFactor",         "type": "float",   "default": 1.0,    "ingui": "Distance Rolloff Factor",    "comment": "AL_ROLLOFF_FACTOR multiplier. <1=gentler curve, >1=steeper. 1.0=vanilla.",   "range": { "min": 0.3,    "max": 2.0,    "step": 0.05  } },
+        { "code": "DistanceModelExcludeMusic",     "type": "boolean", "default": true,   "ingui": "Exclude Music",              "comment": "Skip music sounds (EnumSoundType.Music) from distance overrides." },
+
         { "type": "separator", "title": "Submersion Audio" },
         { "code": "ReplaceVanillaLowpass",         "type": "boolean", "default": true,   "ingui": "Replace Vanilla Lowpass",    "comment": "Replace default underwater/lava lowpass. Stacks properly with occlusion." },
         { "code": "UnderwaterFilterValue",         "type": "float",   "default": 0.08,   "ingui": "Underwater Filter",          "comment": "Lowpass filter when fully underwater (0=silent, 1=no effect).",              "range": { "min": 0.001,  "max": 1.0,    "step": 0.005 } },
