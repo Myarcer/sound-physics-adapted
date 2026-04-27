@@ -87,11 +87,7 @@ namespace soundphysicsadapted
             public long ThrottleWindowStartMs;
             public bool ThrottleFrozen;
 
-            // Face-sampled acoustic position for ambient volumes.
-            // EMA-smoothed to prevent jitter; hysteresis prevents face-flip L/R panning.
-            public Vec3d SmoothedAcousticPos;
-            public bool HasSmoothedAcousticPos;
-            public Vec3d CurrentBestFaceCenter; // For hysteresis: don't switch unless significantly better
+            // Reserved for future use (fields removed: face-sampling position smoothing)
         }
 
         private Dictionary<ILoadedSound, SoundCacheEntry> soundCache = new Dictionary<ILoadedSound, SoundCacheEntry>();
@@ -561,13 +557,10 @@ namespace soundphysicsadapted
             // All blocks (including doors) are treated uniformly — AABB collision geometry
             // determines occlusion naturally. No special door handling.
 
-            // AMBIENT FACE-SAMPLED OCCLUSION: For ambient volume sounds (beehives, water, lava,
-            // rainwindow), VS positions the sound at the nearest bbox surface — which may land
-            // on an occluded face. We multi-sample all player-facing faces to determine:
-            //   1. Acoustic position = face center with highest total clarity (ON the surface)
-            //   2. Occlusion = derived directly from sample clarity (no second DDA needed)
-            // This avoids the interior-point bug where averaging face centers produces a point
-            // inside the bbox volume that always hits the volume's own blocks.
+            // AMBIENT VOLUME OCCLUSION: For ambient volume sounds (beehives, water, lava,
+            // rainwindow), VS handles positioning natively via AmbientSound.updatePosition.
+            // We only add occlusion-based filtering, excluding the volume's own blocks from
+            // the DDA so they don't self-occlude.
             // NOTE: Rainwindow uses SoundType.Weather, not Ambient — must include both.
             var soundType = sound.Params?.SoundType;
             bool isAmbientVolume = soundType == EnumSoundType.Ambient
@@ -578,311 +571,29 @@ namespace soundphysicsadapted
 
             if (isAmbientVolume)
             {
-                var samples = AmbientSoundPatches.GetFaceSamples(sound, out int sampleCount, out bool playerInside);
                 var volBboxes = AmbientSoundPatches.GetBboxes(sound, out int volBboxCount);
 
-                if (playerInside)
+                if (volBboxes != null && volBboxCount > 0)
                 {
-                    // Player is inside the volume — center the sound on the player.
-                    // This eliminates L/R panning entirely, creating an immersive enveloping effect.
-                    // The proximity blend below will smooth the transition as the player enters.
-                    acousticPos = playerPos;
-                    ambientDerivedOcclusion = 0f;
-
-                    if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
-                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[AMBIENT-INSIDE] {soundName} playerInside=true bboxes={volBboxCount}, occ=0, centered on player " +
-                            $"plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2})");
-                }
-                else if (samples != null && sampleCount > 0)
-                {
-                    // Multi-ray voted occlusion per face center.
-                    // Previously: per-sample single-ray DDA → averaged per face. This was
-                    // unstable: DDA edge-clipping on a single wall produced occ=1/2/3 depending
-                    // on exact ray angle through block corners. Now: one multi-ray convergent
-                    // (9-ray voted) call per face center with bbox exclusion. The voting system
-                    // stabilizes wall-counting: center ray is authoritative, offsets detect thin
-                    // walls via supermajority. Early exits make this efficient: occluded walls
-                    // return after 1 ray, clear paths after 1 ray, only ambiguous 0.3-0.5 range
-                    // spawns all 9.
-                    //
-                    // KEY DESIGN: Occlusion = bestFaceOcc (least-occluded path), NOT average
-                    // of all faces. Back-faces traverse the entire volume and would drag the
-                    // average up, causing false muffling when standing right next to a clear face.
-                    // CLARITY-WEIGHTED CENTROID face blending.
-                    //
-                    // Old approach: winner-takes-all + hysteresis. Picked ONE face and locked
-                    // onto it. Failed for multi-bbox volumes (e.g. 2 beehives with a gap):
-                    // two equidistant faces with equal clarity → hysteresis locks to one side
-                    // → persistent one-sided panning instead of centered sound.
-                    //
-                    // New approach: blend ALL face positions weighted by clarity/distance.
-                    // - Two equal faces on opposite sides → centroid = midpoint → zero panning
-                    // - One face behind wall (clarity=0) → zero weight → clear face dominates
-                    // - One face much closer → higher weight → directional (correct)
-                    //
-                    // Performance: same face iteration, just accumulate weighted sums alongside.
-                    // No extra raycasts. Replaces the hysteresis logic (no longer needed when
-                    // blending naturally handles the symmetric case).
-
-                    // Clarity threshold: faces within this of the best clarity contribute to blend.
-                    // 0.1 means a face with clarity 0.95 still blends with a face at 1.0,
-                    // but a face behind a wall (clarity 0.0) is excluded.
-                    const float BLEND_CLARITY_THRESHOLD = 0.1f;
-
-                    Vec3d bestFaceCenter = null;
-                    double bestFaceClarity = -1;
-                    float bestFaceRawOcc = 0;
-                    double bestFaceDist = double.MaxValue;
-                    int facesTested = 0;
-
-                    // Per-face results for second-pass blending (stack-friendly: max ~18 faces
-                    // for 3 bboxes x 3 player-facing faces x 2 — typically 4-6)
-                    const int MAX_FACE_RESULTS = 24;
-                    Span<double> faceCenterX = stackalloc double[MAX_FACE_RESULTS];
-                    Span<double> faceCenterY = stackalloc double[MAX_FACE_RESULTS];
-                    Span<double> faceCenterZ = stackalloc double[MAX_FACE_RESULTS];
-                    Span<float> faceClarities = stackalloc float[MAX_FACE_RESULTS];
-                    Span<float> faceOcclusions = stackalloc float[MAX_FACE_RESULTS];
-                    Span<double> faceDistances = stackalloc double[MAX_FACE_RESULTS];
-
-                    // Extract unique face centers from samples (grouped by face from AddFaceSamples)
-                    Vec3d prevFaceCenter = null;
-                    for (int i = 0; i < sampleCount; i++)
-                    {
-                        var fc = samples[i].FaceCenter;
-                        if (prevFaceCenter != null && fc == prevFaceCenter)
-                            continue; // Same face, skip — we only need one DDA per face center
-                        prevFaceCenter = fc;
-
-                        // Multi-ray voted DDA from face center to player, excluding volume bboxes
-                        float faceOcc = (volBboxes != null && volBboxCount > 0)
-                            ? OcclusionCalculator.CalculateExcludingBboxes(
-                                fc, playerPos, blockAccessor, volBboxes, volBboxCount)
-                            : OcclusionCalculator.Calculate(fc, playerPos, blockAccessor);
-                        float clarity = Math.Max(0f, 1f - faceOcc);
-                        double faceDist = fc.DistanceTo(playerPos);
-
-                        // Store for blending pass
-                        if (facesTested < MAX_FACE_RESULTS)
-                        {
-                            faceCenterX[facesTested] = fc.X;
-                            faceCenterY[facesTested] = fc.Y;
-                            faceCenterZ[facesTested] = fc.Z;
-                            faceClarities[facesTested] = clarity;
-                            faceOcclusions[facesTested] = faceOcc;
-                            faceDistances[facesTested] = faceDist;
-                        }
-                        facesTested++;
-
-                        // Track absolute best for threshold reference
-                        if (clarity > bestFaceClarity ||
-                            (clarity == bestFaceClarity && faceOcc < bestFaceRawOcc - 0.01f) ||
-                            (clarity == bestFaceClarity && Math.Abs(faceOcc - bestFaceRawOcc) <= 0.01f
-                             && faceDist < bestFaceDist))
-                        {
-                            bestFaceClarity = clarity;
-                            bestFaceRawOcc = faceOcc;
-                            bestFaceCenter = fc;
-                            bestFaceDist = faceDist;
-                        }
-                    }
-
-                    int faceCount = Math.Min(facesTested, MAX_FACE_RESULTS);
-                    double weightSum = 0;
-                    int blendCount = 0;
-
-                    if (bestFaceCenter != null && faceCount > 0)
-                    {
-                        // BLENDING PASS: compute clarity-weighted centroid of all faces
-                        // within BLEND_CLARITY_THRESHOLD of the best.
-                        // Weight = clarity / distance — closer clear faces contribute more.
-                        float clarityFloor = (float)bestFaceClarity - BLEND_CLARITY_THRESHOLD;
-                        double blendX = 0, blendY = 0, blendZ = 0;
-                        double blendOcc = 0;
-
-                        for (int i = 0; i < faceCount; i++)
-                        {
-                            if (faceClarities[i] < clarityFloor) continue;
-
-                            // Weight: clarity / distance. Minimum distance clamp prevents
-                            // division issues when player is ON the face surface.
-                            double dist = Math.Max(0.1, faceDistances[i]);
-                            double weight = faceClarities[i] / dist;
-
-                            blendX += faceCenterX[i] * weight;
-                            blendY += faceCenterY[i] * weight;
-                            blendZ += faceCenterZ[i] * weight;
-                            blendOcc += faceOcclusions[i] * weight;
-                            weightSum += weight;
-                            blendCount++;
-                        }
-
-                        Vec3d chosenPos;
-                        float chosenOcc;
-
-                        if (weightSum > 0 && blendCount > 1)
-                        {
-                            // Multiple contributing faces → weighted centroid.
-                            // This naturally centers between equidistant equal-clarity faces.
-                            chosenPos = new Vec3d(
-                                blendX / weightSum,
-                                blendY / weightSum,
-                                blendZ / weightSum);
-                            chosenOcc = (float)(blendOcc / weightSum);
-                        }
-                        else if (weightSum > 0)
-                        {
-                            // Single dominant face — use it directly
-                            chosenPos = bestFaceCenter;
-                            chosenOcc = bestFaceRawOcc;
-                        }
-                        else
-                        {
-                            chosenPos = bestFaceCenter;
-                            chosenOcc = bestFaceRawOcc;
-                        }
-
-                        // EMA temporal smoothing on position.
-                        // Alpha 0.15 = ~300ms convergence at 50ms ticks.
-                        const float ACOUSTIC_POS_EMA = 0.15f;
-                        if (cache.HasSmoothedAcousticPos)
-                        {
-                            var prev = cache.SmoothedAcousticPos;
-                            acousticPos = new Vec3d(
-                                prev.X + (chosenPos.X - prev.X) * ACOUSTIC_POS_EMA,
-                                prev.Y + (chosenPos.Y - prev.Y) * ACOUSTIC_POS_EMA,
-                                prev.Z + (chosenPos.Z - prev.Z) * ACOUSTIC_POS_EMA);
-                        }
-                        else
-                        {
-                            acousticPos = chosenPos;
-                        }
-
-                        cache.SmoothedAcousticPos = acousticPos;
-                        cache.HasSmoothedAcousticPos = true;
-
-                        // Use the blended raw occlusion for the LPF.
-                        // WHY raw and not clamped clarity: OcclusionToFilter is exponential
-                        // and expects accumulated values (e.g. 6.0 for 6 stone blocks).
-                        // Clamping at 1.0 massively under-muffles vs regular sounds.
-                        ambientDerivedOcclusion = chosenOcc;
-                    }
-                    else
-                    {
-                        // All samples fully occluded — use VS position as fallback
-                        acousticPos = soundPos;
-                        ambientDerivedOcclusion = 1f;
-                    }
-
-                    if (updatedThisTick == 0)
-                    {
-                        if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
-                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[AMBIENT-BLEND] {soundName} tested {facesTested} faces, blended {(weightSum > 0 && blendCount > 1 ? blendCount : 0)} " +
-                                $"bestClarity={bestFaceClarity:F2} bestRawOcc={bestFaceRawOcc:F2} " +
-                                $"derivedOcc={ambientDerivedOcclusion:F2} pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
-                    }
-                }
-                else if (volBboxes != null && volBboxCount > 0)
-                {
-                    // No face samples (e.g., rainwindow) but we have volume bboxes.
-                    // VS positioned the sound at bbox boundary — use standard DDA but exclude
-                    // the volume's own blocks so they don't self-occlude.
-                    acousticPos = soundPos; // Keep VS positioning
+                    // VS handles positioning — we only compute occlusion with bbox exclusion
+                    // so the volume's own blocks don't self-occlude.
                     ambientDerivedOcclusion = OcclusionCalculator.CalculatePathOcclusionExcludingBboxes(
-                        acousticPos, playerPos, blockAccessor,
+                        soundPos, playerPos, blockAccessor,
                         volBboxes, volBboxCount);
 
                     if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[AMBIENT-FALLBACK] {soundName} no samples, using bbox-excluded DDA, occ={ambientDerivedOcclusion:F2}");
+                            $"[AMBIENT-VOL] {soundName} bboxes={volBboxCount} occ={ambientDerivedOcclusion:F2} " +
+                            $"snd=({soundPos.X:F2},{soundPos.Y:F2},{soundPos.Z:F2})");
                 }
 
                 // Point-source ambients (resonators, etc.) have SoundType.Ambient but no
-                // bbox volumes and no face samples. They should NOT skip repositioning —
-                // treat them as regular sounds so probe rays can reposition around walls.
+                // bbox volumes. Treat as regular sounds so probe rays can reposition around walls.
                 if (ambientDerivedOcclusion < 0f)
-                {
                     isAmbientVolume = false;
-
-                    if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
-                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[AMBIENT-DOWNGRADE] {soundName} has SoundType.Ambient but no bbox/samples — treating as point source");
-                }
             }
 
-            // PROXIMITY CENTER BLEND (Steam Audio approach):
-            // As the player approaches an ambient volume, blend the acoustic position
-            // toward the player's own position. This progressively reduces stereo panning,
-            // preventing L/R flip-flop at bbox boundaries and adjacent bbox transitions.
-            // When fully inside: sound is centered (zero panning = immersive envelope).
-            // When >BLEND_START blocks away: full directional positioning from face-sampling.
-            if (isAmbientVolume && ambientDerivedOcclusion >= 0f)
-            {
-                const float BLEND_START = 2.5f; // Start blending when within 2.5 blocks of surface
-                float distToSound = (float)playerPos.DistanceTo(acousticPos);
-                float blendT = -1f; // -1 = no blend applied (outside range)
-
-                if (distToSound < BLEND_START)
-                {
-                    // t=0 at surface (fully centered) → t=1 at BLEND_START (fully directional)
-                    float t = distToSound / BLEND_START;
-                    // Ease-in: panning ramps up slowly near the volume, preserving centering longer
-                    t = t * t;
-                    blendT = t;
-                    acousticPos = new Vec3d(
-                        playerPos.X + (acousticPos.X - playerPos.X) * t,
-                        playerPos.Y + (acousticPos.Y - playerPos.Y) * t,
-                        playerPos.Z + (acousticPos.Z - playerPos.Z) * t);
-                }
-
-                // DIAGNOSTIC: Log ambient volume positioning details for debugging L/R panning.
-                // Shows the actual acoustic position vs player position so we can verify
-                // centering behavior. Only logs for first sound each tick to avoid spam.
-                if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
-                {
-                    float stereoOffsetX = (float)(acousticPos.X - playerPos.X);
-                    float stereoOffsetZ = (float)(acousticPos.Z - playerPos.Z);
-                    float stereoOffsetTotal = MathF.Sqrt(stereoOffsetX * stereoOffsetX + stereoOffsetZ * stereoOffsetZ);
-                    var samples = AmbientSoundPatches.GetFaceSamples(sound, out int diagSampleCount, out bool diagPlayerInside);
-                    var diagBboxes = AmbientSoundPatches.GetBboxes(sound, out int diagBboxCount);
-                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                        $"[AMBIENT-POS] {soundName} inside={diagPlayerInside} bboxes={diagBboxCount} " +
-                        $"dist={distToSound:F2} blendT={blendT:F3} " +
-                        $"stereoXZ={stereoOffsetTotal:F3} (dx={stereoOffsetX:F2} dz={stereoOffsetZ:F2}) " +
-                        $"acPos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2}) " +
-                        $"plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2})");
-                }
-            }
-
-            // BLOCK-LEVEL SOUND CENTERING: VS creates individual point-source sounds for
-            // each ambient block (e.g. one beehive-wild.ogg per beehive block). When the
-            // player is inside the AmbientSound volume envelope, these block-level sounds
-            // cause L/R panning because they're positioned at the block, not the player.
-            // Detect this case and center them, matching what we do for the volume itself.
-            if (!isAmbientVolume && ambientDerivedOcclusion < 0f)
-            {
-                bool inVolume = AmbientSoundPatches.IsInsideActiveVolume(soundPos);
-                int activeInsideCount = AmbientSoundPatches.GetActiveInsideVolumeCount();
-
-                if (inVolume)
-                {
-                    acousticPos = playerPos;
-                    ambientDerivedOcclusion = 0f;
-                }
-
-                // Always log for beehive sounds to diagnose (no updatedThisTick gate)
-                if (soundName != null && soundName.Contains("beehive"))
-                {
-                    SoundPhysicsAdaptedModSystem.ClientApi?.Logger.Debug(
-                        $"[SPA-BLOCK-CHECK] {soundName} inVolume={inVolume} activeInsideVolumes={activeInsideCount} " +
-                        $"sndPos=({soundPos.X:F2},{soundPos.Y:F2},{soundPos.Z:F2}) centered={inVolume}");
-                }
-            }
-
-            // For ambient volumes with sample-derived occlusion, skip the redundant DDA.
-            // The sample data already accounts for all paths from surface to player.
+            // For ambient volumes with bbox-excluded occlusion, skip the redundant DDA.
             float occlusion = ambientDerivedOcclusion >= 0f
                 ? ambientDerivedOcclusion
                 : OcclusionCalculator.Calculate(acousticPos, playerPos, blockAccessor);

@@ -4,65 +4,33 @@ using System.Reflection;
 using HarmonyLib;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
-using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 
 namespace soundphysicsadapted
 {
     /// <summary>
-    /// Patches AmbientSound.updatePosition to capture bounding box face data
+    /// Patches AmbientSound.updatePosition to capture bounding box data
     /// for ambient volume sounds (beehives, water, lava).
     ///
-    /// Produces multi-sample points across each player-facing face, scaled by
-    /// face size. AudioPhysicsSystem uses these for weighted occlusion blending
-    /// to compute a stable acoustic origin without face-flip artifacts.
+    /// Stores the volume's bounding boxes so AudioPhysicsSystem can exclude
+    /// them from DDA occlusion rays (preventing self-occlusion).
     ///
-    /// Also detects when the player is inside the volume — in that case,
-    /// no face sampling is needed (VS handles inside-volume positioning natively).
+    /// VS handles all sound positioning natively — we only capture bbox geometry.
     /// </summary>
     internal static class AmbientSoundPatches
     {
-        // Per-sound face sample data, updated every updatePosition call.
-        private static readonly Dictionary<ILoadedSound, FaceSampleData> _faceSamples = new();
-
-        // Tracks which sounds we've already dumped bbox info for (one-time diagnostic)
-        private static readonly HashSet<ILoadedSound> _bboxDumped = new();
+        // Per-sound bbox data, updated every updatePosition call.
+        private static readonly Dictionary<ILoadedSound, BboxData> _bboxCache = new();
 
         // Cached reflection for AmbientSound fields
         private static FieldInfo _soundField;
         private static FieldInfo _bboxField;
         private static bool _reflectionFailed;
 
-        // Reusable lists to avoid allocation per tick
-        private static readonly List<FaceSample> _tempSamples = new(64);
-        private static readonly List<Cuboidi> _tempBboxes = new(8);
-
-        // Throttle counter for always-on diagnostic logging
-        private static int _diagTicks;
-
-        // Inset from face surface to avoid block-boundary DDA issues
-        private const double FACE_INSET = 0.15;
-
-        // Max samples per face axis (3x3 = 9 max per face)
-        private const int MAX_SAMPLES_PER_AXIS = 3;
-
-        /// <summary>A single sample point on a face, with the face center for blending.</summary>
-        internal struct FaceSample
+        internal struct BboxData
         {
-            public Vec3d SamplePoint;  // The point to DDA-check for occlusion
-            public Vec3d FaceCenter;   // The face center this sample belongs to (for position blending)
-        }
-
-        internal struct FaceSampleData
-        {
-            public FaceSample[] Samples;
-            public int Count;
-            public bool PlayerInside;  // True if player is inside any bbox or bbox envelope
-            public Cuboidi[] Bboxes;       // Volume bounding boxes for DDA exclusion
+            public Cuboidi[] Bboxes;
             public int BboxCount;
-            // Envelope of all bboxes (for checking if block-level sounds fall inside)
-            public int EnvMinX, EnvMinY, EnvMinZ;
-            public int EnvMaxX, EnvMaxY, EnvMaxZ;
         }
 
         public static void ApplyPatches(Harmony harmony, ICoreClientAPI api)
@@ -97,7 +65,7 @@ namespace soundphysicsadapted
                 var postfix = new HarmonyMethod(typeof(AmbientSoundPatches), nameof(UpdatePositionPostfix));
                 harmony.Patch(updatePosMethod, postfix: postfix);
 
-                api.Logger.Notification("[SoundPhysicsAdapted] Ambient sound bbox face-sampling patch applied");
+                api.Logger.Notification("[SoundPhysicsAdapted] Ambient sound bbox capture patch applied");
             }
             catch (Exception ex)
             {
@@ -107,31 +75,13 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Get pre-computed face sample data for an ambient sound.
-        /// Returns null if no data available.
-        /// </summary>
-        public static FaceSample[] GetFaceSamples(ILoadedSound sound, out int count, out bool playerInside)
-        {
-            count = 0;
-            playerInside = false;
-            if (sound == null) return null;
-            if (_faceSamples.TryGetValue(sound, out var data))
-            {
-                count = data.Count;
-                playerInside = data.PlayerInside;
-                return data.Samples;
-            }
-            return null;
-        }
-
-        /// <summary>
-        /// Get the bounding boxes for an ambient sound (for DDA exclusion).
+        /// Get bounding boxes for an ambient sound (for DDA exclusion).
         /// </summary>
         public static Cuboidi[] GetBboxes(ILoadedSound sound, out int bboxCount)
         {
             bboxCount = 0;
             if (sound == null) return null;
-            if (_faceSamples.TryGetValue(sound, out var data))
+            if (_bboxCache.TryGetValue(sound, out var data))
             {
                 bboxCount = data.BboxCount;
                 return data.Bboxes;
@@ -139,44 +89,22 @@ namespace soundphysicsadapted
             return null;
         }
 
-        // Legacy compatibility — old API still used elsewhere
+        // Legacy API stubs — kept for compatibility with callers that haven't been updated.
+        public static FaceSample[] GetFaceSamples(ILoadedSound sound, out int count, out bool playerInside)
+        {
+            count = 0;
+            playerInside = false;
+            return null;
+        }
+
         public static Vec3d[] GetFaceCandidates(ILoadedSound sound, out int count)
         {
             count = 0;
-            return null; // No longer used — callers should use GetFaceSamples
+            return null;
         }
 
-        /// <summary>
-        /// Check if a world position falls inside any active AmbientSound envelope
-        /// where the player is also "inside". Used to suppress directional panning
-        /// on block-level point-source sounds (e.g. individual beehive blocks) when
-        /// the player is already within the volume's acoustic field.
-        /// </summary>
-        public static bool IsInsideActiveVolume(Vec3d pos)
-        {
-            foreach (var kvp in _faceSamples)
-            {
-                var data = kvp.Value;
-                if (!data.PlayerInside) continue;
-                // Check if pos falls within the envelope (half-open interval)
-                if (pos.X >= data.EnvMinX && pos.X < data.EnvMaxX &&
-                    pos.Y >= data.EnvMinY && pos.Y < data.EnvMaxY &&
-                    pos.Z >= data.EnvMinZ && pos.Z < data.EnvMaxZ)
-                    return true;
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// Count how many tracked volumes currently have PlayerInside=true (diagnostic).
-        /// </summary>
-        public static int GetActiveInsideVolumeCount()
-        {
-            int count = 0;
-            foreach (var kvp in _faceSamples)
-                if (kvp.Value.PlayerInside) count++;
-            return count;
-        }
+        // Legacy struct — kept for compile compatibility (unused)
+        internal struct FaceSample { }
 
         /// <summary>
         /// Remove tracking for a disposed sound. Called during periodic cleanup.
@@ -184,7 +112,7 @@ namespace soundphysicsadapted
         public static void RemoveSound(ILoadedSound sound)
         {
             if (sound != null)
-                _faceSamples.Remove(sound);
+                _bboxCache.Remove(sound);
         }
 
         /// <summary>
@@ -192,17 +120,14 @@ namespace soundphysicsadapted
         /// </summary>
         public static void Clear()
         {
-            _faceSamples.Clear();
-            _bboxDumped.Clear();
-            _diagTicks = 0;
+            _bboxCache.Clear();
         }
 
         /// <summary>
         /// Postfix on AmbientSound.updatePosition(EntityPos).
-        /// Produces multi-sample points across each player-facing face.
-        /// Sample density scales with face size: 1x1=1, 3x3=4, 5x5=9.
+        /// Captures bounding box geometry for DDA exclusion.
         /// </summary>
-        public static void UpdatePositionPostfix(object __instance, object position)
+        public static void UpdatePositionPostfix(object __instance)
         {
             if (_reflectionFailed || !SoundPhysicsAdaptedModSystem.IsWorldReady) return;
 
@@ -211,212 +136,32 @@ namespace soundphysicsadapted
                 var sound = _soundField.GetValue(__instance) as ILoadedSound;
                 if (sound == null) return;
 
-                var entityPos = position as EntityPos;
-                if (entityPos == null) return;
-
                 var bboxes = _bboxField.GetValue(__instance) as System.Collections.IList;
                 if (bboxes == null || bboxes.Count == 0) return;
 
-                // ONE-TIME bbox dump: log exact bbox structure the first time we see this sound.
-                // Always fires (not gated behind debug toggle) so we can diagnose bbox layout.
-                if (!_bboxDumped.Contains(sound))
-                {
-                    _bboxDumped.Add(sound);
-                    var capi0 = SoundPhysicsAdaptedModSystem.ClientApi;
-                    if (capi0 != null)
-                    {
-                        var sb = new System.Text.StringBuilder();
-                        sb.Append($"[SPA-BBOX-DUMP] sound has {bboxes.Count} bbox(es): ");
-                        foreach (var b in bboxes)
-                        {
-                            if (b is Cuboidi c)
-                                sb.Append($"[({c.X1},{c.Y1},{c.Z1})-({c.X2},{c.Y2},{c.Z2})] ");
-                        }
-                        capi0.Logger.Debug(sb.ToString());
-                    }
-                }
-
-                double playerX = entityPos.X;
-                double playerY = entityPos.Y;
-                double playerZ = entityPos.Z;
-
-                // EntityPos.Y = feet position, but audio system uses eye position
-                // (Pos.XYZ + LocalEyePos). Read dynamically so mods that change
-                // player model height or allow crawling get correct results.
-                var capi = SoundPhysicsAdaptedModSystem.ClientApi;
-                double eyeOffsetY = capi?.World?.Player?.Entity?.LocalEyePos?.Y ?? 1.52;
-                double playerEyeY = playerY + eyeOffsetY;
-
-                _tempSamples.Clear();
-                _tempBboxes.Clear();
-                bool playerInside = false;
-
-                // Track the axis-aligned envelope of ALL bboxes for gap detection.
-                // If a sound has multiple bboxes (e.g. row of beehives), the player
-                // standing in a gap between them should still be treated as "inside"
-                // the volume to prevent L/R panning artifacts.
-                int envMinX = int.MaxValue, envMinY = int.MaxValue, envMinZ = int.MaxValue;
-                int envMaxX = int.MinValue, envMaxY = int.MinValue, envMaxZ = int.MinValue;
-                int bboxCount = 0;
-
+                // Convert bboxes to inclusive coords for DDA exclusion.
+                // VS stores half-open intervals: [X1, X2) where X2 = X1 + blockCount.
+                // Subtract 1 from upper bounds so DDA only excludes blocks actually
+                // inside the volume, not adjacent blocks at +X/+Y/+Z.
+                var bboxArr = new Cuboidi[bboxes.Count];
+                int count = 0;
                 foreach (var bboxObj in bboxes)
                 {
-                    if (bboxObj is not Cuboidi bbox) continue;
-                    bboxCount++;
-
-                    // VS stores bboxes as half-open intervals: (X, Y, Z, X+1, Y+1, Z+1)
-                    // representing block [X,X+1) x [Y,Y+1) x [Z,Z+1).
-                    // Convert to INCLUSIVE coords for DDA exclusion (subtract 1 from upper bounds).
-                    // This ensures we only exclude blocks actually inside the sound volume —
-                    // NOT adjacent blocks at +X/+Y/+Z which would cause false occ=0.
-                    var exclusionBbox = new Cuboidi(
-                        bbox.X1, bbox.Y1, bbox.Z1,
-                        bbox.X2 - 1, bbox.Y2 - 1, bbox.Z2 - 1);
-                    _tempBboxes.Add(exclusionBbox);
-
-                    // Expand envelope
-                    if (bbox.X1 < envMinX) envMinX = bbox.X1;
-                    if (bbox.Y1 < envMinY) envMinY = bbox.Y1;
-                    if (bbox.Z1 < envMinZ) envMinZ = bbox.Z1;
-                    if (bbox.X2 > envMaxX) envMaxX = bbox.X2;
-                    if (bbox.Y2 > envMaxY) envMaxY = bbox.Y2;
-                    if (bbox.Z2 > envMaxZ) envMaxZ = bbox.Z2;
-
-                    // Check if player is inside this individual bbox.
-                    // Player position is float; use original VS coords (half-open interval).
-                    // Upper bound is exclusive at blockCoord+1.
-                    //
-                    // Y-axis overlap: check if player body [feetY, eyeY] overlaps bbox [Y1, Y2).
-                    // Player at Y=3 with eyes at 4.52 overlaps a beehive at Y=[4,5) — their
-                    // head is inside the bbox. Player at Y=6 with eyes at 7.52 does NOT overlap
-                    // a beehive at Y=[4,5).
-                    if (playerX >= bbox.X1 && playerX < bbox.X2 &&
-                        playerEyeY >= bbox.Y1 && playerY < bbox.Y2 &&
-                        playerZ >= bbox.Z1 && playerZ < bbox.Z2)
+                    if (bboxObj is Cuboidi bbox)
                     {
-                        playerInside = true;
-                        break; // No need to sample faces when inside
-                    }
-
-                    // VS uses half-open interval: [X1, X2) where X2 = X1 + blockCount.
-                    // For single-block beehive at X=511910: X1=511910, X2=511911 → [511910, 511911).
-                    // World center = (X1 + X2) / 2 = 511910.5 (NOT X1 + X2 + 1).
-                    double cx = (bbox.X1 + bbox.X2) * 0.5;
-                    double cy = (bbox.Y1 + bbox.Y2) * 0.5;
-                    double cz = (bbox.Z1 + bbox.Z2) * 0.5;
-
-                    // Size in world blocks: X2 - X1 (half-open, NOT X2 - X1 + 1).
-                    int sizeX = bbox.X2 - bbox.X1;
-                    int sizeY = bbox.Y2 - bbox.Y1;
-                    int sizeZ = bbox.Z2 - bbox.Z1;
-
-                    // -X face (world x = bbox.X1)
-                    if (playerX < cx)
-                        AddFaceSamples(bbox.X1 + FACE_INSET, cy, cz,
-                            sizeX, sizeY, sizeZ, 'X');
-                    // +X face (world x = bbox.X2)
-                    if (playerX > cx)
-                        AddFaceSamples(bbox.X2 - FACE_INSET, cy, cz,
-                            sizeX, sizeY, sizeZ, 'X');
-                    // -Y face (world y = bbox.Y1)
-                    if (playerEyeY < cy)
-                        AddFaceSamples(cx, bbox.Y1 + FACE_INSET, cz,
-                            sizeX, sizeY, sizeZ, 'Y');
-                    // +Y face (world y = bbox.Y2)
-                    if (playerEyeY > cy)
-                        AddFaceSamples(cx, bbox.Y2 - FACE_INSET, cz,
-                            sizeX, sizeY, sizeZ, 'Y');
-                    // -Z face (world z = bbox.Z1)
-                    if (playerZ < cz)
-                        AddFaceSamples(cx, cy, bbox.Z1 + FACE_INSET,
-                            sizeX, sizeY, sizeZ, 'Z');
-                    // +Z face (world z = bbox.Z2)
-                    if (playerZ > cz)
-                        AddFaceSamples(cx, cy, bbox.Z2 - FACE_INSET,
-                            sizeX, sizeY, sizeZ, 'Z');
-                }
-
-                // Build bbox array for DDA exclusion
-                Cuboidi[] bboxArr = _tempBboxes.Count > 0 ? _tempBboxes.ToArray() : null;
-                int bboxArrCount = _tempBboxes.Count;
-
-                // ENVELOPE CHECK: If the player isn't inside any individual bbox but IS
-                // inside the axis-aligned envelope of all bboxes, treat as "inside".
-                // This handles gaps between adjacent beehives/volumes belonging to the
-                // same AmbientSound — the player in a 1-block gap between two beehive
-                // bboxes should hear centered (non-directional) audio, not face-sampled
-                // panning that flips L/R as they move.
-                if (!playerInside && bboxCount > 1)
-                {
-                    // Use the player's full vertical extent (feet to eyes) for overlap.
-                    // Player at Y=3 with eyes at 4.52 overlaps beehive bbox at Y=[4,5).
-                    // Check: any part of [playerY, playerEyeY] intersects [envMinY, envMaxY]?
-                    if (playerX >= envMinX && playerX < envMaxX &&
-                        playerEyeY >= envMinY && playerY < envMaxY &&
-                        playerZ >= envMinZ && playerZ < envMaxZ)
-                    {
-                        playerInside = true;
-                        _tempSamples.Clear(); // Discard any face samples already collected
+                        bboxArr[count++] = new Cuboidi(
+                            bbox.X1, bbox.Y1, bbox.Z1,
+                            bbox.X2 - 1, bbox.Y2 - 1, bbox.Z2 - 1);
                     }
                 }
 
-                // ALWAYS-ON throttled diagnostic: log playerInside result ~once/second.
-                // This is critical for debugging the beehive panning issue.
-                if (_diagTicks++ % 20 == 0) // ~50ms ticks × 20 = ~1s
+                if (count > 0)
                 {
-                    var capi1 = SoundPhysicsAdaptedModSystem.ClientApi;
-                    capi1?.Logger.Debug(
-                        $"[SPA-AMBIENT-STATE] inside={playerInside} bboxes={bboxCount} samples={_tempSamples.Count} " +
-                        $"env=[({envMinX},{envMinY},{envMinZ})-({envMaxX},{envMaxY},{envMaxZ})] " +
-                        $"plr=({playerX:F2},{playerY:F2},{playerZ:F2}) eyeY={playerEyeY:F2}");
-                }
-
-                if (playerInside)
-                {
-                    // Player inside volume — store flag, no samples needed
-                    _faceSamples[sound] = new FaceSampleData
+                    _bboxCache[sound] = new BboxData
                     {
-                        Samples = null,
-                        Count = 0,
-                        PlayerInside = true,
                         Bboxes = bboxArr,
-                        BboxCount = bboxArrCount,
-                        EnvMinX = envMinX, EnvMinY = envMinY, EnvMinZ = envMinZ,
-                        EnvMaxX = envMaxX, EnvMaxY = envMaxY, EnvMaxZ = envMaxZ
+                        BboxCount = count
                     };
-                }
-                else if (_tempSamples.Count > 0)
-                {
-                    // Reuse existing array if large enough
-                    FaceSample[] arr;
-                    if (_faceSamples.TryGetValue(sound, out var existing) &&
-                        existing.Samples != null &&
-                        existing.Samples.Length >= _tempSamples.Count)
-                    {
-                        arr = existing.Samples;
-                    }
-                    else
-                    {
-                        arr = new FaceSample[_tempSamples.Count];
-                    }
-
-                    for (int i = 0; i < _tempSamples.Count; i++)
-                        arr[i] = _tempSamples[i];
-
-                    _faceSamples[sound] = new FaceSampleData
-                    {
-                        Samples = arr,
-                        Count = _tempSamples.Count,
-                        PlayerInside = false,
-                        Bboxes = bboxArr,
-                        BboxCount = bboxArrCount,
-                        EnvMinX = envMinX, EnvMinY = envMinY, EnvMinZ = envMinZ,
-                        EnvMaxX = envMaxX, EnvMaxY = envMaxY, EnvMaxZ = envMaxZ
-                    };
-                }
-                else
-                {
-                    _faceSamples.Remove(sound);
                 }
             }
             catch (Exception ex)
@@ -425,68 +170,5 @@ namespace soundphysicsadapted
                     SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in AmbientSound updatePosition postfix: {ex.Message}");
             }
         }
-
-        /// <summary>
-        /// Generate sample points across a face. The face is defined by its center
-        /// and the two tangent axis sizes. Sample count scales with face area.
-        /// </summary>
-        private static void AddFaceSamples(
-            double faceX, double faceY, double faceZ,
-            int bboxSizeX, int bboxSizeY, int bboxSizeZ,
-            char normalAxis)
-        {
-            // Determine the two tangent axes and their sizes
-            int tangent1Size, tangent2Size;
-            switch (normalAxis)
-            {
-                case 'X': tangent1Size = bboxSizeY; tangent2Size = bboxSizeZ; break;
-                case 'Y': tangent1Size = bboxSizeX; tangent2Size = bboxSizeZ; break;
-                case 'Z': tangent1Size = bboxSizeX; tangent2Size = bboxSizeY; break;
-                default: return;
-            }
-
-            // For 1-block faces, single center sample
-            // For larger faces, grid: min(ceil(size/2), MAX) samples per axis
-            int samplesT1 = Math.Min(Math.Max(1, (tangent1Size + 1) / 2), MAX_SAMPLES_PER_AXIS);
-            int samplesT2 = Math.Min(Math.Max(1, (tangent2Size + 1) / 2), MAX_SAMPLES_PER_AXIS);
-
-            // Face center for blending target
-            var faceCenter = new Vec3d(faceX, faceY, faceZ);
-
-            // Half-extents for sample distribution (inset slightly from edges)
-            double halfT1 = tangent1Size * 0.5 - FACE_INSET;
-            double halfT2 = tangent2Size * 0.5 - FACE_INSET;
-            if (halfT1 < 0) halfT1 = 0;
-            if (halfT2 < 0) halfT2 = 0;
-
-            for (int i = 0; i < samplesT1; i++)
-            {
-                // Distribute samples evenly: -half to +half
-                double t1 = samplesT1 == 1 ? 0.0
-                    : halfT1 * (2.0 * i / (samplesT1 - 1) - 1.0);
-
-                for (int j = 0; j < samplesT2; j++)
-                {
-                    double t2 = samplesT2 == 1 ? 0.0
-                        : halfT2 * (2.0 * j / (samplesT2 - 1) - 1.0);
-
-                    double sx, sy, sz;
-                    switch (normalAxis)
-                    {
-                        case 'X': sx = faceX; sy = faceY + t1; sz = faceZ + t2; break;
-                        case 'Y': sx = faceX + t1; sy = faceY; sz = faceZ + t2; break;
-                        case 'Z': sx = faceX + t1; sy = faceY + t2; sz = faceZ; break;
-                        default: continue;
-                    }
-
-                    _tempSamples.Add(new FaceSample
-                    {
-                        SamplePoint = new Vec3d(sx, sy, sz),
-                        FaceCenter = faceCenter
-                    });
-                }
-            }
-        }
-
     }
 }

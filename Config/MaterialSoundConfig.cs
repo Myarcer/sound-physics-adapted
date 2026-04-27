@@ -48,7 +48,7 @@ namespace soundphysicsadapted
         /// Add modded torch block codes here to get ambient crackling.
         /// Works alongside EnableTorchAmbient and TorchAmbientVolume in the main config.
         /// </summary>
-        public string[] TorchBlockPatterns { get; set; } = null;
+        public string[] TorchBlockPatterns { get; set; } = new string[] { "torch", "torchholder" };
 
         // Cached compiled patterns for block overrides
         private List<(Regex pattern, float value)> _compiledOcclusionOverrides;
