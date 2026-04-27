@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using HarmonyLib;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
@@ -59,6 +60,9 @@ namespace soundphysicsadapted.Patches
                 patchApplied = true;
 
                 api.Logger.Notification("[SoundPhysicsAdapted] BlockAmbientInjector: Harmony patch applied OK");
+
+                // Patch SystemClientTickingBlocks ctor to grab instance for weather-change rescan
+                RainScanForcer.ApplyPatch(harmony, api);
             }
             catch (Exception ex)
             {
@@ -301,6 +305,122 @@ namespace soundphysicsadapted.Patches
             patchApplied = false;
             rainSurfaceCount = 0;
             torchCount = 0;
+            RainScanForcer.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Forces VS's ambient block scan to restart when rain state changes.
+    ///
+    /// VS's SystemClientTickingBlocks only rescans every 20 seconds or when the
+    /// player moves 8 blocks. Weather changes don't trigger a rescan, so rain-on-metal
+    /// sounds would persist for up to 20 seconds after rain stops.
+    ///
+    /// Fix: grab the SystemClientTickingBlocks instance via constructor postfix,
+    /// then watch rainfall every 2 seconds and force shouldStartScanning = true
+    /// when the rain state changes. This matches how glass panes behave but with
+    /// prompt stop/start instead of up to 20s delay.
+    /// </summary>
+    internal static class RainScanForcer
+    {
+        private static object ctbInstance;
+        private static FieldInfo shouldStartScanningField;
+        private static FieldInfo shouldStartScanningLockField;
+        private static ICoreClientAPI capi;
+        private static float lastRainfall = -1f;
+
+        public static void ApplyPatch(Harmony harmony, ICoreClientAPI api)
+        {
+            capi = api;
+            try
+            {
+                var ctbType = AccessTools.TypeByName("Vintagestory.Client.NoObf.SystemClientTickingBlocks");
+                if (ctbType == null)
+                {
+                    api.Logger.Warning("[SoundPhysicsAdapted] RainScanForcer: Could not find SystemClientTickingBlocks type");
+                    return;
+                }
+
+                shouldStartScanningField = AccessTools.Field(ctbType, "shouldStartScanning");
+                shouldStartScanningLockField = AccessTools.Field(ctbType, "shouldStartScanningLock");
+
+                if (shouldStartScanningField == null || shouldStartScanningLockField == null)
+                {
+                    api.Logger.Warning("[SoundPhysicsAdapted] RainScanForcer: Could not find shouldStartScanning fields");
+                    return;
+                }
+
+                var clientMainType = AccessTools.TypeByName("Vintagestory.Client.NoObf.ClientMain");
+                if (clientMainType == null)
+                {
+                    api.Logger.Warning("[SoundPhysicsAdapted] RainScanForcer: Could not find ClientMain type");
+                    return;
+                }
+
+                var ctor = AccessTools.Constructor(ctbType, new Type[] { clientMainType });
+                if (ctor == null)
+                {
+                    api.Logger.Warning("[SoundPhysicsAdapted] RainScanForcer: Could not find SystemClientTickingBlocks constructor");
+                    return;
+                }
+
+                var ctorPostfix = new HarmonyMethod(typeof(RainScanForcer), nameof(CtorPostfix));
+                harmony.Patch(ctor, postfix: ctorPostfix);
+
+                // Poll rainfall every 2 seconds; force rescan on state change
+                api.Event.RegisterGameTickListener(OnTick, 2000, 500);
+
+                api.Logger.Notification("[SoundPhysicsAdapted] RainScanForcer: Patch applied — weather-change rescan active");
+            }
+            catch (Exception ex)
+            {
+                api.Logger.Warning($"[SoundPhysicsAdapted] RainScanForcer: Patch failed (non-critical): {ex.Message}");
+            }
+        }
+
+        public static void CtorPostfix(object __instance)
+        {
+            ctbInstance = __instance;
+        }
+
+        private static void OnTick(float dt)
+        {
+            if (ctbInstance == null || capi == null) return;
+
+            float rainfall = capi.World.Player?.Entity?.selfClimateCond?.Rainfall ?? 0f;
+            bool wasRaining = lastRainfall > 0.1f;
+            bool isRaining = rainfall > 0.1f;
+
+            if (lastRainfall >= 0f && wasRaining != isRaining)
+            {
+                // Rain state toggled — force ambient scan to restart immediately
+                try
+                {
+                    var lockObj = shouldStartScanningLockField.GetValue(ctbInstance);
+                    lock (lockObj)
+                    {
+                        shouldStartScanningField.SetValue(ctbInstance, true);
+                    }
+
+                    if (SoundPhysicsAdaptedModSystem.Config?.DebugMode == true &&
+                        SoundPhysicsAdaptedModSystem.Config?.DebugWeather == true)
+                        capi.Logger.Notification($"[SoundPhysicsAdapted] RainScanForcer: rain state changed ({lastRainfall:F2}→{rainfall:F2}), forcing ambient rescan");
+                }
+                catch (Exception ex)
+                {
+                    if (SoundPhysicsAdaptedModSystem.Config?.DebugMode == true)
+                        capi.Logger.Warning($"[SoundPhysicsAdapted] RainScanForcer: failed to force rescan: {ex.Message}");
+                }
+            }
+
+            lastRainfall = rainfall;
+        }
+
+        public static void Clear()
+        {
+            ctbInstance = null;
+            capi = null;
+            lastRainfall = -1f;
         }
     }
 }
