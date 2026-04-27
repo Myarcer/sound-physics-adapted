@@ -9,7 +9,7 @@
     "version": "0.2.3",
     "side": "universal",
     "requiredOnServer": false,
-    "requiredOnClient": false,
+    "requiredOnClient": true,
     "dependencies": {
         "game": "1.22.0"
     },
