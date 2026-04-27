@@ -120,10 +120,10 @@ namespace soundphysicsadapted.Patches
                     }
                 }
 
-                // Torch ambient injection (exclude extinct/burnedout variants)
+                // Torch ambient injection (exclude extinct/burnedout/empty variants)
                 if (config.EnableTorchAmbient && materialConfig?.TorchBlockPatterns != null)
                 {
-                    if (MatchesAnyPattern(path, materialConfig.TorchBlockPatterns) && !path.Contains("extinct") && !path.Contains("burnedout"))
+                    if (MatchesAnyPattern(path, materialConfig.TorchBlockPatterns) && !path.Contains("extinct") && !path.Contains("burnedout") && !path.Contains("-empty"))
                     {
                         bool injected = TryInjectTorchAmbient(block, config);
                         if (!injected) torchSkippedExistingAmbient++;

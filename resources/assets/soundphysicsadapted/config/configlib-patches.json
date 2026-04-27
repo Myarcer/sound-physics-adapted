@@ -107,7 +107,6 @@
         { "code": "DebugResonator",                "type": "boolean", "default": false,  "ingui": "Debug Resonator",            "comment": "Debug resonator features. Shows pause/resume events, Carry On state, boombox state." },
         { "code": "DebugWeather",                  "type": "boolean", "default": false,  "ingui": "Debug Weather",              "comment": "Debug weather audio. Shows enclosure values, LPF gainHF, sound start/stop." },
         { "code": "DebugPositionalWeather",        "type": "boolean", "default": false,  "ingui": "Debug Positional Weather",   "comment": "Debug positional weather. Shows opening tracking, clustering, source placement." },
-        { "code": "DebugWeatherVisualization",     "type": "boolean", "default": false,  "ingui": "Debug Weather Visualization","comment": "Visual block highlights showing DDA weather enclosure detection." },
         { "code": "DebugThunder",                  "type": "boolean", "default": false,  "ingui": "Debug Thunder",              "comment": "Debug thunder events. Shows layer decisions, opening selection, bolt scoring." }
     ]
 }
