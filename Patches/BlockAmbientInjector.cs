@@ -5,6 +5,7 @@ using HarmonyLib;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
+using Vintagestory.GameContent;
 
 namespace soundphysicsadapted.Patches
 {
@@ -211,7 +212,26 @@ namespace soundphysicsadapted.Patches
         {
             if (!patchApplied) return;
 
-            int blockId = __instance.Id;
+            // Multi-block placeholders (e.g. upper half of 2-block-tall doors) carry their own
+            // block ID that is NOT in our injected HashSets, but VS's ambient scan calls
+            // GetSounds() on them which forwards to the controller block (returning the door's
+            // injected Ambient). Without routing the strength call to the controller block too,
+            // the base Block.GetAmbientSoundStrength returns 1f and the sound plays at full
+            // volume regardless of rain. Resolve the controller block here.
+            Block effectiveBlock = __instance;
+            BlockPos effectivePos = pos;
+            if (__instance is BlockMultiblock mb && world?.BlockAccessor != null)
+            {
+                effectivePos = pos.AddCopy(mb.OffsetInv);
+                var controller = world.BlockAccessor.GetBlock(effectivePos);
+                if (controller == null || controller is BlockMultiblock)
+                {
+                    return; // bail; leave VS default
+                }
+                effectiveBlock = controller;
+            }
+
+            int blockId = effectiveBlock.Id;
 
             // Rain surface blocks
             if (rainSurfaceBlockIds.Contains(blockId))
@@ -219,9 +239,9 @@ namespace soundphysicsadapted.Patches
                 if (!loggedFirstRainCall && capi != null)
                 {
                     loggedFirstRainCall = true;
-                    capi.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: POSTFIX CALLED for rain block {__instance.Code} at {pos}");
+                    capi.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: POSTFIX CALLED for rain block {effectiveBlock.Code} at {effectivePos} (instance={__instance.GetType().Name})");
                 }
-                __result = CalculateRainSurfaceStrength(world, pos, __instance);
+                __result = CalculateRainSurfaceStrength(world, effectivePos, effectiveBlock);
                 return;
             }
 
@@ -231,10 +251,21 @@ namespace soundphysicsadapted.Patches
                 if (!loggedFirstTorchCall && capi != null)
                 {
                     loggedFirstTorchCall = true;
-                    capi.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: POSTFIX CALLED for torch block {__instance.Code} at {pos}");
+                    capi.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: POSTFIX CALLED for torch block {effectiveBlock.Code} at {effectivePos} (instance={__instance.GetType().Name})");
                 }
                 __result = SoundPhysicsAdaptedModSystem.Config?.TorchAmbientVolume ?? 0.35f;
                 return;
+            }
+
+            // If the controller block has our injected ambient but isn't in either HashSet
+            // (shouldn't happen, but defensive): silence it instead of leaving 1f from base.
+            if (effectiveBlock != __instance && effectiveBlock.Sounds?.Ambient != null)
+            {
+                var path = effectiveBlock.Sounds.Ambient.Path;
+                if (path != null && (path.Contains("rain-on-metal") || path.Contains("torch")))
+                {
+                    __result = 0f;
+                }
             }
         }
 
