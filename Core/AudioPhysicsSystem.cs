@@ -609,21 +609,42 @@ namespace soundphysicsadapted
                     // KEY DESIGN: Occlusion = bestFaceOcc (least-occluded path), NOT average
                     // of all faces. Back-faces traverse the entire volume and would drag the
                     // average up, causing false muffling when standing right next to a clear face.
+                    // CLARITY-WEIGHTED CENTROID face blending.
                     //
-                    // Position = best face center with hysteresis to prevent L/R flip-flop.
+                    // Old approach: winner-takes-all + hysteresis. Picked ONE face and locked
+                    // onto it. Failed for multi-bbox volumes (e.g. 2 beehives with a gap):
+                    // two equidistant faces with equal clarity → hysteresis locks to one side
+                    // → persistent one-sided panning instead of centered sound.
+                    //
+                    // New approach: blend ALL face positions weighted by clarity/distance.
+                    // - Two equal faces on opposite sides → centroid = midpoint → zero panning
+                    // - One face behind wall (clarity=0) → zero weight → clear face dominates
+                    // - One face much closer → higher weight → directional (correct)
+                    //
+                    // Performance: same face iteration, just accumulate weighted sums alongside.
+                    // No extra raycasts. Replaces the hysteresis logic (no longer needed when
+                    // blending naturally handles the symmetric case).
 
-                    // Hysteresis threshold: don't switch face unless new one is this much better.
-                    const double FACE_SWITCH_THRESHOLD = 0.15;
+                    // Clarity threshold: faces within this of the best clarity contribute to blend.
+                    // 0.1 means a face with clarity 0.95 still blends with a face at 1.0,
+                    // but a face behind a wall (clarity 0.0) is excluded.
+                    const float BLEND_CLARITY_THRESHOLD = 0.1f;
 
                     Vec3d bestFaceCenter = null;
                     double bestFaceClarity = -1;
-                    double bestFaceRawOcc = 0;
+                    float bestFaceRawOcc = 0;
                     double bestFaceDist = double.MaxValue;
                     int facesTested = 0;
 
-                    // Also track clarity + raw occ for the current (hysteresis) face
-                    double currentLockedFaceClarity = -1;
-                    double currentLockedFaceRawOcc = 0;
+                    // Per-face results for second-pass blending (stack-friendly: max ~18 faces
+                    // for 3 bboxes x 3 player-facing faces x 2 — typically 4-6)
+                    const int MAX_FACE_RESULTS = 24;
+                    Span<double> faceCenterX = stackalloc double[MAX_FACE_RESULTS];
+                    Span<double> faceCenterY = stackalloc double[MAX_FACE_RESULTS];
+                    Span<double> faceCenterZ = stackalloc double[MAX_FACE_RESULTS];
+                    Span<float> faceClarities = stackalloc float[MAX_FACE_RESULTS];
+                    Span<float> faceOcclusions = stackalloc float[MAX_FACE_RESULTS];
+                    Span<double> faceDistances = stackalloc double[MAX_FACE_RESULTS];
 
                     // Extract unique face centers from samples (grouped by face from AddFaceSamples)
                     Vec3d prevFaceCenter = null;
@@ -641,15 +662,20 @@ namespace soundphysicsadapted
                             : OcclusionCalculator.Calculate(fc, playerPos, blockAccessor);
                         float clarity = Math.Max(0f, 1f - faceOcc);
                         double faceDist = fc.DistanceTo(playerPos);
+
+                        // Store for blending pass
+                        if (facesTested < MAX_FACE_RESULTS)
+                        {
+                            faceCenterX[facesTested] = fc.X;
+                            faceCenterY[facesTested] = fc.Y;
+                            faceCenterZ[facesTested] = fc.Z;
+                            faceClarities[facesTested] = clarity;
+                            faceOcclusions[facesTested] = faceOcc;
+                            faceDistances[facesTested] = faceDist;
+                        }
                         facesTested++;
 
-                        // Prefer: 1) higher clarity, 2) lower raw occ (>0.01 margin),
-                        // 3) closest face to player. The distance tiebreaker is critical
-                        // for multi-bbox volumes (e.g. beehives with 2 bboxes): when all
-                        // faces have identical clarity/occ in open air, without it the
-                        // first-in-iteration face wins — often a far bbox face. This causes
-                        // the proximity blend to miss (distance > 2.5 blocks) and walking
-                        // L/R across the far bbox center flips the face → instant L/R pan.
+                        // Track absolute best for threshold reference
                         if (clarity > bestFaceClarity ||
                             (clarity == bestFaceClarity && faceOcc < bestFaceRawOcc - 0.01f) ||
                             (clarity == bestFaceClarity && Math.Abs(faceOcc - bestFaceRawOcc) <= 0.01f
@@ -660,71 +686,62 @@ namespace soundphysicsadapted
                             bestFaceCenter = fc;
                             bestFaceDist = faceDist;
                         }
-
-                        // Track if this is the locked face from last tick
-                        if (cache.CurrentBestFaceCenter != null &&
-                            fc.X == cache.CurrentBestFaceCenter.X &&
-                            fc.Y == cache.CurrentBestFaceCenter.Y &&
-                            fc.Z == cache.CurrentBestFaceCenter.Z)
-                        {
-                            currentLockedFaceClarity = clarity;
-                            currentLockedFaceRawOcc = faceOcc;
-                        }
                     }
 
-                    if (bestFaceCenter != null && facesTested > 0)
+                    int faceCount = Math.Min(facesTested, MAX_FACE_RESULTS);
+                    double weightSum = 0;
+                    int blendCount = 0;
+
+                    if (bestFaceCenter != null && faceCount > 0)
                     {
-                        // Face hysteresis: keep current face unless new one is significantly better.
-                        // Prevents L/R oscillation when two faces have similar clarity.
-                        Vec3d chosenFace = bestFaceCenter;
-                        double chosenClarity = bestFaceClarity;
-                        double chosenRawOcc = bestFaceRawOcc;
+                        // BLENDING PASS: compute clarity-weighted centroid of all faces
+                        // within BLEND_CLARITY_THRESHOLD of the best.
+                        // Weight = clarity / distance — closer clear faces contribute more.
+                        float clarityFloor = (float)bestFaceClarity - BLEND_CLARITY_THRESHOLD;
+                        double blendX = 0, blendY = 0, blendZ = 0;
+                        double blendOcc = 0;
 
-                        if (cache.CurrentBestFaceCenter != null && currentLockedFaceClarity >= 0)
+                        for (int i = 0; i < faceCount; i++)
                         {
-                            double clarityDelta = bestFaceClarity - currentLockedFaceClarity;
+                            if (faceClarities[i] < clarityFloor) continue;
 
-                            if (clarityDelta < FACE_SWITCH_THRESHOLD)
-                            {
-                                // Clarity is similar — check tiebreakers.
+                            // Weight: clarity / distance. Minimum distance clamp prevents
+                            // division issues when player is ON the face surface.
+                            double dist = Math.Max(0.1, faceDistances[i]);
+                            double weight = faceClarities[i] / dist;
 
-                                // 1. RAW OCCLUSION tiebreaker: when all faces are occluded
-                                // (clarity=0), prefer lower raw occ. Side faces send diagonal
-                                // rays through walls (occ=2+), player-facing face goes
-                                // perpendicular (occ=1). Use >0.3 threshold to avoid jitter.
-                                double occDelta = currentLockedFaceRawOcc - bestFaceRawOcc;
-                                if (occDelta > 0.3)
-                                {
-                                    // New face has significantly lower occ — switch to it
-                                    // chosenFace already = bestFaceCenter
-                                }
-                                // 2. DISTANCE tiebreaker: when clarities AND occ are similar,
-                                // switch to closer face if meaningfully nearer.
-                                // Low threshold (0.3) because EMA smoothing (alpha=0.15)
-                                // already prevents position jumps. Heavy hysteresis here
-                                // blocks face tracking along multi-bbox volumes, causing
-                                // the acoustic pos to lock to a wrong bbox's face.
-                                else
-                                {
-                                    double bestDist = bestFaceCenter.DistanceTo(playerPos);
-                                    double lockedDist = cache.CurrentBestFaceCenter.DistanceTo(playerPos);
-
-                                    if (bestDist < lockedDist - 0.3)
-                                    {
-                                        // New face is >1.5 blocks closer — override hysteresis
-                                        // chosenFace already = bestFaceCenter
-                                    }
-                                    else
-                                    {
-                                        // Keep locked face
-                                        chosenFace = cache.CurrentBestFaceCenter;
-                                        chosenClarity = currentLockedFaceClarity;
-                                        chosenRawOcc = currentLockedFaceRawOcc;
-                                    }
-                                }
-                            }
+                            blendX += faceCenterX[i] * weight;
+                            blendY += faceCenterY[i] * weight;
+                            blendZ += faceCenterZ[i] * weight;
+                            blendOcc += faceOcclusions[i] * weight;
+                            weightSum += weight;
+                            blendCount++;
                         }
-                        cache.CurrentBestFaceCenter = chosenFace;
+
+                        Vec3d chosenPos;
+                        float chosenOcc;
+
+                        if (weightSum > 0 && blendCount > 1)
+                        {
+                            // Multiple contributing faces → weighted centroid.
+                            // This naturally centers between equidistant equal-clarity faces.
+                            chosenPos = new Vec3d(
+                                blendX / weightSum,
+                                blendY / weightSum,
+                                blendZ / weightSum);
+                            chosenOcc = (float)(blendOcc / weightSum);
+                        }
+                        else if (weightSum > 0)
+                        {
+                            // Single dominant face — use it directly
+                            chosenPos = bestFaceCenter;
+                            chosenOcc = bestFaceRawOcc;
+                        }
+                        else
+                        {
+                            chosenPos = bestFaceCenter;
+                            chosenOcc = bestFaceRawOcc;
+                        }
 
                         // EMA temporal smoothing on position.
                         // Alpha 0.15 = ~300ms convergence at 50ms ticks.
@@ -733,25 +750,23 @@ namespace soundphysicsadapted
                         {
                             var prev = cache.SmoothedAcousticPos;
                             acousticPos = new Vec3d(
-                                prev.X + (chosenFace.X - prev.X) * ACOUSTIC_POS_EMA,
-                                prev.Y + (chosenFace.Y - prev.Y) * ACOUSTIC_POS_EMA,
-                                prev.Z + (chosenFace.Z - prev.Z) * ACOUSTIC_POS_EMA);
+                                prev.X + (chosenPos.X - prev.X) * ACOUSTIC_POS_EMA,
+                                prev.Y + (chosenPos.Y - prev.Y) * ACOUSTIC_POS_EMA,
+                                prev.Z + (chosenPos.Z - prev.Z) * ACOUSTIC_POS_EMA);
                         }
                         else
                         {
-                            acousticPos = chosenFace;
+                            acousticPos = chosenPos;
                         }
 
                         cache.SmoothedAcousticPos = acousticPos;
                         cache.HasSmoothedAcousticPos = true;
 
-                        // Use the raw (unclamped) avg occlusion of the best face.
-                        // WHY: clarity = max(0, 1-sampleOcc) clamps to 0 for sampleOcc > 1.
-                        // Using (1 - chosenClarity) caps at 1.0, but OcclusionToFilter is
-                        // exponential and expects accumulated values (e.g. 6.0 for 6 stone
-                        // blocks). Capping at 1.0 massively under-muffles vs regular sounds
-                        // that pass the full accumulated DDA value through the same formula.
-                        ambientDerivedOcclusion = (float)chosenRawOcc;
+                        // Use the blended raw occlusion for the LPF.
+                        // WHY raw and not clamped clarity: OcclusionToFilter is exponential
+                        // and expects accumulated values (e.g. 6.0 for 6 stone blocks).
+                        // Clamping at 1.0 massively under-muffles vs regular sounds.
+                        ambientDerivedOcclusion = chosenOcc;
                     }
                     else
                     {
@@ -764,7 +779,8 @@ namespace soundphysicsadapted
                     {
                         if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[AMBIENT-BLEND] {soundName} tested {facesTested} faces (multi-ray voted), bestFaceClarity={bestFaceClarity:F2} bestRawOcc={bestFaceRawOcc:F2} " +
+                                $"[AMBIENT-BLEND] {soundName} tested {facesTested} faces, blended {(weightSum > 0 && blendCount > 1 ? blendCount : 0)} " +
+                                $"bestClarity={bestFaceClarity:F2} bestRawOcc={bestFaceRawOcc:F2} " +
                                 $"derivedOcc={ambientDerivedOcclusion:F2} pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
                     }
                 }
