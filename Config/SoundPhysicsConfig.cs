@@ -712,50 +712,6 @@ namespace soundphysicsadapted
         /// </summary>
         public float RainSurfaceVolume { get; set; } = 0.5f;
 
-        /// <summary>
-        /// Block code patterns that trigger rain surface impacts.
-        /// Matched as prefix against block.Code.Path (e.g., "anvil" matches "anvil-copper").
-        /// Add patterns for any block type you want rain impact sounds on.
-        /// </summary>
-        public string[] RainSurfaceBlockPatterns { get; set; } = new string[]
-        {
-            // --- Smithing / storage piles ---
-            "anvil",            // game:anvil-{metal}, game:anvilpart-{base|top}-{metal}
-            "ingotpile",        // game:ingotpile
-            "platepile",        // game:platepile
-            "metalpartpile",    // game:metalpartpile (scraps/parts pile)
-            "metalsheet",       // game:metalsheet-{metal}-{facing}
-
-            // --- Metal blocks / plates / sheets ---
-            "metalblock",       // game:metalblock-{type}-{metal}
-            "metalplate",       // game:metalplate-{metal}  (if used by mods)
-
-            // --- Metal machines / containers ---
-            "hopper",           // game:hopper-{metal}-{facing}
-            "chute",            // game:chute, chute-cross, chute-straight, chute-t
-            "verticalboiler",   // game:verticalboiler
-            "condenser",        // game:condenser
-            "cokeovendoor",     // game:cokeovendoor-{metal}
-
-            // --- Metal furniture / decor ---
-            "ironfence",        // game:ironfence-{metal}-{config}
-            "supportchain",     // game:supportchain-{metal}-{facing}
-            "supportbeam-tarnishedmetal", // game:supportbeam-tarnishedmetal-{config}
-            "chandelier",       // game:chandelier-{metal}
-            "lantern",          // game:lantern-{metal}-{facing}   (TODO: own sound?)
-            "metaldoor",        // game:metaldoor-{metal}-{config}
-            "trapdoor",         // game:trapdoor-{metal}-{config}
-            "plaque",           // game:plaque-{metal}-{facing}
-            "shingleblock",     // game:shingleblock-{metal}-{facing}  (metal roof shingles)
-            "lightningrod",     // game:lightningrod-{metal}
-
-            // Note: mechanics (angledgears, largegear3, helvehammerbase, transmission,
-            // brake, crank, pulverizerframe etc.) are all wood — skip.
-            // bloomerybase/bloomerychimney are clay/stone — skip.
-            // forge is stone — skip.
-            // Add any of these back when a rain-on-wood / rain-on-stone sound is available.
-        };
-
         // ============================================================
         // TORCH AMBIENT
         // Adds ambient crackling sound to placed torches.

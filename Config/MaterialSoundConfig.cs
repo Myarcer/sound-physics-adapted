@@ -15,7 +15,7 @@ namespace soundphysicsadapted
         /// Current material config version. Any saved config below this is regenerated from defaults.
         /// Bump this when changing defaults that should apply to all users.
         /// </summary>
-        public const int CurrentVersion = 9;
+        public const int CurrentVersion = 10;
 
         /// <summary>Config version for migration</summary>
         public int Version { get; set; } = 1;
@@ -32,6 +32,14 @@ namespace soundphysicsadapted
         /// Use for gameplay-critical alert sounds (bells, temporal rifts) that must be audible through walls.
         /// </summary>
         public SoundPenetrationSection SoundPenetration { get; set; } = new SoundPenetrationSection();
+
+        /// <summary>
+        /// Block code patterns that trigger rain surface impact sounds.
+        /// Matched as prefix against block.Code.Path (e.g., "anvil" matches "anvil-copper").
+        /// Add patterns for any block type you want rain impact sounds on.
+        /// Works alongside EnableRainSurfaceImpacts and RainSurfaceVolume in the main config.
+        /// </summary>
+        public string[] RainSurfaceBlockPatterns { get; set; } = null;
 
         // Cached compiled patterns for block overrides
         private List<(Regex pattern, float value)> _compiledOcclusionOverrides;
@@ -544,6 +552,44 @@ namespace soundphysicsadapted
                         { "leaves", 0.1f },
                         { "plant", 0.1f }
                     }
+                },
+                RainSurfaceBlockPatterns = new string[]
+                {
+                    // --- Smithing / storage piles ---
+                    "anvil",            // game:anvil-{metal}, game:anvilpart-{base|top}-{metal}
+                    "ingotpile",        // game:ingotpile
+                    "platepile",        // game:platepile
+                    "metalpartpile",    // game:metalpartpile (scraps/parts pile)
+                    "metalsheet",       // game:metalsheet-{metal}-{facing}
+
+                    // --- Metal blocks / plates / sheets ---
+                    "metalblock",       // game:metalblock-{type}-{metal}
+                    "metalplate",       // game:metalplate-{metal}  (if used by mods)
+
+                    // --- Metal machines / containers ---
+                    "hopper",           // game:hopper-{metal}-{facing}
+                    "chute",            // game:chute, chute-cross, chute-straight, chute-t
+                    "verticalboiler",   // game:verticalboiler
+                    "condenser",        // game:condenser
+                    "cokeovendoor",     // game:cokeovendoor-{metal}
+
+                    // --- Metal furniture / decor ---
+                    "ironfence",        // game:ironfence-{metal}-{config}
+                    "supportchain",     // game:supportchain-{metal}-{facing}
+                    "supportbeam-tarnishedmetal", // game:supportbeam-tarnishedmetal-{config}
+                    "chandelier",       // game:chandelier-{metal}
+                    "lantern",          // game:lantern-{metal}-{facing}   (TODO: own sound?)
+                    "metaldoor",        // game:metaldoor-{metal}-{config}
+                    "trapdoor",         // game:trapdoor-{metal}-{config}
+                    "plaque",           // game:plaque-{metal}-{facing}
+                    "shingleblock",     // game:shingleblock-{metal}-{facing}  (metal roof shingles)
+                    "lightningrod",     // game:lightningrod-{metal}
+
+                    // Note: mechanics (angledgears, largegear3, helvehammerbase, transmission,
+                    // brake, crank, pulverizerframe etc.) are all wood — skip.
+                    // bloomerybase/bloomerychimney are clay/stone — skip.
+                    // forge is stone — skip.
+                    // Add any of these back when a rain-on-wood / rain-on-stone sound is available.
                 },
                 SoundPenetration = new SoundPenetrationSection
                 {

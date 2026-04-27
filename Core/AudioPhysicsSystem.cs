@@ -591,7 +591,8 @@ namespace soundphysicsadapted
 
                     if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[AMBIENT-INSIDE] {soundName} playerInside=true, occ=0, centered on player");
+                            $"[AMBIENT-INSIDE] {soundName} playerInside=true bboxes={volBboxCount}, occ=0, centered on player " +
+                            $"plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2})");
                 }
                 else if (samples != null && sampleCount > 0)
                 {
@@ -805,6 +806,7 @@ namespace soundphysicsadapted
             {
                 const float BLEND_START = 2.5f; // Start blending when within 2.5 blocks of surface
                 float distToSound = (float)playerPos.DistanceTo(acousticPos);
+                float blendT = -1f; // -1 = no blend applied (outside range)
 
                 if (distToSound < BLEND_START)
                 {
@@ -812,10 +814,29 @@ namespace soundphysicsadapted
                     float t = distToSound / BLEND_START;
                     // Ease-in: panning ramps up slowly near the volume, preserving centering longer
                     t = t * t;
+                    blendT = t;
                     acousticPos = new Vec3d(
                         playerPos.X + (acousticPos.X - playerPos.X) * t,
                         playerPos.Y + (acousticPos.Y - playerPos.Y) * t,
                         playerPos.Z + (acousticPos.Z - playerPos.Z) * t);
+                }
+
+                // DIAGNOSTIC: Log ambient volume positioning details for debugging L/R panning.
+                // Shows the actual acoustic position vs player position so we can verify
+                // centering behavior. Only logs for first sound each tick to avoid spam.
+                if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                {
+                    float stereoOffsetX = (float)(acousticPos.X - playerPos.X);
+                    float stereoOffsetZ = (float)(acousticPos.Z - playerPos.Z);
+                    float stereoOffsetTotal = MathF.Sqrt(stereoOffsetX * stereoOffsetX + stereoOffsetZ * stereoOffsetZ);
+                    var samples = AmbientSoundPatches.GetFaceSamples(sound, out int diagSampleCount, out bool diagPlayerInside);
+                    var diagBboxes = AmbientSoundPatches.GetBboxes(sound, out int diagBboxCount);
+                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                        $"[AMBIENT-POS] {soundName} inside={diagPlayerInside} bboxes={diagBboxCount} " +
+                        $"dist={distToSound:F2} blendT={blendT:F3} " +
+                        $"stereoXZ={stereoOffsetTotal:F3} (dx={stereoOffsetX:F2} dz={stereoOffsetZ:F2}) " +
+                        $"acPos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2}) " +
+                        $"plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2})");
                 }
             }
 

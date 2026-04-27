@@ -95,8 +95,10 @@ namespace soundphysicsadapted.Patches
             api.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: Starting injection scan. " +
                 $"RainEnabled={config.EnableRainSurfaceImpacts} TorchEnabled={config.EnableTorchAmbient}");
 
-            if (config.RainSurfaceBlockPatterns != null)
-                api.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: Rain patterns: [{string.Join(", ", config.RainSurfaceBlockPatterns)}]");
+            var materialConfig = SoundPhysicsAdaptedModSystem.MaterialConfig;
+
+            if (materialConfig?.RainSurfaceBlockPatterns != null)
+                api.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: Rain patterns: [{string.Join(", ", materialConfig.RainSurfaceBlockPatterns)}]");
             if (config.TorchBlockPatterns != null)
                 api.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: Torch patterns: [{string.Join(", ", config.TorchBlockPatterns)}]");
 
@@ -107,9 +109,9 @@ namespace soundphysicsadapted.Patches
                 string path = block.Code.Path;
 
                 // Rain surface injection
-                if (config.EnableRainSurfaceImpacts && config.RainSurfaceBlockPatterns != null)
+                if (config.EnableRainSurfaceImpacts && materialConfig?.RainSurfaceBlockPatterns != null)
                 {
-                    if (MatchesAnyPattern(path, config.RainSurfaceBlockPatterns))
+                    if (MatchesAnyPattern(path, materialConfig.RainSurfaceBlockPatterns))
                     {
                         bool injected = TryInjectRainSurface(block);
                         if (!injected) rainSkippedExistingAmbient++;

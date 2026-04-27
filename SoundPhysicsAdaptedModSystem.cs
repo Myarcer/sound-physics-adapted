@@ -43,7 +43,7 @@ namespace soundphysicsadapted
         /// Bump this when adding new migration blocks in MigrateConfig().
         /// Pre-migration configs (ConfigVersion == 0) are always wiped to fresh defaults.
         /// </summary>
-        private const int CurrentConfigVersion = 5;
+        private const int CurrentConfigVersion = 6;
         private static MaterialSoundConfig materialConfig;
         private static ICoreClientAPI clientApi;
         private static AudioPhysicsSystem acousticsManager;

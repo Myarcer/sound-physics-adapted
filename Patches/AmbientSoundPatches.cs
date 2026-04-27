@@ -206,9 +206,16 @@ namespace soundphysicsadapted
                     // Check if player is inside this bbox.
                     // Player position is float; use original VS coords (half-open interval).
                     // Upper bound is exclusive at blockCoord+1.
-                    // Use eye Y for vertical check — that's where the listener/camera is.
+                    //
+                    // Y-axis uses FEET position, not eye position. Single-block-high volumes
+                    // (beehives, Y range [5,6)) have eye position (6.52) always above the bbox,
+                    // so the inside check would never trigger. Using feet (5.0 when standing on
+                    // the same Y level) correctly detects the player as "inside" the volume's
+                    // horizontal footprint, which is what matters for immersive centering.
+                    // We also extend the Y check upward by player height so standing next to
+                    // a waist-high beehive counts as "inside" its acoustic field.
                     if (playerX >= bbox.X1 && playerX < bbox.X2 &&
-                        playerEyeY >= bbox.Y1 && playerEyeY < bbox.Y2 &&
+                        playerY >= bbox.Y1 && playerY < bbox.Y2 + eyeOffsetY &&
                         playerZ >= bbox.Z1 && playerZ < bbox.Z2)
                     {
                         playerInside = true;
