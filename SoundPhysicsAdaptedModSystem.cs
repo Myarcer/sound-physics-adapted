@@ -492,9 +492,8 @@ namespace soundphysicsadapted
                 api.Logger.Warning($"[SoundPhysicsAdapted] PatchAll failed (non-critical): {ex.Message}");
             }
 
-            // Block ambient injection: set Sounds.Ambient on matching blocks
-            // Must run after patches are applied but before first ambient scan
-            BlockAmbientInjector.InjectAmbientSounds(api);
+            // Block ambient injection is deferred to LevelFinalize (below)
+            // because api.World.Blocks is empty during StartClientSide on servers.
 
             // Note: Universal mono downmix is handled by MonoDownmixManager +
             // LoadSoundPatch.StartPlayingAudioMonoPrefix (auto-detects positional stereo sounds)
@@ -532,6 +531,11 @@ namespace soundphysicsadapted
                 _warmupTicksRemaining = WARMUP_TICKS;
                 DiagnosticLog($"WORLD-READY: LevelFinalize fired. Warming up for {WARMUP_TICKS} ticks before enabling raycasting.");
                 api.Logger.Notification("[SoundPhysicsAdapted] World ready — warmup started, raycasting deferred");
+
+                // Block ambient injection: inject Sounds.Ambient onto matching block types.
+                // Must run here (not StartClientSide) because api.World.Blocks is empty on
+                // multiplayer servers until blocks are received from the server.
+                BlockAmbientInjector.InjectAmbientSounds(api);
 
                 // DIAGNOSTIC: Dump beehive entries from soundAudioData after a delay
                 long diagId = 0;

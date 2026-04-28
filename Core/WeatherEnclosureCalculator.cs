@@ -388,6 +388,12 @@ namespace soundphysicsadapted
         //  Step 1: Heightmap sky coverage sampling
         // ══════════════════════════════════════════════════════════════
 
+        // Depth gradient for sky coverage: instead of a binary covered/exposed gate,
+        // coverage ramps smoothly from 0 to 1 over this many blocks below rainHeight.
+        // Prevents stutter when bobbing at water surface (depth oscillates 0-1 blocks).
+        // At 7 blocks: 1 block below = 14% covered, 3 = 43%, 7+ = fully covered.
+        private const float SKY_COVERAGE_GRADIENT_DEPTH = 7f;
+
         private void ScanSkyCoverage(ScanContext ctx)
         {
             float coveredWeight = 0f;
@@ -405,9 +411,35 @@ namespace soundphysicsadapted
 
                 if (ctx.PlayerY < rainHeight)
                 {
-                    // Player is BELOW the rain-blocking surface at this column -> covered
-                    coveredWeight += sp.Weight;
-                    ctx.Viz?.AddSample(sampleX, ctx.PlayerY, sampleZ, EnclosureDebugVisualizer.VizColor.Covered);
+                    // Player is below the rain-blocking surface — apply depth gradient.
+                    // Shallow depth (bobbing at water surface) = low coverage fraction.
+                    // Deep below (inside structure/cave) = full coverage.
+                    int depth = rainHeight - ctx.PlayerY;
+                    float coverageFraction = Math.Clamp(depth / SKY_COVERAGE_GRADIENT_DEPTH, 0f, 1f);
+                    coveredWeight += sp.Weight * coverageFraction;
+
+                    // When partially covered, still add as exposed candidate for DDA
+                    // so occlusion/LPF can detect the rain path above.
+                    if (coverageFraction < 1f)
+                    {
+                        int yDiff = Math.Abs(rainHeight - ctx.PlayerY);
+                        if (yDiff <= MAX_Y_DIFF)
+                        {
+                            ctx.ExposedCandidates.Add(new ExposedCandidate
+                            {
+                                WorldX = sampleX,
+                                WorldZ = sampleZ,
+                                RainY = rainHeight,
+                                HorizontalDist = sp.Distance,
+                                Weight = sp.Weight
+                            });
+                            ctx.Viz?.AddSample(sampleX, ctx.PlayerY, sampleZ, EnclosureDebugVisualizer.VizColor.Exposed);
+                        }
+                    }
+                    else
+                    {
+                        ctx.Viz?.AddSample(sampleX, ctx.PlayerY, sampleZ, EnclosureDebugVisualizer.VizColor.Covered);
+                    }
                 }
                 else
                 {
