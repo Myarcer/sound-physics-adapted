@@ -176,8 +176,12 @@ namespace soundphysicsadapted.Patches
             new System.Collections.Generic.List<BlockPos>();
 
         // Store animation frame when pausing
-        private static System.Collections.Generic.Dictionary<string, float> savedAnimFramesByPos = 
+        private static System.Collections.Generic.Dictionary<string, float> savedAnimFramesByPos =
             new System.Collections.Generic.Dictionary<string, float>();
+
+        // Debounce rapid pause/resume clicks (prevents NRE when async onTrackLoaded fires on stale state)
+        private static long lastPauseResumeMs = 0;
+        private const long PAUSE_RESUME_COOLDOWN_MS = 500;
 
         // Track resonators that have had active audio playback (for natural completion detection)
         // When a track is playing, we mark it here. When the sound stops but IsPlaying is still
@@ -559,6 +563,16 @@ namespace soundphysicsadapted.Patches
             {
                 if (__instance.Inventory[0] != null && !__instance.Inventory[0].Empty)
                 {
+                    // Debounce: prevent rapid-fire pause/resume which crashes vanilla's
+                    // async onTrackLoaded callback (NRE when StartMusic queues a callback
+                    // then StopMusic nulls the state before it fires).
+                    long nowMs = world.ElapsedMilliseconds;
+                    if (nowMs - lastPauseResumeMs < PAUSE_RESUME_COOLDOWN_MS)
+                    {
+                        return false; // Swallow the click
+                    }
+                    lastPauseResumeMs = nowMs;
+
                     // CLIENT: Only handle pause/resume if server also has the mod.
                     // Without this guard, client would pause locally while server runs vanilla
                     // OnInteract (ejecting the disc), causing a desync.
