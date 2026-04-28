@@ -228,18 +228,13 @@ namespace soundphysicsadapted
                 }
             }
 
-            ServerChannel = api.Network.GetChannel("soundphysicsadapted")
-                .RegisterMessageType(typeof(ResonatorSyncPacket))
-                .SetMessageHandler<ResonatorSyncPacket>(OnResonatorSyncPacket);
-
-            // Register boombox sync packet (carrier -> server -> nearby clients)
-            api.Network.GetChannel("soundphysicsadapted")
-                .RegisterMessageType(typeof(BoomboxSyncPacket))
-                .SetMessageHandler<BoomboxSyncPacket>(OnBoomboxSyncPacket);
-
-            // Register handshake packet (server sends, no handler needed)
-            api.Network.GetChannel("soundphysicsadapted")
-                .RegisterMessageType(typeof(ServerHandshakePacket));
+            // Channel + message types already registered in Start().
+            // Only get the channel reference and set handlers here — do NOT re-register
+            // message types, as duplicate RegisterMessageType calls can shift packet indices
+            // and cause server/client mismatch (handshake packets silently dropped).
+            ServerChannel = api.Network.GetChannel("soundphysicsadapted");
+            ServerChannel.SetMessageHandler<ResonatorSyncPacket>(OnResonatorSyncPacket);
+            ServerChannel.SetMessageHandler<BoomboxSyncPacket>(OnBoomboxSyncPacket);
 
             // Apply server-side Harmony patches for resonator interaction
             // This ensures OnInteract prefix fires on the server too (critical for multiplayer)
@@ -398,8 +393,9 @@ namespace soundphysicsadapted
         {
             base.StartClientSide(api);
             clientApi = api;
-            ClientChannel = api.Network.GetChannel("soundphysicsadapted")
-                .RegisterMessageType(typeof(ResonatorSyncPacket));  // Must register to send!
+            // Channel + message types already registered in Start().
+            // Do NOT re-register — duplicate RegisterMessageType shifts packet indices.
+            ClientChannel = api.Network.GetChannel("soundphysicsadapted");
 
             // Listen for server handshake — confirms server has the mod
             ClientChannel.SetMessageHandler<ServerHandshakePacket>(OnServerHandshake);
