@@ -94,7 +94,13 @@ namespace soundphysicsadapted.Patches
 
             // Ignore packets from ourselves (server shouldn't send these, but safety check)
             var localPlayer = capi.World?.Player?.Entity;
-            if (localPlayer != null && localPlayer.EntityId == packet.CarrierEntityId) return;
+            if (localPlayer != null && localPlayer.EntityId == packet.CarrierEntityId)
+            {
+                // Don't log — this is our own packet bounced back (shouldn't happen but safety)
+                return;
+            }
+
+            capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Received packet from carrier {packet.CarrierEntityId}, playing={packet.IsPlaying}, track={packet.TrackLocation}, pos=({packet.PosX:F0},{packet.PosY:F0},{packet.PosZ:F0})");
 
             if (!packet.IsPlaying)
             {
@@ -149,6 +155,8 @@ namespace soundphysicsadapted.Patches
                 }
                 assetLoc.WithPathAppendixOnce(".ogg");
 
+                capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Creating sound for carrier {packet.CarrierEntityId}, rawTrack={packet.TrackLocation}, resolved={assetLoc}");
+
                 var soundParams = new SoundParams(assetLoc)
                 {
                     Position = new Vec3f(packet.PosX, packet.PosY, packet.PosZ),
@@ -164,7 +172,7 @@ namespace soundphysicsadapted.Patches
                 var sound = capi.World.LoadSound(soundParams);
                 if (sound == null)
                 {
-                    capi.Logger.Warning($"[SoundPhysicsAdapted] BoomboxRemote: Failed to load sound for carrier {packet.CarrierEntityId}, track={packet.TrackLocation}");
+                    capi.Logger.Warning($"[SoundPhysicsAdapted] BoomboxRemote: LoadSound returned NULL for carrier {packet.CarrierEntityId}, asset={assetLoc}");
                     return;
                 }
 
