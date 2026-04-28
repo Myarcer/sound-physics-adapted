@@ -121,6 +121,27 @@ namespace soundphysicsadapted.Patches
 
         #endregion
 
+        #region Public Queries
+
+        /// <summary>
+        /// Returns true if a pre-steal or active boombox is in progress for the given position.
+        /// Used by OnClientTickPostfix to avoid false "track finished naturally" detection
+        /// when the sound field was nulled by pre-steal rather than actual track completion.
+        /// </summary>
+        public static bool HasPendingOrActiveSteal(BlockPos pos)
+        {
+            // Active boombox — sound is being carried
+            if (activeBoomboxSound != null) return true;
+
+            // Pending pre-steal for this specific position
+            if (pendingBoomboxSound != null && pendingPickupPos != null && pos.Equals(pendingPickupPos))
+                return true;
+
+            return false;
+        }
+
+        #endregion
+
         #region Initialization
 
         /// <summary>
@@ -279,6 +300,10 @@ namespace soundphysicsadapted.Patches
         private static void TryPreStealResonatorSound(IClientPlayer player)
         {
             if (capi == null) return;
+
+            // Cooldown after placement — don't immediately re-steal the block we just placed
+            if (lastPlacementTimeMs > 0 && capi.World.ElapsedMilliseconds - lastPlacementTimeMs < 2000)
+                return;
 
             var sel = player.CurrentBlockSelection;
             if (sel == null) return;
@@ -503,11 +528,19 @@ namespace soundphysicsadapted.Patches
         }
 
         /// <summary>
+        /// Timestamp of last placement — prevents immediate re-steal of freshly placed block.
+        /// </summary>
+        private static long lastPlacementTimeMs = 0;
+
+        /// <summary>
         /// Called when player places or drops the resonator.
         /// Sound is disposed here; vanilla StartMusic will create a fresh sound for the placed block.
         /// </summary>
         private static void OnResonatorPlacedOrDropped()
         {
+            if (capi != null)
+                lastPlacementTimeMs = capi.World.ElapsedMilliseconds;
+
             StopBoomboxTick();
 
             // Notify remote clients to stop their local boombox sound
@@ -751,6 +784,7 @@ namespace soundphysicsadapted.Patches
             currentCarrySlot = CarrySlotType.None;
             activeBoomboxTrackLocation = null;
             lastSyncTimeMs = 0;
+            lastPlacementTimeMs = 0;
             capi = null;
         }
 

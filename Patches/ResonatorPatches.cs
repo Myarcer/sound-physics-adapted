@@ -1133,7 +1133,13 @@ namespace soundphysicsadapted.Patches
             // audio has stopped or been disposed. This happens because we swap the sound
             // type to Ambient (bypassing the Music engine's completion
             // callback), or on vanilla servers where track completion state is stale.
-            if (__instance.IsPlaying && trackHasPlayed.TryGetValue(__instance, out _))
+            //
+            // IMPORTANT: Do NOT trigger this when CarryOn pre-steal is active.
+            // Pre-steal nulls the sound field (to prevent disposal), which looks
+            // identical to "track finished naturally" — causing a false StopMusic call
+            // that kills IsPlaying and breaks the carry handoff.
+            if (__instance.IsPlaying && trackHasPlayed.TryGetValue(__instance, out _)
+                && !CarryOnCompatPatches.HasPendingOrActiveSteal(__instance.Pos))
             {
                 __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] OnClientTick: Track finished naturally at {__instance.Pos}, resetting state");
 
