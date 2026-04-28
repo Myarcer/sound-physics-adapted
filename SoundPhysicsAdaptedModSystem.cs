@@ -297,6 +297,7 @@ namespace soundphysicsadapted
 
             var senderPos = sender.Entity.Pos.XYZ;
             var allPlayers = serverApi.World.AllOnlinePlayers;
+            int relayCount = 0;
 
             for (int i = 0; i < allPlayers.Length; i++)
             {
@@ -307,8 +308,11 @@ namespace soundphysicsadapted
                 if (dist <= BOOMBOX_RELAY_RANGE)
                 {
                     ServerChannel.SendPacket(packet, plr);
+                    relayCount++;
                 }
             }
+
+            serverApi.Logger.Debug($"[SoundPhysicsAdapted] Boombox relay: {sender.PlayerName} playing={packet.IsPlaying} track={packet.TrackLocation} pos=({packet.PosX:F0},{packet.PosY:F0},{packet.PosZ:F0}) relayed to {relayCount} players");
 
             // Sync the playback position to the carrier's Itemstack so that when the boombox
             // is placed down, it starts from the correct position.

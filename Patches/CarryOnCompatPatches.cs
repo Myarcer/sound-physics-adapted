@@ -352,7 +352,7 @@ namespace soundphysicsadapted.Patches
             catch { }
 
             if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Sound pre-stolen successfully, wasPlaying={wasPlayingWhenPickedUp}");
+                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Sound pre-stolen successfully, wasPlaying={wasPlayingWhenPickedUp}, trackLocation={activeBoomboxTrackLocation ?? "NULL"}");
         }
 
         /// <summary>
@@ -666,23 +666,38 @@ namespace soundphysicsadapted.Patches
 
             // Send sync packet to server for relay to nearby players (every 500ms)
             long now = capi.World.ElapsedMilliseconds;
-            if (now - lastSyncTimeMs >= SYNC_INTERVAL_MS && activeBoomboxTrackLocation != null)
+            if (now - lastSyncTimeMs >= SYNC_INTERVAL_MS)
             {
                 lastSyncTimeMs = now;
-                try
+
+                if (activeBoomboxTrackLocation == null)
                 {
-                    SoundPhysicsAdaptedModSystem.ClientChannel?.SendPacket(new BoomboxSyncPacket
-                    {
-                        CarrierEntityId = player.EntityId,
-                        TrackLocation = activeBoomboxTrackLocation,
-                        PlaybackPosition = activeBoomboxSound.PlaybackPosition,
-                        IsPlaying = true,
-                        PosX = x,
-                        PosY = y,
-                        PosZ = z
-                    });
+                    capi.Logger.Debug("[SoundPhysicsAdapted] [Boombox] SYNC SKIPPED: activeBoomboxTrackLocation is NULL — remote players won't hear this");
                 }
-                catch { }
+                else if (SoundPhysicsAdaptedModSystem.ClientChannel == null)
+                {
+                    capi.Logger.Debug("[SoundPhysicsAdapted] [Boombox] SYNC SKIPPED: ClientChannel is NULL");
+                }
+                else
+                {
+                    try
+                    {
+                        SoundPhysicsAdaptedModSystem.ClientChannel.SendPacket(new BoomboxSyncPacket
+                        {
+                            CarrierEntityId = player.EntityId,
+                            TrackLocation = activeBoomboxTrackLocation,
+                            PlaybackPosition = activeBoomboxSound.PlaybackPosition,
+                            IsPlaying = true,
+                            PosX = x,
+                            PosY = y,
+                            PosZ = z
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        capi.Logger.Debug($"[SoundPhysicsAdapted] [Boombox] SYNC FAILED: {ex.Message}");
+                    }
+                }
             }
         }
 
