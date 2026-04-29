@@ -141,7 +141,17 @@ namespace soundphysicsadapted.Patches
         #region Sound Management
 
         /// <summary>
-        /// Create a new ILoadedSound for a remote carrier's boombox.
+        /// Create a new sound for a remote carrier's boombox via StartTrack.
+        ///
+        /// IMPORTANT: We use capi.StartTrack() instead of capi.World.LoadSound() because
+        /// music-category tracks (music/*.ogg) are NOT in ScreenManager.soundAudioData.
+        /// LoadSound returns a non-null shell object but with no audio data — Start() silently
+        /// does nothing. StartTrack goes through the MusicEngine which properly streams
+        /// music files, exactly like the vanilla resonator does.
+        ///
+        /// The sound is loaded asynchronously. During loading, the RemoteBoombox entry exists
+        /// with Sound=null. The tick skips position/volume updates until the sound loads.
+        /// Packets continue updating TargetX/Y/Z and LastUpdateMs to keep the entry alive.
         /// </summary>
         private static void CreateRemoteBoombox(BoomboxSyncPacket packet)
         {
@@ -155,38 +165,12 @@ namespace soundphysicsadapted.Patches
                 }
                 assetLoc.WithPathAppendixOnce(".ogg");
 
-                capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Creating sound for carrier {packet.CarrierEntityId}, rawTrack={packet.TrackLocation}, resolved={assetLoc}");
+                capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Creating sound via StartTrack for carrier {packet.CarrierEntityId}, rawTrack={packet.TrackLocation}, resolved={assetLoc}");
 
-                var soundParams = new SoundParams(assetLoc)
-                {
-                    Position = new Vec3f(packet.PosX, packet.PosY, packet.PosZ),
-                    RelativePosition = false,
-                    ShouldLoop = false,
-                    DisposeOnFinish = false,
-                    SoundType = EnumSoundType.MusicGlitchunaffected,
-                    Volume = 0f, // Start silent, tick will set correct volume
-                    Range = 48f,
-                    ReferenceDistance = 3f
-                };
-
-                var sound = capi.World.LoadSound(soundParams);
-                if (sound == null)
-                {
-                    capi.Logger.Warning($"[SoundPhysicsAdapted] BoomboxRemote: LoadSound returned NULL for carrier {packet.CarrierEntityId}, asset={assetLoc}");
-                    return;
-                }
-
-                sound.Start();
-
-                // Seek to carrier's current playback position
-                if (packet.PlaybackPosition > 0.5f)
-                {
-                    sound.PlaybackPosition = packet.PlaybackPosition;
-                }
-
+                // Create the entry immediately (Sound=null until async callback)
                 var remote = new RemoteBoombox
                 {
-                    Sound = sound,
+                    Sound = null,
                     CarrierEntityId = packet.CarrierEntityId,
                     TrackLocation = packet.TrackLocation,
                     CurrentX = packet.PosX,
@@ -200,8 +184,56 @@ namespace soundphysicsadapted.Patches
                 };
 
                 remoteBoomboxes[packet.CarrierEntityId] = remote;
+
+                // Capture values for the async callback closure
+                float capturedPlaybackPos = packet.PlaybackPosition;
+                long capturedCarrierId = packet.CarrierEntityId;
+
+                // Use StartTrack — same API as vanilla resonator. Uses Ambient type to match
+                // our local resonator patch (Music slider -> Ambient slider).
+                capi.StartTrack(assetLoc, 99f, EnumSoundType.Ambient, (sound) =>
+                {
+                    try
+                    {
+                        if (sound == null)
+                        {
+                            capi.Logger.Warning($"[SoundPhysicsAdapted] BoomboxRemote: StartTrack callback returned NULL for carrier {capturedCarrierId}, asset={assetLoc}");
+                            remoteBoomboxes.Remove(capturedCarrierId);
+                            return;
+                        }
+
+                        // Check if this carrier was removed while loading (stopped or timed out)
+                        if (!remoteBoomboxes.TryGetValue(capturedCarrierId, out var entry))
+                        {
+                            capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Carrier {capturedCarrierId} removed during load, disposing sound");
+                            sound.Stop();
+                            sound.Dispose();
+                            return;
+                        }
+
+                        // Set position before starting to avoid brief wrong-position audio
+                        sound.SetPosition(entry.CurrentX, entry.CurrentY, entry.CurrentZ);
+                        sound.SetVolume(0f); // Start silent, tick will set correct volume
+                        sound.Start();
+
+                        // Seek to carrier's current playback position
+                        if (capturedPlaybackPos > 0.5f)
+                        {
+                            sound.PlaybackPosition = capturedPlaybackPos;
+                        }
+
+                        entry.Sound = sound;
+
+                        capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Sound loaded and started for carrier {capturedCarrierId}, track={entry.TrackLocation}, pos=({entry.CurrentX:F1},{entry.CurrentY:F1},{entry.CurrentZ:F1})");
+                    }
+                    catch (Exception ex)
+                    {
+                        capi.Logger.Error($"[SoundPhysicsAdapted] BoomboxRemote: Exception in StartTrack callback: {ex.Message}");
+                    }
+                });
+
                 if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
-                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"BoomboxRemote: Created sound for carrier {packet.CarrierEntityId}, track={packet.TrackLocation}, pos=({packet.PosX:F1},{packet.PosY:F1},{packet.PosZ:F1})");
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"BoomboxRemote: StartTrack requested for carrier {packet.CarrierEntityId}, track={packet.TrackLocation}, pos=({packet.PosX:F1},{packet.PosY:F1},{packet.PosZ:F1})");
             }
             catch (Exception ex)
             {
@@ -262,10 +294,16 @@ namespace soundphysicsadapted.Patches
                     continue;
                 }
 
-                // Disposed check
-                if (remote.Sound == null || remote.Sound.IsDisposed)
+                // Disposed check (but allow null during async StartTrack loading)
+                if (remote.Sound != null && remote.Sound.IsDisposed)
                 {
                     toRemove.Add(kvp.Key);
+                    continue;
+                }
+
+                // Sound still loading via StartTrack — skip position/volume update
+                if (remote.Sound == null)
+                {
                     continue;
                 }
 
@@ -292,7 +330,7 @@ namespace soundphysicsadapted.Patches
                 remote.Sound.SetPitch(pitch);
 
                 // Track finished playing naturally (disc ended)
-                if (remote.Sound.HasStopped)
+                if (remote.Sound != null && remote.Sound.HasStopped)
                 {
                     toRemove.Add(kvp.Key);
                 }
