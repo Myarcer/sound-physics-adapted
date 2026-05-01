@@ -978,7 +978,7 @@ namespace soundphysicsadapted.Patches
                 }
             }
 
-            if (posToSave.HasValue && posToSave.Value > 0.5f)
+            if (posToSave.HasValue)
             {
                 tree.SetFloat("savedPlaybackPos", posToSave.Value);
                 __instance.Api?.Logger.Debug($"[SoundPhysicsAdapted] ToTreeAttributes: Saved position {posToSave.Value:F2}s");
@@ -1125,27 +1125,18 @@ namespace soundphysicsadapted.Patches
 
                 if (__instance.Api.World.ElapsedMilliseconds % 2000 < 50)
                 {
-                    float currentPos = sound.PlaybackPosition;
+                    savedPositions.Remove(__instance);
+                    savedPositions.Add(__instance, new PlaybackPosition(sound.PlaybackPosition));
 
-                    // Guard: don't overwrite a valid saved position with 0.
-                    // During rapid resume, onTrackLoaded may not have seeked yet,
-                    // so sound.PlaybackPosition is 0 briefly. Syncing 0 to the server
-                    // would corrupt the saved state and cause playback to reset to beginning.
-                    if (currentPos > 0.5f)
+                    if (ServerHasMod && SoundPhysicsAdaptedModSystem.ClientChannel != null)
                     {
-                        savedPositions.Remove(__instance);
-                        savedPositions.Add(__instance, new PlaybackPosition(currentPos));
-
-                        if (ServerHasMod && SoundPhysicsAdaptedModSystem.ClientChannel != null)
+                        SoundPhysicsAdaptedModSystem.ClientChannel.SendPacket(new ResonatorSyncPacket()
                         {
-                            SoundPhysicsAdaptedModSystem.ClientChannel.SendPacket(new ResonatorSyncPacket()
-                            {
-                                Pos = __instance.Pos,
-                                PlaybackPosition = currentPos,
-                                IsPlaying = true,
-                                IsPaused = false
-                            });
-                        }
+                            Pos = __instance.Pos,
+                            PlaybackPosition = sound.PlaybackPosition,
+                            IsPlaying = true,
+                            IsPaused = false
+                        });
                     }
                 }
                 return;
