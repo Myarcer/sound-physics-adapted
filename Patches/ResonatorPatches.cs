@@ -179,8 +179,20 @@ namespace soundphysicsadapted.Patches
         private static System.Collections.Generic.Dictionary<string, float> savedAnimFramesByPos =
             new System.Collections.Generic.Dictionary<string, float>();
 
+        // Load-time auto-restart arbitration: when multiple IsPlaying resonators initialize in the
+        // same burst, only auto-start the nearest pending one. Otherwise whichever callback happens
+        // to run last wins, which makes world join pick an arbitrary resonator.
+        private static int initializeStartBatchId = 0;
+        private static int completedInitializeStartBatchId = 0;
+        private static System.Collections.Generic.Dictionary<string, BlockPos> pendingInitializeStartPositions =
+            new System.Collections.Generic.Dictionary<string, BlockPos>();
+
         // Debounce rapid pause/resume clicks (prevents NRE when async onTrackLoaded fires on stale state)
-        private static long lastPauseResumeMs = 0;
+        // Split per-side: in singleplayer, client and server OnInteract fire in the same frame.
+        // A shared timestamp causes the server call to be swallowed by client's debounce,
+        // so the server never toggles IsPlaying or calls MarkDirty.
+        private static long lastPauseResumeMs_Client = 0;
+        private static long lastPauseResumeMs_Server = 0;
         private const long PAUSE_RESUME_COOLDOWN_MS = 500;
 
         // Track resonators that have had active audio playback (for natural completion detection)
@@ -196,6 +208,50 @@ namespace soundphysicsadapted.Patches
         /// Moves the resonator from the Music volume slider to the Ambient volume slider.
         /// </summary>
         public static bool NextStartTrackUseAmbient = false;
+
+        /// <summary>
+        /// Loudest resonator distance attenuation seen this frame.
+        /// Used to decide whether vanilla music should remain suppressed.
+        /// </summary>
+        private static float loudestResonatorVolumeThisFrame = 0f;
+
+        /// <summary>
+        /// Timestamp of the last frame where resonator audibility was evaluated.
+        /// </summary>
+        private static long lastDuckFrameMs = 0;
+
+        /// <summary>
+        /// True when a resonator currently owns MusicEngine.currentTrack.
+        /// When false, vanilla music is free to start again.
+        /// </summary>
+        private static bool resonatorOwnsMusicEngine = false;
+
+        /// <summary>
+        /// Perceived volume threshold for releasing vanilla music suppression.
+        /// </summary>
+        private const float MUSIC_SUPPRESS_THRESHOLD = 0.05f;
+
+        /// <summary>
+        /// Distance scale for resonator attenuation. Lower values extend audible range.
+        /// 0.175 is roughly 2x the previous effective range compared to 0.35.
+        /// </summary>
+        private const float RESONATOR_DISTANCE_SCALE = 0.175f;
+
+        /// <summary>
+        /// Near-field radius where resonator music stays at full volume before falloff begins.
+        /// </summary>
+        private const float RESONATOR_FULL_VOLUME_RADIUS = 10f;
+
+        // Reflection state for ClientCoreAPI -> ClientMain -> MusicEngine -> currentTrack
+        private static FieldInfo clientMainField;
+        private static FieldInfo musicEngineField;
+        private static FieldInfo musicEngineCurrentTrackField;
+        private static bool musicEngineFieldsDiscovered = false;
+
+        // Active resonator music tracks keyed by block position. These tracks keep playing even
+        // when currentTrack is released, so we can re-assert one when the player walks back.
+        private static System.Collections.Generic.Dictionary<string, object> activeResonatorTracksByPos =
+            new System.Collections.Generic.Dictionary<string, object>();
 
         /// <summary>
         /// Flag to indicate we're currently doing a pause/resume action.
@@ -225,6 +281,238 @@ namespace soundphysicsadapted.Patches
                 if (p.Equals(pos)) return true;
             }
             return false;
+        }
+
+        private static string GetPosKey(BlockPos pos)
+        {
+            return pos == null ? null : $"{pos.X},{pos.Y},{pos.Z}";
+        }
+
+        private static bool ShouldStartInitializeBatchResonator(BlockPos selfPos, ICoreClientAPI capi)
+        {
+            if (selfPos == null || capi?.World?.Player?.Entity?.Pos?.XYZ == null) return true;
+
+            Vec3d playerPos = capi.World.Player.Entity.Pos.XYZ;
+            double selfDistSq = playerPos.SquareDistanceTo(selfPos.X + 0.5, selfPos.Y + 0.5, selfPos.Z + 0.5);
+
+            foreach (var otherPos in pendingInitializeStartPositions.Values)
+            {
+                if (otherPos == null || otherPos.Equals(selfPos)) continue;
+
+                double otherDistSq = playerPos.SquareDistanceTo(otherPos.X + 0.5, otherPos.Y + 0.5, otherPos.Z + 0.5);
+                if (otherDistSq + 0.0001 < selfDistSq)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static void DiscoverMusicEngineFields(ICoreClientAPI capi)
+        {
+            if (musicEngineFieldsDiscovered || capi == null) return;
+            musicEngineFieldsDiscovered = true;
+
+            try
+            {
+                Type capiType = capi.GetType();
+                clientMainField = capiType.GetField("game", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (clientMainField == null)
+                {
+                    foreach (FieldInfo field in capiType.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        if (field.FieldType.Name.IndexOf("ClientMain", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            clientMainField = field;
+                            break;
+                        }
+                    }
+                }
+
+                if (clientMainField == null) return;
+
+                object clientMain = clientMainField.GetValue(capi);
+                if (clientMain == null) return;
+
+                Type clientMainType = clientMain.GetType();
+                musicEngineField = clientMainType.GetField("MusicEngine", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
+                if (musicEngineField == null)
+                {
+                    foreach (FieldInfo field in clientMainType.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        if (field.FieldType.Name.IndexOf("MusicEngine", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            musicEngineField = field;
+                            break;
+                        }
+                    }
+                }
+
+                if (musicEngineField == null) return;
+
+                object musicEngine = musicEngineField.GetValue(clientMain);
+                if (musicEngine == null) return;
+
+                Type musicEngineType = musicEngine.GetType();
+                musicEngineCurrentTrackField = musicEngineType.GetField("currentTrack", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (musicEngineCurrentTrackField == null)
+                {
+                    foreach (FieldInfo field in musicEngineType.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        bool looksLikeTrackType = field.FieldType.Name.IndexOf("MusicTrack", StringComparison.OrdinalIgnoreCase) >= 0
+                            || field.FieldType.Name.IndexOf("IMusicTrack", StringComparison.OrdinalIgnoreCase) >= 0;
+                        bool looksLikeCurrent = field.Name.IndexOf("current", StringComparison.OrdinalIgnoreCase) >= 0;
+                        if (looksLikeTrackType && looksLikeCurrent)
+                        {
+                            musicEngineCurrentTrackField = field;
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                capi.Logger.Debug($"[SoundPhysicsAdapted] MusicEngine discovery failed: {ex.Message}");
+            }
+        }
+
+        private static bool IsOurResonatorTrack(object track)
+        {
+            if (track == null) return false;
+
+            foreach (object activeTrack in activeResonatorTracksByPos.Values)
+            {
+                if (ReferenceEquals(activeTrack, track)) return true;
+            }
+
+            return false;
+        }
+
+        private static object GetAnyActiveResonatorTrack()
+        {
+            foreach (object activeTrack in activeResonatorTracksByPos.Values)
+            {
+                if (activeTrack != null) return activeTrack;
+            }
+
+            return null;
+        }
+
+        private static void NullMusicEngineCurrentTrack(ICoreClientAPI capi)
+        {
+            if (capi == null) return;
+
+            DiscoverMusicEngineFields(capi);
+            if (clientMainField == null || musicEngineField == null || musicEngineCurrentTrackField == null) return;
+
+            try
+            {
+                object clientMain = clientMainField.GetValue(capi);
+                object musicEngine = clientMain != null ? musicEngineField.GetValue(clientMain) : null;
+                if (musicEngine != null)
+                {
+                    musicEngineCurrentTrackField.SetValue(musicEngine, null);
+                }
+            }
+            catch { }
+        }
+
+        private static void ManageVanillaMusicSuppression(ICoreClientAPI capi)
+        {
+            if (capi == null) return;
+
+            DiscoverMusicEngineFields(capi);
+            if (clientMainField == null || musicEngineField == null || musicEngineCurrentTrackField == null) return;
+
+            try
+            {
+                object clientMain = clientMainField.GetValue(capi);
+                object musicEngine = clientMain != null ? musicEngineField.GetValue(clientMain) : null;
+                if (musicEngine == null) return;
+
+                float perceivedVolume = loudestResonatorVolumeThisFrame;
+
+                if (perceivedVolume >= MUSIC_SUPPRESS_THRESHOLD && !resonatorOwnsMusicEngine)
+                {
+                    object currentTrack = musicEngineCurrentTrackField.GetValue(musicEngine);
+                    if (currentTrack != null && !IsOurResonatorTrack(currentTrack))
+                    {
+                        MethodInfo fadeMethod = currentTrack.GetType().GetMethod("FadeOut", new[] { typeof(float), typeof(Action) });
+                        fadeMethod?.Invoke(currentTrack, new object[] { 2f, null });
+                    }
+
+                    object resonatorTrack = GetAnyActiveResonatorTrack();
+                    if (resonatorTrack != null)
+                    {
+                        musicEngineCurrentTrackField.SetValue(musicEngine, resonatorTrack);
+                        resonatorOwnsMusicEngine = true;
+                    }
+                }
+                else if (perceivedVolume < MUSIC_SUPPRESS_THRESHOLD && resonatorOwnsMusicEngine)
+                {
+                    musicEngineCurrentTrackField.SetValue(musicEngine, null);
+                    resonatorOwnsMusicEngine = false;
+                    capi.Logger.Debug("[SoundPhysicsAdapted] MusicEngine: Resonator inaudible, releasing currentTrack for vanilla music");
+                }
+            }
+            catch (Exception ex)
+            {
+                capi.Logger.Debug($"[SoundPhysicsAdapted] ManageVanillaMusicSuppression failed: {ex.Message}");
+            }
+        }
+
+        public static void RegisterExternalMusicTrack(string key, object track)
+        {
+            if (string.IsNullOrEmpty(key) || track == null) return;
+
+            PropertyInfo manualDisposeProperty = track.GetType().GetProperty("ManualDispose", BindingFlags.Public | BindingFlags.Instance);
+            manualDisposeProperty?.SetValue(track, true);
+            activeResonatorTracksByPos[key] = track;
+        }
+
+        public static void UnregisterExternalMusicTrack(string key, ICoreClientAPI capi)
+        {
+            if (!string.IsNullOrEmpty(key))
+            {
+                activeResonatorTracksByPos.Remove(key);
+            }
+
+            if (activeResonatorTracksByPos.Count == 0 && resonatorOwnsMusicEngine)
+            {
+                resonatorOwnsMusicEngine = false;
+                NullMusicEngineCurrentTrack(capi);
+            }
+        }
+
+        public static void ReportExternalMusicSuppression(ICoreClientAPI capi, float perceivedVolume)
+        {
+            if (capi == null) return;
+
+            long nowMs = capi.World.ElapsedMilliseconds;
+            if (nowMs != lastDuckFrameMs)
+            {
+                lastDuckFrameMs = nowMs;
+                loudestResonatorVolumeThisFrame = 0f;
+            }
+
+            if (perceivedVolume > loudestResonatorVolumeThisFrame)
+            {
+                loudestResonatorVolumeThisFrame = perceivedVolume;
+            }
+
+            ManageVanillaMusicSuppression(capi);
+        }
+
+        private static float CalculateResonatorDistanceAttenuation(float dist)
+        {
+            if (dist <= RESONATOR_FULL_VOLUME_RADIUS)
+            {
+                return 1f;
+            }
+
+            float falloffDist = dist - RESONATOR_FULL_VOLUME_RADIUS;
+            return GameMath.Clamp(1f / (float)Math.Log10(Math.Max(1, falloffDist * RESONATOR_DISTANCE_SCALE)) - 0.8f, 0f, 1f);
         }
 
         #endregion
@@ -482,8 +770,12 @@ namespace soundphysicsadapted.Patches
                     capi.Logger.Debug($"[SoundPhysicsAdapted] [Resonator] Registered sound in activeFilters for occlusion/underwater at {pos}");
                 }
 
-                // 2. VOLUME - Force to 1.0 (physics system handles attenuation)
-                sound.SetVolume(1.0f);
+                // 2. VOLUME - Keep long-range audibility extension, but still let far resonators go silent.
+                // Forcing 1.0 leaves distant chunk-loaded resonators audible as a muffled drone forever.
+                Vec3d playerPos = capi.World.Player?.Entity?.Pos?.XYZ;
+                float dist = playerPos != null ? (float)soundPos.DistanceTo(playerPos) : 0f;
+                float volume = CalculateResonatorDistanceAttenuation(dist);
+                sound.SetVolume(volume);
 
                 // 3. PITCH - Keep vanilla glitch effect
                 float pitch = GameMath.Clamp(1 - capi.Render.ShaderUniforms.GlitchStrength, 0.1f, 1);
@@ -567,11 +859,18 @@ namespace soundphysicsadapted.Patches
                     // async onTrackLoaded callback (NRE when StartMusic queues a callback
                     // then StopMusic nulls the state before it fires).
                     long nowMs = world.ElapsedMilliseconds;
-                    if (nowMs - lastPauseResumeMs < PAUSE_RESUME_COOLDOWN_MS)
+                    if (world.Side == EnumAppSide.Client)
                     {
-                        return false; // Swallow the click
+                        if (nowMs - lastPauseResumeMs_Client < PAUSE_RESUME_COOLDOWN_MS)
+                            return false;
+                        lastPauseResumeMs_Client = nowMs;
                     }
-                    lastPauseResumeMs = nowMs;
+                    else
+                    {
+                        if (nowMs - lastPauseResumeMs_Server < PAUSE_RESUME_COOLDOWN_MS)
+                            return false;
+                        lastPauseResumeMs_Server = nowMs;
+                    }
 
                     // CLIENT: Only handle pause/resume if server also has the mod.
                     // Without this guard, client would pause locally while server runs vanilla
@@ -795,6 +1094,18 @@ namespace soundphysicsadapted.Patches
             // Always clean up track-has-played tracking when music stops (any reason)
             trackHasPlayed.Remove(__instance);
 
+            string stopPosKey = GetPosKey(__instance.Pos);
+            if (stopPosKey != null)
+            {
+                activeResonatorTracksByPos.Remove(stopPosKey);
+            }
+
+            if (activeResonatorTracksByPos.Count == 0 && resonatorOwnsMusicEngine)
+            {
+                resonatorOwnsMusicEngine = false;
+                NullMusicEngineCurrentTrack(__instance.Api as ICoreClientAPI);
+            }
+
             if (__state)
             {
                 var animUtil = ResonatorReflection.GetAnimUtil(__instance);
@@ -880,6 +1191,22 @@ namespace soundphysicsadapted.Patches
             if (__instance.Api?.Side != EnumAppSide.Client) return;
 
             __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] StartMusicPostfix: Called for {__instance.Pos}");
+
+            ICoreClientAPI capi = __instance.Api as ICoreClientAPI;
+            DiscoverMusicEngineFields(capi);
+
+            object trackObj = ResonatorReflection.TrackField?.GetValue(__instance);
+            if (trackObj != null)
+            {
+                PropertyInfo manualDisposeProperty = trackObj.GetType().GetProperty("ManualDispose", BindingFlags.Public | BindingFlags.Instance);
+                manualDisposeProperty?.SetValue(trackObj, true);
+
+                string startPosKey = GetPosKey(__instance.Pos);
+                if (startPosKey != null)
+                {
+                    activeResonatorTracksByPos[startPosKey] = trackObj;
+                }
+            }
 
             bool isResuming = false;
             BlockPos foundPos = null;
@@ -1123,6 +1450,20 @@ namespace soundphysicsadapted.Patches
                 if (!trackHasPlayed.TryGetValue(__instance, out _))
                     trackHasPlayed.Add(__instance, TrackPlayedMarker);
 
+                ICoreClientAPI capi = __instance.Api as ICoreClientAPI;
+                long nowMs = __instance.Api.World.ElapsedMilliseconds;
+                if (capi != null && __instance.Pos != null)
+                {
+                    Vec3d playerPos = capi.World.Player?.Entity?.Pos?.XYZ;
+                    if (playerPos != null)
+                    {
+                        Vec3d soundPos = new Vec3d(__instance.Pos.X + 0.5, __instance.Pos.Y + 0.5, __instance.Pos.Z + 0.5);
+                        float dist = (float)soundPos.DistanceTo(playerPos);
+                        float distAtten = CalculateResonatorDistanceAttenuation(dist);
+                        ReportExternalMusicSuppression(capi, distAtten);
+                    }
+                }
+
                 if (__instance.Api.World.ElapsedMilliseconds % 2000 < 50)
                 {
                     savedPositions.Remove(__instance);
@@ -1208,6 +1549,17 @@ namespace soundphysicsadapted.Patches
 
             api.Logger.Debug($"[SoundPhysicsAdapted] Initialize: IsPlaying=true track=null, hasSavedPos={hasSavedPos}, isPaused={isPaused}, scheduling deferred StartMusic");
 
+            string posKey = GetPosKey(__instance.Pos);
+            if (pendingInitializeStartPositions.Count == 0)
+            {
+                initializeStartBatchId++;
+            }
+            int batchId = initializeStartBatchId;
+            if (posKey != null)
+            {
+                pendingInitializeStartPositions[posKey] = __instance.Pos.Copy();
+            }
+
             // Use TryEnqueue which is safer during pause and won't crash
             try
             {
@@ -1219,13 +1571,34 @@ namespace soundphysicsadapted.Patches
                     try
                     {
                         if (__instance.Api == null) return;
+                        if (batchId <= completedInitializeStartBatchId) return;
+
                         object trackAfterDefer = ResonatorReflection.TrackField?.GetValue(__instance);
                         if (trackAfterDefer != null) return;
                         if (!__instance.IsPlaying) return;
 
+                        if (posKey != null && !pendingInitializeStartPositions.ContainsKey(posKey)) return;
+
+                        if (!ShouldStartInitializeBatchResonator(__instance.Pos, capi))
+                        {
+                            if (posKey != null)
+                            {
+                                pendingInitializeStartPositions.Remove(posKey);
+                                if (pendingInitializeStartPositions.Count == 0)
+                                {
+                                    completedInitializeStartBatchId = batchId;
+                                }
+                            }
+                            __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] Initialize (delayed): Skipping auto-start at {__instance.Pos}, nearer resonator pending");
+                            return;
+                        }
+
                         __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] Initialize (delayed): Calling StartMusic");
                         AccessTools.Method(typeof(BlockEntityResonator), "StartMusic")?.Invoke(__instance, null);
                         __instance.Api.World?.BlockAccessor?.MarkBlockDirty(__instance.Pos);
+
+                        pendingInitializeStartPositions.Clear();
+                        completedInitializeStartBatchId = batchId;
                     }
                     catch (Exception ex)
                     {
