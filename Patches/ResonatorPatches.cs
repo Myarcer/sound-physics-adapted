@@ -998,6 +998,11 @@ namespace soundphysicsadapted.Patches
 
         private static void CaptureAndSyncPlaybackPosition(BlockEntityResonator resonator, bool isPausing)
         {
+            CaptureAndSyncPlaybackPosition(resonator, isPausing, requestServerAutoPause: false);
+        }
+
+        private static void CaptureAndSyncPlaybackPosition(BlockEntityResonator resonator, bool isPausing, bool requestServerAutoPause)
+        {
             if (resonator.Api?.Side != EnumAppSide.Client) return;
 
             ILoadedSound sound = ResonatorReflection.GetSound(resonator);
@@ -1037,7 +1042,8 @@ namespace soundphysicsadapted.Patches
                     PlaybackPosition = currentPos,
                     IsPlaying = !isPausing,
                     IsPaused = isPausing,
-                    FrozenRotation = frozenRotation
+                    FrozenRotation = frozenRotation,
+                    RequestServerAutoPause = requestServerAutoPause
                 });
             }
         }
@@ -1076,8 +1082,10 @@ namespace soundphysicsadapted.Patches
                 try
                 {
                     // Capture position + frozen rotation, register pausingResonators marker so
-                    // our StopMusicPrefix freezes the disc animation, and send IsPaused=true to server.
-                    CaptureAndSyncPlaybackPosition(other, isPausing: true);
+                    // our StopMusicPrefix freezes the disc animation, and send IsPaused=true to server
+                    // with RequestServerAutoPause=true (server's OnInteract did NOT run for this
+                    // resonator, so we must explicitly tell the server to stop it).
+                    CaptureAndSyncPlaybackPosition(other, isPausing: true, requestServerAutoPause: true);
 
                     // Stop the audio + freeze animation locally
                     try

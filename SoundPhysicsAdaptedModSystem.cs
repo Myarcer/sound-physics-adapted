@@ -287,10 +287,11 @@ namespace soundphysicsadapted
                 ResonatorPatches.pausedStates.Add(resonator, new PausedState(packet.IsPaused));
 
                 // If a client auto-paused this resonator (because they started another one),
-                // the server's IsPlaying flag won't have been touched by OnInteractPrefix.
-                // Apply the IsPaused=true intent here: stop music server-side and mark dirty
-                // so the change persists and propagates to all other clients.
-                if (packet.IsPaused && resonator.IsPlaying)
+                // the server's OnInteractPrefix won't have run for this resonator and IsPlaying
+                // is still true. Apply the IsPaused=true intent here. We gate on the explicit
+                // RequestServerAutoPause flag so a regular Ctrl+RMB pause (which DOES run server
+                // OnInteract) doesn't double-toggle and accidentally restart playback.
+                if (packet.RequestServerAutoPause && packet.IsPaused && resonator.IsPlaying)
                 {
                     try
                     {
