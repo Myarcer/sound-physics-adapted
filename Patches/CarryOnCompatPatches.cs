@@ -356,6 +356,18 @@ namespace soundphysicsadapted.Patches
             pendingSourceResonator = be;
             wasPlayingWhenPickedUp = sound.IsPlaying;
 
+            // Register the captured track for vanilla-music suppression IMMEDIATELY at
+            // pre-steal time. Carry On's SetBlock(0,pos) will unload the resonator block
+            // entity, and vanilla cleanup can call StopMusic which removes the resonator's
+            // entry from activeResonatorTracksByPos. If that empties the dict before our
+            // boombox activation tick runs, ResonatorPatches releases MusicEngine.currentTrack
+            // and vanilla music starts in the gap. Registering here keeps the dict non-empty
+            // across the handoff. CancelPreSteal / OnResonatorPlacedOrDropped unregister it.
+            if (pendingBoomboxTrack != null)
+            {
+                ResonatorPatches.RegisterExternalMusicTrack(BOOMBOX_SUPPRESSION_KEY, pendingBoomboxTrack);
+            }
+
             // Capture the track asset path for multiplayer sync.
             // Remote clients need this to create their own ILoadedSound.
             activeBoomboxTrackLocation = null;
@@ -379,6 +391,10 @@ namespace soundphysicsadapted.Patches
         private static void CancelPreSteal()
         {
             if (pendingBoomboxSound == null) return;
+
+            // Always release the suppression key registered at pre-steal time, otherwise
+            // we'd leak a stale track reference and keep vanilla music suppressed.
+            ResonatorPatches.UnregisterExternalMusicTrack(BOOMBOX_SUPPRESSION_KEY, capi);
 
             if (!pendingBoomboxSound.IsDisposed)
             {
@@ -525,6 +541,37 @@ namespace soundphysicsadapted.Patches
             // Check if we have a pre-stolen sound from the tick-based detection
             if (pendingBoomboxSound != null && !pendingBoomboxSound.IsDisposed)
             {
+                // Verify the block we stole from was the one Carry On actually picked up.
+                // Carry On removes the carried block via SetBlock(0, pos), so the slot at
+                // pendingPickupPos must be empty (or no longer a resonator) by now. If a
+                // resonator block is STILL there, the player's crosshair drifted to a
+                // different (playing) resonator during the carry animation while actually
+                // picking up a SILENT one nearby — we stole from the wrong block. Cancel
+                // the steal so the silent pickup stays silent and the playing resonator
+                // keeps playing.
+                bool stoleFromWrongBlock = false;
+                if (capi != null && pendingPickupPos != null)
+                {
+                    try
+                    {
+                        var blockAtPickup = capi.World.BlockAccessor.GetBlock(pendingPickupPos);
+                        if (blockAtPickup != null && blockAtPickup.Id != 0 &&
+                            (blockAtPickup.Code?.Path?.Contains("resonator") ?? false))
+                        {
+                            stoleFromWrongBlock = true;
+                        }
+                    }
+                    catch { }
+                }
+
+                if (stoleFromWrongBlock)
+                {
+                    if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Pre-stole from wrong resonator (block at {pendingPickupPos} still present) — returning sound, no boombox");
+                    CancelPreSteal();
+                    return;
+                }
+
                 activeBoomboxSound = pendingBoomboxSound;
                 activeBoomboxTrack = pendingBoomboxTrack;
                 originalResonatorPos = pendingPickupPos?.Copy();
@@ -545,6 +592,8 @@ namespace soundphysicsadapted.Patches
                     }
                 }
 
+                // Suppression key was already registered at pre-steal time.
+                // Refresh in case the track reference changed.
                 if (activeBoomboxTrack != null)
                 {
                     ResonatorPatches.RegisterExternalMusicTrack(BOOMBOX_SUPPRESSION_KEY, activeBoomboxTrack);

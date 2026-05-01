@@ -157,13 +157,26 @@ namespace soundphysicsadapted.Patches
 
                 capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Creating sound for carrier {packet.CarrierEntityId}, rawTrack={packet.TrackLocation}, resolved={assetLoc}");
 
+                // Request mono downmix for this asset before LoadSound runs.
+                // Music ogg files are typically stereo; OpenAL refuses to spatialize stereo
+                // sources, which would make the remote boombox play 2D for everyone but the
+                // carrier. The local carrier hears it positionally because the resonator's
+                // own StartMusic path already requests mono via AudioLoaderPatch.
+                // The 'sounds:' prefix that LoadSoundPatch keys on must be present
+                // because LoadSound normalizes paths the same way internally.
+                AudioLoaderPatch.RequestMonoForAsset(assetLoc.ToString());
+                AudioLoaderPatch.RequestMonoForAsset("game:" + assetLoc.Path);
+                AudioLoaderPatch.RequestMonoForAsset(assetLoc.Path);
+
                 var soundParams = new SoundParams(assetLoc)
                 {
                     Position = new Vec3f(packet.PosX, packet.PosY, packet.PosZ),
                     RelativePosition = false,
                     ShouldLoop = false,
                     DisposeOnFinish = false,
-                    SoundType = EnumSoundType.MusicGlitchunaffected,
+                    // Ambient (not MusicGlitchunaffected) so OpenAL spatializes it AND
+                    // it routes through the Ambient slider, matching placed resonators.
+                    SoundType = EnumSoundType.Ambient,
                     Volume = 0f, // Start silent, tick will set correct volume
                     Range = 48f,
                     ReferenceDistance = 3f

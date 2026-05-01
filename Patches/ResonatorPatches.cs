@@ -433,20 +433,31 @@ namespace soundphysicsadapted.Patches
 
                 float perceivedVolume = loudestResonatorVolumeThisFrame;
 
-                if (perceivedVolume >= MUSIC_SUPPRESS_THRESHOLD && !resonatorOwnsMusicEngine)
+                if (perceivedVolume >= MUSIC_SUPPRESS_THRESHOLD)
                 {
                     object currentTrack = musicEngineCurrentTrackField.GetValue(musicEngine);
+
+                    // If MusicEngine restarted a vanilla track behind our back (can happen
+                    // during the brief gap between resonator block removal and CarryOn
+                    // boombox activation, or any time vanilla music selection runs while
+                    // we're audible), fade it out and re-claim ownership. Re-checking every
+                    // frame instead of gating on resonatorOwnsMusicEngine ensures we keep
+                    // suppressing vanilla while a resonator/boombox is audible.
                     if (currentTrack != null && !IsOurResonatorTrack(currentTrack))
                     {
                         MethodInfo fadeMethod = currentTrack.GetType().GetMethod("FadeOut", new[] { typeof(float), typeof(Action) });
                         fadeMethod?.Invoke(currentTrack, new object[] { 2f, null });
+                        currentTrack = null;
                     }
 
-                    object resonatorTrack = GetAnyActiveResonatorTrack();
-                    if (resonatorTrack != null)
+                    if (currentTrack == null)
                     {
-                        musicEngineCurrentTrackField.SetValue(musicEngine, resonatorTrack);
-                        resonatorOwnsMusicEngine = true;
+                        object resonatorTrack = GetAnyActiveResonatorTrack();
+                        if (resonatorTrack != null)
+                        {
+                            musicEngineCurrentTrackField.SetValue(musicEngine, resonatorTrack);
+                            resonatorOwnsMusicEngine = true;
+                        }
                     }
                 }
                 else if (perceivedVolume < MUSIC_SUPPRESS_THRESHOLD && resonatorOwnsMusicEngine)
