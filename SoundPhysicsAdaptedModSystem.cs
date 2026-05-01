@@ -214,6 +214,26 @@ namespace soundphysicsadapted
         /// </summary>
         private const float BOOMBOX_RELAY_RANGE = 48f;
 
+        /// <summary>
+        /// Server-side cache of the most recent BoomboxSyncPacket per carrier (key = entity id).
+        /// Populated whenever a carrier sends an IsPlaying=true packet, cleared on IsPlaying=false.
+        /// Used to (1) sync state to late joiners and (2) push state to players who newly enter
+        /// relay range, since the periodic 500ms relay only reaches in-range players at send time.
+        /// </summary>
+        private static readonly Dictionary<long, BoomboxSyncPacket> activeBoomboxesByCarrier = new Dictionary<long, BoomboxSyncPacket>();
+
+        /// <summary>
+        /// Per-receiver tracking of which carriers each player currently has "in range" (received).
+        /// Used so we only resend a cached packet on rising edge (player crosses INTO range), not
+        /// every server tick. Keyed by receiver entity id, value = set of carrier entity ids known.
+        /// </summary>
+        private static readonly Dictionary<long, HashSet<long>> boomboxInRangeByReceiver = new Dictionary<long, HashSet<long>>();
+
+        /// <summary>
+        /// Server tick handle for the boombox range-entry / cleanup loop.
+        /// </summary>
+        private long boomboxServerTickId = 0;
+
         public override void StartServerSide(ICoreServerAPI api)
         {
             serverApi = api;
@@ -260,7 +280,125 @@ namespace soundphysicsadapted
             {
                 ServerChannel.SendPacket(new ServerHandshakePacket { ModVersion = Mod.Info.Version }, byPlayer);
                 api.Logger.Debug($"[SoundPhysicsAdapted] Sent handshake to {byPlayer.PlayerName}");
+
+                // Sync any currently-active carried boomboxes to the joiner so they hear them
+                // immediately, regardless of distance. The remote handler already drift-syncs
+                // PlaybackPosition based on what we send here.
+                try
+                {
+                    if (activeBoomboxesByCarrier.Count > 0 && byPlayer?.Entity != null)
+                    {
+                        // Snapshot to avoid mutation-during-enumeration if a packet arrives mid-loop
+                        var snapshot = activeBoomboxesByCarrier.Values.ToArray();
+                        int sent = 0;
+                        foreach (var pkt in snapshot)
+                        {
+                            // Don't echo a carrier's own boombox to themselves
+                            if (pkt.CarrierEntityId == byPlayer.Entity.EntityId) continue;
+                            ServerChannel.SendPacket(pkt, byPlayer);
+                            sent++;
+                        }
+                        if (sent > 0)
+                            api.Logger.Debug($"[SoundPhysicsAdapted] Boombox join-sync: sent {sent} active carrier states to {byPlayer.PlayerName}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    api.Logger.Warning($"[SoundPhysicsAdapted] Boombox join-sync failed for {byPlayer.PlayerName}: {ex.Message}");
+                }
             };
+
+            // Drop carrier from cache when they disconnect (otherwise stale state lingers
+            // and gets pushed to every future joiner).
+            api.Event.PlayerDisconnect += (byPlayer) =>
+            {
+                if (byPlayer?.Entity == null) return;
+                long eid = byPlayer.Entity.EntityId;
+                if (activeBoomboxesByCarrier.Remove(eid) && serverApi != null)
+                {
+                    serverApi.Logger.Debug($"[SoundPhysicsAdapted] Boombox cache: removed disconnected carrier {byPlayer.PlayerName} ({eid})");
+                }
+                boomboxInRangeByReceiver.Remove(eid);
+                // Also forget this player as a receiver in everyone else's range sets — not
+                // strictly needed since lookups are keyed by receiver, but keeps memory clean.
+            };
+
+            // Periodic boombox range-entry tick: when a player crosses INTO BOOMBOX_RELAY_RANGE
+            // of an active carrier, push the cached packet to them once. This covers chunk-load
+            // and walking-into-range cases that the carrier's own 500ms relay misses (the relay
+            // only reaches players in range AT send time).
+            boomboxServerTickId = api.Event.RegisterGameTickListener(OnBoomboxRangeTick, 1000);
+        }
+
+        /// <summary>
+        /// Server tick (~1s) that detects players newly entering boombox relay range
+        /// and sends them the cached carrier state once on rising edge.
+        /// </summary>
+        private void OnBoomboxRangeTick(float dt)
+        {
+            if (serverApi == null || activeBoomboxesByCarrier.Count == 0) return;
+
+            try
+            {
+                var allPlayers = serverApi.World.AllOnlinePlayers;
+                // Build quick lookup of carrier entities so we can read their current position
+                // without trusting the cached PosX/Y/Z which may be stale by up to 500ms.
+                foreach (var kv in activeBoomboxesByCarrier)
+                {
+                    long carrierId = kv.Key;
+                    var pkt = kv.Value;
+
+                    // Locate carrier player. If they went offline without a clean disconnect
+                    // event, drop the entry.
+                    IServerPlayer carrierPlr = null;
+                    for (int i = 0; i < allPlayers.Length; i++)
+                    {
+                        if (allPlayers[i]?.Entity?.EntityId == carrierId)
+                        {
+                            carrierPlr = allPlayers[i] as IServerPlayer;
+                            break;
+                        }
+                    }
+                    if (carrierPlr?.Entity == null) continue;
+
+                    var carrierPos = carrierPlr.Entity.Pos.XYZ;
+
+                    for (int i = 0; i < allPlayers.Length; i++)
+                    {
+                        var rcv = allPlayers[i] as IServerPlayer;
+                        if (rcv == null || rcv == carrierPlr || rcv.Entity == null) continue;
+                        if (rcv.ConnectionState != EnumClientState.Playing) continue;
+
+                        long rcvId = rcv.Entity.EntityId;
+                        double dist = rcv.Entity.Pos.XYZ.DistanceTo(carrierPos);
+                        bool inRange = dist <= BOOMBOX_RELAY_RANGE;
+
+                        if (!boomboxInRangeByReceiver.TryGetValue(rcvId, out var known))
+                        {
+                            known = new HashSet<long>();
+                            boomboxInRangeByReceiver[rcvId] = known;
+                        }
+
+                        bool wasInRange = known.Contains(carrierId);
+
+                        if (inRange && !wasInRange)
+                        {
+                            // Rising edge — push cached packet so they pick up the music now
+                            // instead of waiting for the next 500ms carrier relay tick.
+                            ServerChannel.SendPacket(pkt, rcv);
+                            known.Add(carrierId);
+                        }
+                        else if (!inRange && wasInRange)
+                        {
+                            known.Remove(carrierId);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                serverApi?.Logger.Warning($"[SoundPhysicsAdapted] Boombox range-entry tick failed: {ex.Message}");
+            }
         }
 
         private void OnResonatorSyncPacket(IServerPlayer player, ResonatorSyncPacket packet)
@@ -315,6 +453,26 @@ namespace soundphysicsadapted
         {
             if (sender?.Entity == null || serverApi == null) return;
 
+            long carrierId = sender.Entity.EntityId;
+
+            // Maintain the active-carrier cache used by join-sync and range-entry sync.
+            // IsPlaying=false is sent on placement / drop; remove the entry then so we
+            // don't keep replaying a stopped boombox to future joiners.
+            if (packet.IsPlaying)
+            {
+                // Defensive: ensure the cached packet always carries the correct carrier id
+                // even if a buggy client sent 0 (matches what receivers expect).
+                if (packet.CarrierEntityId == 0) packet.CarrierEntityId = carrierId;
+                activeBoomboxesByCarrier[carrierId] = packet;
+            }
+            else
+            {
+                activeBoomboxesByCarrier.Remove(carrierId);
+                // Forget receivers' "in range" memory for this carrier so a future pickup
+                // re-triggers the rising-edge push.
+                foreach (var set in boomboxInRangeByReceiver.Values) set.Remove(carrierId);
+            }
+
             var senderPos = sender.Entity.Pos.XYZ;
             var allPlayers = serverApi.World.AllOnlinePlayers;
             int relayCount = 0;
@@ -329,10 +487,23 @@ namespace soundphysicsadapted
                 {
                     ServerChannel.SendPacket(packet, plr);
                     relayCount++;
+
+                    // Mark this receiver as currently knowing about this carrier so the
+                    // periodic range-entry tick doesn't double-send.
+                    if (packet.IsPlaying)
+                    {
+                        long rcvId = plr.Entity.EntityId;
+                        if (!boomboxInRangeByReceiver.TryGetValue(rcvId, out var known))
+                        {
+                            known = new HashSet<long>();
+                            boomboxInRangeByReceiver[rcvId] = known;
+                        }
+                        known.Add(carrierId);
+                    }
                 }
             }
 
-            serverApi.Logger.Debug($"[SoundPhysicsAdapted] Boombox relay: {sender.PlayerName} playing={packet.IsPlaying} track={packet.TrackLocation} pos=({packet.PosX:F0},{packet.PosY:F0},{packet.PosZ:F0}) relayed to {relayCount} players");
+            serverApi.Logger.Debug($"[SoundPhysicsAdapted] Boombox relay: {sender.PlayerName} playing={packet.IsPlaying} track={packet.TrackLocation} pos=({packet.PosX:F0},{packet.PosY:F0},{packet.PosZ:F0}) relayed to {relayCount} players, cache={activeBoomboxesByCarrier.Count}");
 
             // Sync the playback position to the carrier's Itemstack so that when the boombox
             // is placed down, it starts from the correct position.

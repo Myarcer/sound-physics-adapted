@@ -807,7 +807,59 @@ namespace soundphysicsadapted.Patches
                         capi.Logger.Debug($"[SoundPhysicsAdapted] [Boombox] SYNC FAILED: {ex.Message}");
                     }
                 }
+
+                // Also stamp the carrier's LOCAL carried-stack with the current playback position.
+                // The server already does this on its copy via UpdateCarrierItemStackPosition, but
+                // when CarryOn places the resonator the placement is client-predicted from the
+                // local stack. Without this, the placed BlockEntityResonator restores the pickup-
+                // moment savedPlaybackPos and the music rewinds.
+                UpdateLocalCarriedStackPlaybackPos(player, activeBoomboxSound.PlaybackPosition);
             }
+        }
+
+        /// <summary>
+        /// Mirror of server-side UpdateCarrierItemStackPosition for the local carrier client.
+        /// Writes the current PlaybackPosition into the WatchedAttributes "carryon:Carried" tree
+        /// (Hands or Back slot) so a client-predicted CarryOn place restores from a fresh stack.
+        /// </summary>
+        private static void UpdateLocalCarriedStackPlaybackPos(Entity carrier, float playbackPosition)
+        {
+            if (carrier == null) return;
+            try
+            {
+                var carriedAttr = carrier.WatchedAttributes.GetTreeAttribute(CARRYON_ATTRIBUTE_ID);
+                if (carriedAttr == null) return;
+
+                bool updated = false;
+                if (StampSlot(carrier, carriedAttr, "Hands", playbackPosition)) updated = true;
+                else if (StampSlot(carrier, carriedAttr, "Back", playbackPosition)) updated = true;
+
+                if (updated)
+                {
+                    carrier.WatchedAttributes.MarkPathDirty(CARRYON_ATTRIBUTE_ID);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: local stack stamp failed: {ex.Message}");
+            }
+        }
+
+        private static bool StampSlot(Entity carrier, ITreeAttribute carriedAttr, string slotName, float playbackPosition)
+        {
+            var slotAttr = carriedAttr.GetTreeAttribute(slotName);
+            if (slotAttr == null) return false;
+
+            var stack = slotAttr.GetItemstack("Stack");
+            if (stack == null) return false;
+
+            stack.ResolveBlockOrItem(carrier.World);
+            if (stack.Block == null || !(stack.Block.Code?.Path?.Contains("resonator") == true)) return false;
+
+            stack.Attributes.SetFloat("savedPlaybackPos", playbackPosition);
+            slotAttr.SetItemstack("Stack", stack);
+            return true;
         }
 
         #endregion
