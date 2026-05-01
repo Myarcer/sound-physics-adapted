@@ -146,18 +146,6 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Get the current occlusion filter value for a sound (0=fully occluded, 1=clear).
-        /// Returns 1.0 if the sound is not tracked.
-        /// </summary>
-        public static float GetOcclusionFilter(ILoadedSound sound)
-        {
-            if (sound == null) return 1.0f;
-            if (activeFilters.TryGetValue(sound, out var entry))
-                return entry.CurrentValue;
-            return 1.0f;
-        }
-
-        /// <summary>
         /// Mark a sound as positional even if its SoundType is Music/MusicGlitchunaffected.
         /// This ensures RecalculateAllUnderwater applies the non-music underwater multiplier.
         /// Used for Resonator sounds which are MusicGlitchunaffected but play from a block position.

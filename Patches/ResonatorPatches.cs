@@ -180,11 +180,7 @@ namespace soundphysicsadapted.Patches
             new System.Collections.Generic.Dictionary<string, float>();
 
         // Debounce rapid pause/resume clicks (prevents NRE when async onTrackLoaded fires on stale state)
-        // Split per-side: in singleplayer, client and server OnInteract fire in the same frame.
-        // A shared timestamp causes the server call to be swallowed by client's debounce,
-        // so the server never toggles IsPlaying or calls MarkDirty.
-        private static long lastPauseResumeMs_Client = 0;
-        private static long lastPauseResumeMs_Server = 0;
+        private static long lastPauseResumeMs = 0;
         private const long PAUSE_RESUME_COOLDOWN_MS = 500;
 
         // Track resonators that have had active audio playback (for natural completion detection)
@@ -200,37 +196,6 @@ namespace soundphysicsadapted.Patches
         /// Moves the resonator from the Music volume slider to the Ambient volume slider.
         /// </summary>
         public static bool NextStartTrackUseAmbient = false;
-
-        /// <summary>
-        /// Position of the resonator that triggered NextStartTrackUseAmbient.
-        /// Used by StartTrackSoundTypePrefix to create positional LoadSound instead of StartTrack.
-        /// </summary>
-        public static BlockPos NextResonatorPos = null;
-
-        /// <summary>
-        /// Loudest resonator perceived volume this frame (0=inaudible, 1=full).
-        /// Combines distance attenuation and occlusion filter.
-        /// </summary>
-        private static float loudestResonatorVolumeThisFrame = 0f;
-
-        /// <summary>
-        /// Timestamp of last frame where resonator distances were checked.
-        /// </summary>
-        private static long lastDuckFrameMs = 0;
-
-        /// <summary>
-        /// Whether the resonator currently owns MusicEngine.currentTrack.
-        /// True = resonator is currentTrack, vanilla music blocked.
-        /// False = currentTrack nulled or taken by vanilla, vanilla music free to play.
-        /// </summary>
-        private static bool resonatorOwnsMusicEngine = false;
-
-        /// <summary>
-        /// Perceived volume threshold for near/far transition.
-        /// Above this: resonator owns currentTrack (vanilla suppressed).
-        /// Below this: currentTrack released (vanilla can start).
-        /// </summary>
-        private const float MUSIC_SUPPRESS_THRESHOLD = 0.05f;
 
         /// <summary>
         /// Flag to indicate we're currently doing a pause/resume action.
@@ -458,152 +423,20 @@ namespace soundphysicsadapted.Patches
         }
 
         /// <summary>
-        /// Cached reflection references for MusicEngine currentTrack detach.
-        /// After a resonator starts playing, we null MusicEngine.currentTrack so
-        /// vanilla background music is free to start. Without this, the MusicEngine
-        /// blocks all vanilla music while any resonator sound is playing (even at vol 0).
+        /// Prefix for ClientCoreAPI.StartTrack — swaps MusicGlitchunaffected to Ambient
+        /// when triggered by resonator's StartMusic. This moves the resonator audio from the Music
+        /// volume slider to the Ambient volume slider, while vanilla music remains on the Music slider.
+        /// Using plain Ambient (not AmbientGlitchunaffected) so the Option E ambient volume sound
+        /// detection treats the resonator consistently with other ambient block sounds.
         /// </summary>
-        private static FieldInfo musicEngineField;
-        private static FieldInfo musicEngineCurrentTrackField;
-        private static bool musicEngineFieldsDiscovered = false;
-
-        /// <summary>
-        /// Prefix for ClientCoreAPI.StartTrack — for resonator sounds, swaps SoundType
-        /// to Ambient (Ambient volume slider instead of Music).
-        ///
-        /// For vanilla music, wraps the callback to capture the ILoadedSound reference
-        /// for volume ducking when resonators are nearby.
-        /// </summary>
-        public static bool StartTrackSoundTypePrefix(object __instance, AssetLocation __0, float __1, ref EnumSoundType __2, ref Action<ILoadedSound> __3)
+        public static void StartTrackSoundTypePrefix(ref EnumSoundType __2)
         {
-            if (!NextStartTrackUseAmbient)
+            if (NextStartTrackUseAmbient && __2 == EnumSoundType.MusicGlitchunaffected)
             {
-                return true; // Not a resonator call — let vanilla handle it
-            }
-
-            NextStartTrackUseAmbient = false;
-            NextResonatorPos = null;
-
-            // Swap to Ambient slider
-            __2 = EnumSoundType.Ambient;
-
-            return true; // Let StartTrack proceed normally — it can load music files
-        }
-
-        /// <summary>
-        /// Cached reflection field: ClientCoreAPI.game (private ClientMain)
-        /// </summary>
-        private static FieldInfo clientMainField;
-
-        /// <summary>
-        /// Discover MusicEngine fields via reflection (one-time).
-        /// Path: ClientCoreAPI → game (ClientMain) → MusicEngine (SystemMusicEngine) → currentTrack
-        /// </summary>
-        private static void DiscoverMusicEngineFields(ICoreClientAPI capi)
-        {
-            if (musicEngineFieldsDiscovered) return;
-            musicEngineFieldsDiscovered = true;
-
-            try
-            {
-                var capiType = capi.GetType();
-
-                // Step 1: ClientCoreAPI → game (private ClientMain)
-                clientMainField = capiType.GetField("game",
-                    BindingFlags.NonPublic | BindingFlags.Instance);
-
-                if (clientMainField == null)
-                {
-                    // Fallback: search for any field whose type name contains "ClientMain"
-                    foreach (var f in capiType.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance))
-                    {
-                        if (f.FieldType.Name.Contains("ClientMain"))
-                        {
-                            clientMainField = f;
-                            capi.Logger.Debug($"[SoundPhysicsAdapted] MusicEngine: Found ClientMain field '{f.Name}' type='{f.FieldType.Name}'");
-                            break;
-                        }
-                    }
-                }
-
-                if (clientMainField == null)
-                {
-                    capi.Logger.Warning("[SoundPhysicsAdapted] MusicEngine: Could not find 'game' (ClientMain) field on ClientCoreAPI");
-                    return;
-                }
-
-                var clientMain = clientMainField.GetValue(capi);
-                if (clientMain == null)
-                {
-                    capi.Logger.Warning("[SoundPhysicsAdapted] MusicEngine: ClientMain instance is null");
-                    return;
-                }
-
-                // Step 2: ClientMain → MusicEngine (public SystemMusicEngine)
-                var clientMainType = clientMain.GetType();
-                musicEngineField = clientMainType.GetField("MusicEngine",
-                    BindingFlags.Public | BindingFlags.Instance);
-
-                if (musicEngineField == null)
-                {
-                    // Fallback: search for any field whose type implements IMusicEngine
-                    foreach (var f in clientMainType.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance))
-                    {
-                        if (f.FieldType.Name.Contains("MusicEngine") || f.FieldType.Name.Contains("IMusicEngine"))
-                        {
-                            musicEngineField = f;
-                            capi.Logger.Debug($"[SoundPhysicsAdapted] MusicEngine: Found MusicEngine field '{f.Name}' type='{f.FieldType.Name}'");
-                            break;
-                        }
-                    }
-                }
-
-                if (musicEngineField == null)
-                {
-                    capi.Logger.Warning("[SoundPhysicsAdapted] MusicEngine: Could not find MusicEngine field on ClientMain");
-                    return;
-                }
-
-                var musicEngine = musicEngineField.GetValue(clientMain);
-                if (musicEngine == null)
-                {
-                    capi.Logger.Warning("[SoundPhysicsAdapted] MusicEngine: MusicEngine instance is null");
-                    return;
-                }
-
-                // Step 3: SystemMusicEngine → currentTrack (private IMusicTrack)
-                var meType = musicEngine.GetType();
-                musicEngineCurrentTrackField = meType.GetField("currentTrack",
-                    BindingFlags.NonPublic | BindingFlags.Instance);
-
-                if (musicEngineCurrentTrackField == null)
-                {
-                    foreach (var f in meType.GetFields(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance))
-                    {
-                        if (f.FieldType.Name.Contains("IMusicTrack") &&
-                            f.Name.IndexOf("current", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            musicEngineCurrentTrackField = f;
-                            break;
-                        }
-                    }
-                }
-
-                if (musicEngineCurrentTrackField != null)
-                {
-                    capi.Logger.Notification($"[SoundPhysicsAdapted] MusicEngine: Found currentTrack field '{musicEngineCurrentTrackField.Name}' on {meType.Name}");
-                }
-                else
-                {
-                    capi.Logger.Warning($"[SoundPhysicsAdapted] MusicEngine: currentTrack field NOT FOUND on {meType.FullName}");
-                }
-            }
-            catch (Exception ex)
-            {
-                capi.Logger.Error($"[SoundPhysicsAdapted] MusicEngine discovery failed: {ex.Message}");
+                __2 = EnumSoundType.Ambient;
+                NextStartTrackUseAmbient = false;
             }
         }
-
 
         #endregion
 
@@ -649,14 +482,8 @@ namespace soundphysicsadapted.Patches
                     capi.Logger.Debug($"[SoundPhysicsAdapted] [Resonator] Registered sound in activeFilters for occlusion/underwater at {pos}");
                 }
 
-                // 2. VOLUME - Apply vanilla distance curve so out-of-range resonators go silent.
-                // EFX filter handles occlusion muffling on top of this.
-                // Forcing 1.0f caused far resonators to play at 50% volume indefinitely
-                // because the EFX directGain formula (pow(gainHF, 0.1)) floors at ~0.5 at full occlusion.
-                Vec3d playerPos = capi.World.Player?.Entity?.Pos?.XYZ;
-                float dist = playerPos != null ? (float)soundPos.DistanceTo(playerPos) : 0f;
-                float volume = GameMath.Clamp(1f / (float)Math.Log10(Math.Max(1, dist * 0.35f)) - 0.8f, 0f, 1f);
-                sound.SetVolume(volume);
+                // 2. VOLUME - Force to 1.0 (physics system handles attenuation)
+                sound.SetVolume(1.0f);
 
                 // 3. PITCH - Keep vanilla glitch effect
                 float pitch = GameMath.Clamp(1 - capi.Render.ShaderUniforms.GlitchStrength, 0.1f, 1);
@@ -675,147 +502,6 @@ namespace soundphysicsadapted.Patches
                 // Squelch errors in render loop
             }
             return true;
-        }
-
-        /// <summary>
-        /// Dynamically manage MusicEngine.currentTrack based on resonator proximity.
-        /// Near: resonator's MusicTrack stays as currentTrack → vanilla music blocked.
-        /// Far: null currentTrack → vanilla music free to start via OnEverySecond.
-        /// Player walks back: fade out vanilla, re-set currentTrack to resonator track.
-        /// </summary>
-        private static void ManageVanillaMusicSuppression(ICoreClientAPI capi)
-        {
-            if (clientMainField == null || musicEngineField == null || musicEngineCurrentTrackField == null)
-                return;
-
-            try
-            {
-                var clientMain = clientMainField.GetValue(capi);
-                if (clientMain == null) return;
-                var musicEngine = musicEngineField.GetValue(clientMain);
-                if (musicEngine == null) return;
-
-                float pv = loudestResonatorVolumeThisFrame;
-
-                if (pv >= MUSIC_SUPPRESS_THRESHOLD && !resonatorOwnsMusicEngine)
-                {
-                    // Player is near a resonator — suppress vanilla music
-                    // Fade out whatever vanilla track is playing, then set a resonator as currentTrack
-                    var vanillaTrack = musicEngineCurrentTrackField.GetValue(musicEngine);
-                    if (vanillaTrack != null && !IsOurResonatorTrack(vanillaTrack))
-                    {
-                        var fadeMethod = vanillaTrack.GetType().GetMethod("FadeOut",
-                            new[] { typeof(float), typeof(Action) });
-                        if (fadeMethod != null)
-                        {
-                            fadeMethod.Invoke(vanillaTrack, new object[] { 2f, null });
-                            capi.Logger.Debug("[SoundPhysicsAdapted] MusicEngine: Fading out vanilla track, resonator taking over");
-                        }
-                    }
-
-                    // Re-assert any active resonator as currentTrack — blocks vanilla from starting
-                    object anyTrack = GetAnyActiveResonatorTrack();
-                    if (anyTrack != null)
-                    {
-                        musicEngineCurrentTrackField.SetValue(musicEngine, anyTrack);
-                    }
-                    resonatorOwnsMusicEngine = true;
-                }
-                else if (pv < MUSIC_SUPPRESS_THRESHOLD && resonatorOwnsMusicEngine)
-                {
-                    // Player is far from resonator — release currentTrack so vanilla music can start
-                    musicEngineCurrentTrackField.SetValue(musicEngine, null);
-                    resonatorOwnsMusicEngine = false;
-                    capi.Logger.Debug("[SoundPhysicsAdapted] MusicEngine: Resonator inaudible, releasing currentTrack for vanilla music");
-                }
-            }
-            catch (Exception ex)
-            {
-                capi.Logger.Debug($"[SoundPhysicsAdapted] ManageVanillaMusicSuppression failed: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Active resonator MusicTrack objects, keyed by BlockPos.
-        /// Used to re-set MusicEngine.currentTrack when the player walks back toward a resonator,
-        /// and to protect other resonators' tracks from being killed by MusicEngine.StartTrack's FadeOut.
-        /// </summary>
-        private static System.Collections.Generic.Dictionary<BlockPos, object> activeResonatorTracks =
-            new System.Collections.Generic.Dictionary<BlockPos, object>();
-
-        private static bool IsOurResonatorTrack(object track)
-        {
-            foreach (var kvp in activeResonatorTracks)
-            {
-                if (ReferenceEquals(kvp.Value, track)) return true;
-            }
-            return false;
-        }
-
-        private static object GetAnyActiveResonatorTrack()
-        {
-            foreach (var kvp in activeResonatorTracks)
-            {
-                if (kvp.Value != null) return kvp.Value;
-            }
-            return null;
-        }
-
-        /// <summary>
-        /// Null MusicEngine.currentTrack ONLY if it's one of our resonator tracks.
-        /// This prevents StartTrack's FadeOut from killing other resonator sounds,
-        /// while allowing vanilla tracks to be properly faded out by the MusicEngine.
-        /// </summary>
-        private static void NullMusicEngineCurrentTrackIfOurs(ICoreClientAPI capi)
-        {
-            if (capi == null || clientMainField == null || musicEngineField == null || musicEngineCurrentTrackField == null) return;
-            try
-            {
-                var clientMain = clientMainField.GetValue(capi);
-                var musicEngine = clientMain != null ? musicEngineField.GetValue(clientMain) : null;
-                if (musicEngine == null) return;
-
-                var currentTrack = musicEngineCurrentTrackField.GetValue(musicEngine);
-                if (currentTrack == null) return;
-
-                // Only null if it's one of our resonator tracks — protect them from FadeOut.
-                // If it's a vanilla track, leave it so StartTrack can properly fade it out.
-                if (IsOurResonatorTrack(currentTrack))
-                {
-                    musicEngineCurrentTrackField.SetValue(musicEngine, null);
-                    capi.Logger.Debug("[SoundPhysicsAdapted] NullMusicEngineCurrentTrackIfOurs: Nulled (was our resonator track)");
-                }
-                else
-                {
-                    capi.Logger.Debug("[SoundPhysicsAdapted] NullMusicEngineCurrentTrackIfOurs: Left vanilla track for proper fade");
-                }
-            }
-            catch { }
-        }
-
-        /// <summary>
-        /// Unconditionally null MusicEngine.currentTrack (used when releasing ownership).
-        /// </summary>
-        private static void NullMusicEngineCurrentTrack(ICoreClientAPI capi)
-        {
-            if (capi == null || clientMainField == null || musicEngineField == null || musicEngineCurrentTrackField == null) return;
-            try
-            {
-                var clientMain = clientMainField.GetValue(capi);
-                var musicEngine = clientMain != null ? musicEngineField.GetValue(clientMain) : null;
-                if (musicEngine != null)
-                    musicEngineCurrentTrackField.SetValue(musicEngine, null);
-            }
-            catch { }
-        }
-
-        /// <summary>
-        /// Called from the mod system's general tick as a safety fallback.
-        /// If no resonator has been active and we still own the music engine, release it.
-        /// </summary>
-        public static void UpdateVanillaMusicDuckFallback(float dt, long elapsedMs)
-        {
-            // Nothing needed — ManageVanillaMusicSuppression handles everything in OnClientTickPostfix
         }
 
         /// <summary>
@@ -880,21 +566,12 @@ namespace soundphysicsadapted.Patches
                     // Debounce: prevent rapid-fire pause/resume which crashes vanilla's
                     // async onTrackLoaded callback (NRE when StartMusic queues a callback
                     // then StopMusic nulls the state before it fires).
-                    // Per-side debounce: in SP, both sides fire same frame. Shared timestamp
-                    // would cause server call to be swallowed by client's debounce.
                     long nowMs = world.ElapsedMilliseconds;
-                    if (world.Side == EnumAppSide.Client)
+                    if (nowMs - lastPauseResumeMs < PAUSE_RESUME_COOLDOWN_MS)
                     {
-                        if (nowMs - lastPauseResumeMs_Client < PAUSE_RESUME_COOLDOWN_MS)
-                            return false;
-                        lastPauseResumeMs_Client = nowMs;
+                        return false; // Swallow the click
                     }
-                    else
-                    {
-                        if (nowMs - lastPauseResumeMs_Server < PAUSE_RESUME_COOLDOWN_MS)
-                            return false;
-                        lastPauseResumeMs_Server = nowMs;
-                    }
+                    lastPauseResumeMs = nowMs;
 
                     // CLIENT: Only handle pause/resume if server also has the mod.
                     // Without this guard, client would pause locally while server runs vanilla
@@ -1118,48 +795,6 @@ namespace soundphysicsadapted.Patches
             // Always clean up track-has-played tracking when music stops (any reason)
             trackHasPlayed.Remove(__instance);
 
-            // Remove only THIS resonator from active tracking
-            if (__instance.Pos != null)
-            {
-                BlockPos toRemove = null;
-                foreach (var kvp in activeResonatorTracks)
-                {
-                    if (kvp.Key.Equals(__instance.Pos)) { toRemove = kvp.Key; break; }
-                }
-                if (toRemove != null)
-                    activeResonatorTracks.Remove(toRemove);
-            }
-
-            // Only release MusicEngine if NO other resonators are active
-            if (activeResonatorTracks.Count == 0 && resonatorOwnsMusicEngine)
-            {
-                resonatorOwnsMusicEngine = false;
-                ICoreClientAPI capi = __instance.Api as ICoreClientAPI;
-                NullMusicEngineCurrentTrack(capi);
-                capi?.Logger.Debug("[SoundPhysicsAdapted] StopMusicPostfix: No active resonators, released MusicEngine currentTrack");
-            }
-            else if (activeResonatorTracks.Count > 0)
-            {
-                // Other resonators still active — re-assert one as currentTrack
-                ICoreClientAPI capi = __instance.Api as ICoreClientAPI;
-                if (capi != null && resonatorOwnsMusicEngine && clientMainField != null && musicEngineField != null && musicEngineCurrentTrackField != null)
-                {
-                    try
-                    {
-                        var clientMain = clientMainField.GetValue(capi);
-                        var musicEngine = clientMain != null ? musicEngineField.GetValue(clientMain) : null;
-                        if (musicEngine != null)
-                        {
-                            object anyTrack = GetAnyActiveResonatorTrack();
-                            if (anyTrack != null)
-                                musicEngineCurrentTrackField.SetValue(musicEngine, anyTrack);
-                        }
-                    }
-                    catch { }
-                }
-                capi?.Logger.Debug($"[SoundPhysicsAdapted] StopMusicPostfix: {activeResonatorTracks.Count} resonator(s) still active");
-            }
-
             if (__state)
             {
                 var animUtil = ResonatorReflection.GetAnimUtil(__instance);
@@ -1215,14 +850,6 @@ namespace soundphysicsadapted.Patches
         public static void StartMusicPrefix(BlockEntityResonator __instance)
         {
             if (__instance.Api?.Side != EnumAppSide.Client) return;
-
-            // Protect other resonator tracks from StartTrack's FadeOut(2f).
-            // Only null currentTrack if it's one of our resonator tracks.
-            // If it's a vanilla music track, leave it so StartTrack fades it properly.
-            ICoreClientAPI capiPre = __instance.Api as ICoreClientAPI;
-            DiscoverMusicEngineFields(capiPre);
-            NullMusicEngineCurrentTrackIfOurs(capiPre);
-
             if (__instance.Inventory?[0]?.Itemstack?.ItemAttributes == null) return;
 
             string trackString = __instance.Inventory[0].Itemstack.ItemAttributes["musicTrack"].AsString(null);
@@ -1240,41 +867,19 @@ namespace soundphysicsadapted.Patches
             AudioLoaderPatch.RequestMonoForAsset(normalized);
 
             // Flag: next StartTrack call should use Ambient slider instead of Music slider
-            // Also capture resonator position so StartTrackSoundTypePrefix can create positional sound
             NextStartTrackUseAmbient = true;
-            NextResonatorPos = __instance.Pos?.Copy();
 
-            __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] StartMusicPrefix: Registered mono request for '{normalized}', ambient slider flag set, pos={__instance.Pos}");
+            __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] StartMusicPrefix: Registered mono request for '{normalized}', ambient slider flag set");
         }
 
         public static void StartMusicPostfix(BlockEntityResonator __instance)
         {
-            // Safety clear - flags should already be consumed by StartTrackSoundTypePrefix
+            // Safety clear - flag should already be consumed by StartTrackSoundTypePrefix
             NextStartTrackUseAmbient = false;
-            NextResonatorPos = null;
 
             if (__instance.Api?.Side != EnumAppSide.Client) return;
 
             __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] StartMusicPostfix: Called for {__instance.Pos}");
-
-            // Capture the resonator's MusicTrack for dynamic currentTrack management.
-            // capi.StartTrack() has set this as MusicEngine.currentTrack (priority 99),
-            // blocking vanilla music. We store the ref so we can re-assert it later
-            // if the player walks away and comes back.
-            ICoreClientAPI capi = __instance.Api as ICoreClientAPI;
-            DiscoverMusicEngineFields(capi);
-            object trackObj = ResonatorReflection.TrackField?.GetValue(__instance);
-            if (trackObj is MusicTrack musicTrack)
-            {
-                musicTrack.ManualDispose = true;
-                // Track by position — supports multiple simultaneous resonators
-                BlockPos posKey = __instance.Pos.Copy();
-                activeResonatorTracks[posKey] = trackObj;
-                // Don't set resonatorOwnsMusicEngine here — let ManageVanillaMusicSuppression
-                // handle it on the next tick when sound is actually playing. This ensures the
-                // "!resonatorOwnsMusicEngine" transition fires properly, fading any vanilla track.
-                capi.Logger.Debug($"[SoundPhysicsAdapted] StartMusicPostfix: Captured resonator MusicTrack at {posKey}, total active={activeResonatorTracks.Count}");
-            }
 
             bool isResuming = false;
             BlockPos foundPos = null;
@@ -1511,9 +1116,6 @@ namespace soundphysicsadapted.Patches
         {
             if (__instance.Api.Side != EnumAppSide.Client) return;
 
-            ICoreClientAPI capi = __instance.Api as ICoreClientAPI;
-            long nowMs = __instance.Api.World.ElapsedMilliseconds;
-
             ILoadedSound sound = ResonatorReflection.GetSound(__instance);
             if (sound != null && sound.IsPlaying)
             {
@@ -1521,45 +1123,7 @@ namespace soundphysicsadapted.Patches
                 if (!trackHasPlayed.TryGetValue(__instance, out _))
                     trackHasPlayed.Add(__instance, TrackPlayedMarker);
 
-                // --- Vanilla music ducking ---
-                // Track loudest resonator perceived volume per frame
-                if (capi != null && __instance.Pos != null)
-                {
-                    // Reset per-frame tracking
-                    if (nowMs != lastDuckFrameMs)
-                    {
-                        lastDuckFrameMs = nowMs;
-                        loudestResonatorVolumeThisFrame = 0f;
-                    }
-
-                    // Calculate perceived volume: distance attenuation * occlusion filter
-                    var playerPos = capi.World.Player?.Entity?.Pos;
-                    if (playerPos != null)
-                    {
-                        double dx = playerPos.X - (__instance.Pos.X + 0.5);
-                        double dy = playerPos.Y - (__instance.Pos.Y + 0.5);
-                        double dz = playerPos.Z - (__instance.Pos.Z + 0.5);
-                        float dist = (float)Math.Sqrt(dx * dx + dy * dy + dz * dz);
-
-                        // Distance attenuation using vanilla resonator curve: 1/log10(max(1, dist*0.7)) - 0.8
-                        float distAtten = GameMath.Clamp(
-                            1f / (float)Math.Log10(Math.Max(1, dist * 0.35f)) - 0.8f,
-                            0f, 1f);
-
-                        // Occlusion filter (0=fully blocked, 1=clear)
-                        float occlusionFilter = AudioRenderer.GetOcclusionFilter(sound);
-
-                        float perceivedVolume = distAtten * occlusionFilter;
-
-                        if (perceivedVolume > loudestResonatorVolumeThisFrame)
-                            loudestResonatorVolumeThisFrame = perceivedVolume;
-                    }
-
-                    // Dynamically manage MusicEngine.currentTrack based on distance
-                    ManageVanillaMusicSuppression(capi);
-                }
-
-                if (nowMs % 2000 < 50)
+                if (__instance.Api.World.ElapsedMilliseconds % 2000 < 50)
                 {
                     float currentPos = sound.PlaybackPosition;
 
