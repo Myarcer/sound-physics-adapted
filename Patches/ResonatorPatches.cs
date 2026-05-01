@@ -253,6 +253,13 @@ namespace soundphysicsadapted.Patches
         private static System.Collections.Generic.Dictionary<string, object> activeResonatorTracksByPos =
             new System.Collections.Generic.Dictionary<string, object>();
 
+        // Parallel dict of the BlockEntityResonator instances behind activeResonatorTracksByPos.
+        // Used so we can iterate currently-playing resonators and properly pause them when a new
+        // one starts (instead of letting MusicEngine silently cuck the previous track, which
+        // leaves the disc spinning and IsPlaying=true on the cucked one).
+        private static System.Collections.Generic.Dictionary<string, BlockEntityResonator> activeResonatorEntitiesByPos =
+            new System.Collections.Generic.Dictionary<string, BlockEntityResonator>();
+
         /// <summary>
         /// Flag to indicate we're currently doing a pause/resume action.
         /// Prevents CarryOnCompatPatches from stealing the sound.
@@ -1035,6 +1042,69 @@ namespace soundphysicsadapted.Patches
             }
         }
 
+        /// <summary>
+        /// Properly pause every other currently-playing resonator when a new one starts.
+        /// Called from StartMusicPrefix on the client. Saves their playback position, freezes
+        /// the disc rotation, calls vanilla StopMusic (our prefix hooks the freeze), flips
+        /// IsPlaying=false locally, and syncs IsPaused=true to the server so persistence and
+        /// other players see the paused state too.
+        /// </summary>
+        private static void AutoPauseOtherPlayingResonators(BlockEntityResonator starting)
+        {
+            if (starting?.Api == null || starting.Api.Side != EnumAppSide.Client) return;
+            if (activeResonatorEntitiesByPos.Count == 0) return;
+
+            // Snapshot keys so we can mutate the dict while iterating
+            var snapshot = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, BlockEntityResonator>>(activeResonatorEntitiesByPos);
+
+            foreach (var kvp in snapshot)
+            {
+                var other = kvp.Value;
+                if (other == null) continue;
+                if (ReferenceEquals(other, starting)) continue;
+                if (other.Pos != null && starting.Pos != null && other.Pos.Equals(starting.Pos)) continue;
+                if (!other.IsPlaying) continue;
+
+                ILoadedSound otherSound = ResonatorReflection.GetSound(other);
+                if (otherSound == null) continue;
+
+                other.Api.Logger.Debug($"[SoundPhysicsAdapted] AutoPause: Pausing other resonator at {other.Pos} because {starting.Pos} is starting");
+
+                // Suppress CarryOn pre-steal during this synthetic pause (same as OnInteract path)
+                bool prevPausingFlag = IsPausingOrResuming;
+                IsPausingOrResuming = true;
+                try
+                {
+                    // Capture position + frozen rotation, register pausingResonators marker so
+                    // our StopMusicPrefix freezes the disc animation, and send IsPaused=true to server.
+                    CaptureAndSyncPlaybackPosition(other, isPausing: true);
+
+                    // Stop the audio + freeze animation locally
+                    try
+                    {
+                        AccessTools.Method(typeof(BlockEntityResonator), "StopMusic")?.Invoke(other, null);
+                    }
+                    catch (Exception ex)
+                    {
+                        other.Api.Logger.Debug($"[SoundPhysicsAdapted] AutoPause: StopMusic exception for {other.Pos}: {ex.Message}");
+                    }
+
+                    // Reflect paused state on this client immediately so the resonator stops
+                    // showing as "playing" until the server's authoritative update arrives.
+                    other.IsPlaying = false;
+                    pausedStates.Remove(other);
+                    pausedStates.Add(other, new PausedState(true));
+
+                    // Trigger a client-side block visual refresh
+                    try { other.Api.World?.BlockAccessor?.MarkBlockDirty(other.Pos); } catch { }
+                }
+                finally
+                {
+                    IsPausingOrResuming = prevPausingFlag;
+                }
+            }
+        }
+
         #endregion
 
         #region Animation Control
@@ -1109,6 +1179,7 @@ namespace soundphysicsadapted.Patches
             if (stopPosKey != null)
             {
                 activeResonatorTracksByPos.Remove(stopPosKey);
+                activeResonatorEntitiesByPos.Remove(stopPosKey);
             }
 
             if (activeResonatorTracksByPos.Count == 0 && resonatorOwnsMusicEngine)
@@ -1191,6 +1262,15 @@ namespace soundphysicsadapted.Patches
             // Flag: next StartTrack call should use Ambient slider instead of Music slider
             NextStartTrackUseAmbient = true;
 
+            // Vanilla MusicEngine plays only one IMusicTrack at a time. When this resonator's
+            // StartMusic kicks off a new track, MusicEngine fades the previous currentTrack out
+            // — if that previous track belonged to another playing resonator, the other
+            // resonator's audio dies but its IsPlaying stays true and the disc keeps spinning
+            // ("silently cucked"). Pre-empt that by properly pausing every other currently-
+            // playing resonator: capture playback position, freeze disc rotation, sync IsPaused
+            // to the server. The user then resumes either one with Ctrl+RMB.
+            AutoPauseOtherPlayingResonators(__instance);
+
             __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] StartMusicPrefix: Registered mono request for '{normalized}', ambient slider flag set");
         }
 
@@ -1216,6 +1296,7 @@ namespace soundphysicsadapted.Patches
                 if (startPosKey != null)
                 {
                     activeResonatorTracksByPos[startPosKey] = trackObj;
+                    activeResonatorEntitiesByPos[startPosKey] = __instance;
                 }
             }
 

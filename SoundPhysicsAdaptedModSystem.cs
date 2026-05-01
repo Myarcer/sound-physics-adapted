@@ -285,6 +285,25 @@ namespace soundphysicsadapted
                 // Update paused state for persistence
                 ResonatorPatches.pausedStates.Remove(resonator);
                 ResonatorPatches.pausedStates.Add(resonator, new PausedState(packet.IsPaused));
+
+                // If a client auto-paused this resonator (because they started another one),
+                // the server's IsPlaying flag won't have been touched by OnInteractPrefix.
+                // Apply the IsPaused=true intent here: stop music server-side and mark dirty
+                // so the change persists and propagates to all other clients.
+                if (packet.IsPaused && resonator.IsPlaying)
+                {
+                    try
+                    {
+                        resonator.IsPlaying = false;
+                        HarmonyLib.AccessTools.Method(typeof(BlockEntityResonator), "StopMusic")?.Invoke(resonator, null);
+                        resonator.MarkDirty(true);
+                        player.Entity.World.Logger.Debug($"[SoundPhysicsAdapted] Server applied auto-pause for {packet.Pos} from client {player.PlayerName}");
+                    }
+                    catch (Exception ex)
+                    {
+                        player.Entity.World.Logger.Warning($"[SoundPhysicsAdapted] Server auto-pause apply failed at {packet.Pos}: {ex.Message}");
+                    }
+                }
             }
         }
 
