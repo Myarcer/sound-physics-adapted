@@ -2,7 +2,7 @@
 
 Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the difference walls, caves, and weather make.
 
-[![VS Version](https://img.shields.io/badge/Vintage%20Story-1.21.0%2B-green)](https://vintagestory.at/)
+[![VS Version](https://img.shields.io/badge/Vintage%20Story-1.22.x-green)](https://vintagestory.at/)
 [![Side](https://img.shields.io/badge/Side-Client-blue)]()
 
 ---
@@ -27,7 +27,7 @@ Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the 
 
 | | |
 |---|---|
-| **Vintage Story** | 1.21.0+ NOT 1.22.x YET | 
+| **Vintage Story** | 1.22.x |
 | **Required on server** | No |
 | **Required on client** | No (but only the client running it hears the effects) |
 | **CarryOn** | Compatible (dedicated patches) |

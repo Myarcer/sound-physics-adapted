@@ -39,6 +39,9 @@ namespace soundphysicsadapted
         private static AssetLocation monoSwapKey;       // The key we swapped (for restore)
         private static AudioData monoSwapOriginal;      // The original stereo data (for restore)
 
+        // Cached StartPlaying method for direct music loading (bypasses LoadSound's path lookup)
+        private static MethodInfo startPlayingAudioMethod;
+
         // === PRE-WARMUP SOUND QUEUE ===
         // Sounds that call Start() between LevelFinalize and warmup completion are queued here.
         // Block entities (querns, forges, beehives) initialized during chunk loading start their
@@ -190,7 +193,7 @@ namespace soundphysicsadapted
 
                     if (audioDataType != null)
                     {
-                        var startPlayingAudioMethod = clientMainType.GetMethod("StartPlaying",
+                        startPlayingAudioMethod = clientMainType.GetMethod("StartPlaying",
                             BindingFlags.NonPublic | BindingFlags.Instance,
                             null,
                             new Type[] { audioDataType, typeof(SoundParams), typeof(AssetLocation) },
@@ -1510,6 +1513,99 @@ namespace soundphysicsadapted
         /// Retroactively applies initial occlusion + registers these sounds so the
         /// tick system can maintain them going forward.
         /// </summary>
+        /// <summary>
+        /// Load a music-category sound directly, bypassing LoadSound's path lookup.
+        /// LoadSound can only find sounds under sounds/, but music tracks are under music/.
+        /// This method looks up the AudioData from ScreenManager.soundAudioData (which HAS music)
+        /// and calls ClientMain.StartPlaying directly.
+        /// Returns the created ILoadedSound, or null on failure.
+        /// </summary>
+        public static ILoadedSound LoadMusicAsSound(ICoreClientAPI capi, AssetLocation musicAsset, SoundParams soundParams)
+        {
+            if (soundAudioDataDict == null || startPlayingAudioMethod == null || capi?.World == null)
+            {
+                capi?.Logger.Warning($"[SoundPhysicsAdapted] LoadMusicAsSound: Not initialized (dict={soundAudioDataDict != null}, method={startPlayingAudioMethod != null})");
+                return null;
+            }
+
+            // Look up audio data from the cache
+            AudioData audioData = null;
+            if (!soundAudioDataDict.TryGetValue(musicAsset, out audioData))
+            {
+                // Try without domain
+                var noDomain = new AssetLocation(musicAsset.Path);
+                if (!soundAudioDataDict.TryGetValue(noDomain, out audioData))
+                {
+                    // Try fuzzy match on path
+                    foreach (var kvp in soundAudioDataDict)
+                    {
+                        if (kvp.Key.Path == musicAsset.Path)
+                        {
+                            audioData = kvp.Value;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (audioData == null)
+            {
+                // Dump matching keys for debugging
+                string searchPath = musicAsset.Path.ToLowerInvariant();
+                string searchFilename = searchPath.Contains("/") ? searchPath.Substring(searchPath.LastIndexOf('/') + 1) : searchPath;
+                int matchCount = 0;
+                foreach (var kvp in soundAudioDataDict)
+                {
+                    string keyStr = kvp.Key.ToString();
+                    if (keyStr.Contains(searchFilename) || (kvp.Key.Path != null && kvp.Key.Path.Contains(searchFilename)))
+                    {
+                        capi.Logger.Warning($"[SoundPhysicsAdapted] LoadMusicAsSound: NEAR-MATCH key='{kvp.Key}' domain='{kvp.Key.Domain}' path='{kvp.Key.Path}' (searching for '{musicAsset}' domain='{musicAsset.Domain}' path='{musicAsset.Path}')");
+                        matchCount++;
+                        if (matchCount >= 3) break;
+                    }
+                }
+                if (matchCount == 0)
+                {
+                    // Dump a few music keys to see the format
+                    int shown = 0;
+                    foreach (var kvp in soundAudioDataDict)
+                    {
+                        if (kvp.Key.Path != null && kvp.Key.Path.Contains("music/"))
+                        {
+                            capi.Logger.Warning($"[SoundPhysicsAdapted] LoadMusicAsSound: SAMPLE music key='{kvp.Key}' domain='{kvp.Key.Domain}' path='{kvp.Key.Path}'");
+                            if (++shown >= 5) break;
+                        }
+                    }
+                }
+                capi.Logger.Warning($"[SoundPhysicsAdapted] LoadMusicAsSound: AudioData not found in cache for '{musicAsset}' (dict has {soundAudioDataDict.Count} entries)");
+                return null;
+            }
+
+            // Call ClientMain.StartPlaying(AudioData, SoundParams, AssetLocation) directly
+            // capi.World is the ClientMain instance
+            try
+            {
+                object result = startPlayingAudioMethod.Invoke(capi.World, new object[] { audioData, soundParams, musicAsset });
+                ILoadedSound sound = result as ILoadedSound;
+
+                if (sound == null)
+                {
+                    capi.Logger.Warning($"[SoundPhysicsAdapted] LoadMusicAsSound: StartPlaying returned null for '{musicAsset}'");
+                }
+                else
+                {
+                    capi.Logger.Debug($"[SoundPhysicsAdapted] LoadMusicAsSound: Successfully created sound for '{musicAsset}'");
+                }
+
+                return sound;
+            }
+            catch (Exception ex)
+            {
+                capi.Logger.Error($"[SoundPhysicsAdapted] LoadMusicAsSound: Exception calling StartPlaying: {ex}");
+                return null;
+            }
+        }
+
         public static void ProcessPreWarmupQueue()
         {
             if (preWarmupQueueProcessed) return;

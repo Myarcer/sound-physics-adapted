@@ -511,7 +511,8 @@ namespace soundphysicsadapted
                 cleanupTimerId = api.Event.RegisterGameTickListener(OnCleanupTick, (int)(CLEANUP_INTERVAL_SEC * 1000));
                 occlusionUpdateTimerId = api.Event.RegisterGameTickListener(OnOcclusionUpdateTick, (int)OCCLUSION_UPDATE_INTERVAL_MS);
                 smoothingTimerId = api.Event.RegisterGameTickListener(OnSmoothingTick, (int)AudioRenderer.SmoothTickIntervalMs);
-                api.Logger.Debug("[SoundPhysicsAdapted] Registered cleanup, occlusion, and smoothing tick handlers");
+                api.Event.RegisterGameTickListener(OnVanillaMusicDuckTick, 200);
+                api.Logger.Debug("[SoundPhysicsAdapted] Registered cleanup, occlusion, smoothing, and music duck tick handlers");
 
                 // FREEZE DIAGNOSTIC: Log that diagnostics are active
                 DiagnosticLog("DIAG-INIT: Freeze diagnostic logging ACTIVE. Heartbeat every 5s. Look for [SPA-DIAG] entries.");
@@ -644,6 +645,16 @@ namespace soundphysicsadapted
 
             // Heartbeat: log stats every 5s (always, bypass DebugMode)
             EmitDiagnosticHeartbeat();
+        }
+
+        /// <summary>
+        /// Fallback tick for vanilla music duck fade-back.
+        /// When no resonators are active, this restores vanilla music volume.
+        /// </summary>
+        private void OnVanillaMusicDuckTick(float dt)
+        {
+            if (clientApi == null) return;
+            ResonatorPatches.UpdateVanillaMusicDuckFallback(dt, clientApi.World.ElapsedMilliseconds);
         }
 
         /// <summary>
