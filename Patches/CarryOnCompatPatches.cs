@@ -631,10 +631,22 @@ namespace soundphysicsadapted.Patches
             if (capi != null)
                 lastPlacementTimeMs = capi.World.ElapsedMilliseconds;
 
+                float finalPlaybackPosition = 0f;
+                if (activeBoomboxSound != null && !activeBoomboxSound.IsDisposed)
+                {
+                    finalPlaybackPosition = activeBoomboxSound.PlaybackPosition;
+                }
+
+                var player = capi?.World?.Player?.Entity;
+                if (player != null && finalPlaybackPosition > 0f)
+                {
+                    UpdateLocalCarriedStackPlaybackPos(player, finalPlaybackPosition);
+                }
+
             StopBoomboxTick();
 
             // Notify remote clients to stop their local boombox sound
-            SendBoomboxStopPacket();
+                SendBoomboxStopPacket(finalPlaybackPosition);
 
             ResonatorPatches.UnregisterExternalMusicTrack(BOOMBOX_SUPPRESSION_KEY, capi);
 
@@ -666,7 +678,7 @@ namespace soundphysicsadapted.Patches
         /// <summary>
         /// Send a stop packet to server so remote clients dispose their boombox sound for us.
         /// </summary>
-        private static void SendBoomboxStopPacket()
+        private static void SendBoomboxStopPacket(float playbackPosition)
         {
             try
             {
@@ -676,6 +688,7 @@ namespace soundphysicsadapted.Patches
                 SoundPhysicsAdaptedModSystem.ClientChannel?.SendPacket(new BoomboxSyncPacket
                 {
                     CarrierEntityId = player.EntityId,
+                    PlaybackPosition = playbackPosition,
                     IsPlaying = false
                 });
             }
@@ -828,11 +841,12 @@ namespace soundphysicsadapted.Patches
             try
             {
                 var carriedAttr = carrier.WatchedAttributes.GetTreeAttribute(CARRYON_ATTRIBUTE_ID);
-                if (carriedAttr == null) return;
+                var carriedDataAttr = carrier.Attributes.GetTreeAttribute(CARRYON_ATTRIBUTE_ID);
+                if (carriedAttr == null && carriedDataAttr == null) return;
 
                 bool updated = false;
-                if (StampSlot(carrier, carriedAttr, "Hands", playbackPosition)) updated = true;
-                else if (StampSlot(carrier, carriedAttr, "Back", playbackPosition)) updated = true;
+                if (StampSlot(carrier, carriedAttr, carriedDataAttr, "Hands", playbackPosition)) updated = true;
+                else if (StampSlot(carrier, carriedAttr, carriedDataAttr, "Back", playbackPosition)) updated = true;
 
                 if (updated)
                 {
@@ -846,9 +860,9 @@ namespace soundphysicsadapted.Patches
             }
         }
 
-        private static bool StampSlot(Entity carrier, ITreeAttribute carriedAttr, string slotName, float playbackPosition)
+        private static bool StampSlot(Entity carrier, ITreeAttribute carriedAttr, ITreeAttribute carriedDataAttr, string slotName, float playbackPosition)
         {
-            var slotAttr = carriedAttr.GetTreeAttribute(slotName);
+            var slotAttr = carriedAttr?.GetTreeAttribute(slotName);
             if (slotAttr == null) return false;
 
             var stack = slotAttr.GetItemstack("Stack");
@@ -858,7 +872,17 @@ namespace soundphysicsadapted.Patches
             if (stack.Block == null || !(stack.Block.Code?.Path?.Contains("resonator") == true)) return false;
 
             stack.Attributes.SetFloat("savedPlaybackPos", playbackPosition);
+            stack.Attributes.SetBool("isPaused", false);
             slotAttr.SetItemstack("Stack", stack);
+
+            var dataSlotAttr = carriedDataAttr?.GetTreeAttribute(slotName);
+            var blockEntityData = dataSlotAttr?.GetTreeAttribute("Data");
+            if (blockEntityData != null)
+            {
+                blockEntityData.SetFloat("savedPlaybackPos", playbackPosition);
+                blockEntityData.SetBool("isPaused", false);
+            }
+
             return true;
         }
 

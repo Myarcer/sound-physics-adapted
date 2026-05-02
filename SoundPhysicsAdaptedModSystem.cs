@@ -520,17 +520,18 @@ namespace soundphysicsadapted
             try
             {
                 var carriedAttr = carrier.WatchedAttributes.GetTreeAttribute("carryon:Carried");
-                if (carriedAttr == null) return;
+                var carriedDataAttr = carrier.Attributes.GetTreeAttribute("carryon:Carried");
+                if (carriedAttr == null && carriedDataAttr == null) return;
                 
                 bool updated = false;
 
                 // Check Hands slot first
-                if (UpdateSlotPlaybackPosition(carrier, carriedAttr, "Hands", playbackPosition))
+                if (UpdateSlotPlaybackPosition(carrier, carriedAttr, carriedDataAttr, "Hands", playbackPosition))
                 {
                     updated = true;
                 }
                 // Check Back slot
-                else if (UpdateSlotPlaybackPosition(carrier, carriedAttr, "Back", playbackPosition))
+                else if (UpdateSlotPlaybackPosition(carrier, carriedAttr, carriedDataAttr, "Back", playbackPosition))
                 {
                     updated = true;
                 }
@@ -547,9 +548,9 @@ namespace soundphysicsadapted
             }
         }
 
-        private bool UpdateSlotPlaybackPosition(Entity carrier, ITreeAttribute carriedAttr, string slotName, float playbackPosition)
+        private bool UpdateSlotPlaybackPosition(Entity carrier, ITreeAttribute carriedAttr, ITreeAttribute carriedDataAttr, string slotName, float playbackPosition)
         {
-            var slotAttr = carriedAttr.GetTreeAttribute(slotName);
+            var slotAttr = carriedAttr?.GetTreeAttribute(slotName);
             if (slotAttr == null) return false;
 
             var stack = slotAttr.GetItemstack("Stack");
@@ -561,9 +562,19 @@ namespace soundphysicsadapted
 
             // Found a resonator. Update its savedPlaybackPos in the block entity data.
             stack.Attributes.SetFloat("savedPlaybackPos", playbackPosition);
+            stack.Attributes.SetBool("isPaused", false);
             
             // Set the modified stack back to the tree
             slotAttr.SetItemstack("Stack", stack);
+
+            var dataSlotAttr = carriedDataAttr?.GetTreeAttribute(slotName);
+            var blockEntityData = dataSlotAttr?.GetTreeAttribute("Data");
+            if (blockEntityData != null)
+            {
+                blockEntityData.SetFloat("savedPlaybackPos", playbackPosition);
+                blockEntityData.SetBool("isPaused", false);
+            }
+
             return true;
         }
 
@@ -1322,6 +1333,8 @@ namespace soundphysicsadapted
             // All prior migration history deleted at v4.
             // Any config older than v4 gets regenerated from fresh defaults.
             // This keeps the codebase clean — no legacy migration chains to maintain.
+            cfg.ThunderLayer1Volume = GameMath.Clamp(cfg.ThunderLayer1Volume, 0f, 1f);
+            cfg.ThunderLayer2Volume = GameMath.Clamp(cfg.ThunderLayer2Volume, 0f, 1f);
             cfg.ConfigVersion = CurrentConfigVersion;
         }
 
