@@ -235,12 +235,12 @@ namespace soundphysicsadapted.Patches
         /// Distance scale for resonator attenuation. Lower values extend audible range.
         /// 0.116 extends audible range ~50% further than previous 0.175.
         /// </summary>
-        private const float RESONATOR_DISTANCE_SCALE = 0.116f;
+        private const float RESONATOR_DISTANCE_SCALE = 0.232f;
 
         /// <summary>
         /// Near-field radius where resonator music stays at full volume before falloff begins.
         /// </summary>
-        private const float RESONATOR_FULL_VOLUME_RADIUS = 15f;
+        private const float RESONATOR_FULL_VOLUME_RADIUS = 8f;
 
         // Reflection state for ClientCoreAPI -> ClientMain -> MusicEngine -> currentTrack
         private static FieldInfo clientMainField;
