@@ -842,6 +842,41 @@ namespace soundphysicsadapted
                     patched++;
                 }
 
+                // BlockPos overload: (AssetLocation, BlockPos, double yOffset, IPlayer dualCallByPlayer, bool, float, float)
+                // Primary path for block-break / block-place sounds triggered by the local player.
+                var method6 = clientMainType.GetMethod("PlaySoundAt",
+                    BindingFlags.Public | BindingFlags.Instance,
+                    null,
+                    new Type[] { typeof(AssetLocation), typeof(BlockPos), typeof(double), typeof(IPlayer), typeof(bool), typeof(float), typeof(float) },
+                    null);
+                if (method6 != null)
+                {
+                    var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundAtBlockPosDualPrefix",
+                        BindingFlags.Static | BindingFlags.Public);
+                    harmony.Patch(method6, prefix: new HarmonyMethod(prefix));
+                    patched++;
+                }
+
+                // SoundAttributes + BlockPos overload: (SoundAttributes, BlockPos, double yOffset, IPlayer dualCallByPlayer, float volumeMult)
+                // Used by collectibles / BehaviorLadder break sounds.
+                var soundAttrsType = Type.GetType("Vintagestory.API.Common.SoundAttributes, VintagestoryAPI") ??
+                    clientMainType.Assembly.GetType("Vintagestory.API.Common.SoundAttributes");
+                if (soundAttrsType != null)
+                {
+                    var method7 = clientMainType.GetMethod("PlaySoundAt",
+                        BindingFlags.Public | BindingFlags.Instance,
+                        null,
+                        new Type[] { soundAttrsType, typeof(BlockPos), typeof(double), typeof(IPlayer), typeof(float) },
+                        null);
+                    if (method7 != null)
+                    {
+                        var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundAtSoundAttrBlockPosDualPrefix",
+                            BindingFlags.Static | BindingFlags.Public);
+                        harmony.Patch(method7, prefix: new HarmonyMethod(prefix));
+                        patched++;
+                    }
+                }
+
                 api.Logger.Notification($"[SoundPhysicsAdapted] Patched {patched} PlaySoundAt/For overloads [LOCAL PLAYER DETECT]");
             }
             catch (Exception ex)
@@ -967,6 +1002,53 @@ namespace soundphysicsadapted
                 if (localPlayer == null || __4 != localPlayer) return;
 
                 MarkLocalPlayerSoundPosition(__1, __2, __3);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// PREFIX for PlaySoundAt(AssetLocation, BlockPos, double yOffsetFromCenter, IPlayer dualCallByPlayer, bool, float, float).
+        /// Primary path for block-break / block-place / plant-break sounds triggered by local player.
+        /// VS places sound at (pos.X+0.5, pos.InternalY+0.5+yOffset, pos.Z+0.5).
+        ///
+        /// Harmony: __0 = AssetLocation, __1 = BlockPos, __2 = yOffset, __3 = IPlayer.
+        /// </summary>
+        public static void PlaySoundAtBlockPosDualPrefix(
+            AssetLocation __0, BlockPos __1, double __2, IPlayer __3)
+        {
+            try
+            {
+                if (__3 == null || __1 == null || cachedApi == null) return;
+                var localPlayer = cachedApi.World?.Player;
+                if (localPlayer == null || __3 != localPlayer) return;
+
+                double x = __1.X + 0.5;
+                double y = __1.InternalY + 0.5 + __2;
+                double z = __1.Z + 0.5;
+                MarkLocalPlayerSoundPosition(x, y, z);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// PREFIX for PlaySoundAt(SoundAttributes, BlockPos, double yOffsetFromCenter, IPlayer dualCallByPlayer, float).
+        /// Used by collectibles (BehaviorLadder, etc.) block break sounds.
+        ///
+        /// Harmony: __1 = BlockPos, __2 = yOffset, __3 = IPlayer.
+        /// </summary>
+        public static void PlaySoundAtSoundAttrBlockPosDualPrefix(
+            object __0, BlockPos __1, double __2, IPlayer __3)
+        {
+            try
+            {
+                if (__3 == null || __1 == null || cachedApi == null) return;
+                var localPlayer = cachedApi.World?.Player;
+                if (localPlayer == null || __3 != localPlayer) return;
+
+                double x = __1.X + 0.5;
+                double y = __1.InternalY + 0.5 + __2;
+                double z = __1.Z + 0.5;
+                MarkLocalPlayerSoundPosition(x, y, z);
             }
             catch { }
         }
