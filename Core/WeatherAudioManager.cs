@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
+using Vintagestory.GameContent;
 using soundphysicsadapted.Patches;
 
 namespace soundphysicsadapted
@@ -214,6 +215,19 @@ namespace soundphysicsadapted
                 long gameTimeMs = capi.World.ElapsedMilliseconds;
                 // Pass eye/ear position -- consistent with occlusion system
                 Vec3d earPos = player.Pos.XYZ.Add(player.LocalEyePos);
+
+                // LYING-DOWN COMPENSATION: When the player is mounted in a bed/bedroll,
+                // LocalEyePos.Y collapses to ~0.3 and the "ear" sits inside or directly
+                // adjacent to floor / bedframe blocks. DDA rays from sky openings then
+                // punch through nearby furniture and report false occlusion, muting the
+                // weather layer. For weather analysis ONLY, lift the ear back to upright
+                // height so opening detection sees the same enclosure the standing player
+                // would. Stereo panning and per-sound occlusion still use the real ear
+                // position via VS itself.
+                if (player.MountedOn is BlockEntityBed)
+                {
+                    earPos.Y = player.Pos.Y + 1.6;
+                }
 
                 enclosureCalculator?.Update(earPos, gameTimeMs);
 

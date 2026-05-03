@@ -458,15 +458,31 @@ namespace soundphysicsadapted
             // === PLAYER-POSITION FAST PATH ===
             // Sounds at player position (UI clicks, block breaking, bow draw) skip ALL calculations.
             // Source = listener means zero occlusion (no filter needed), only reverb applies.
-            if (distance < PLAYER_POS_THRESHOLD)
+            //
+            // Also catches LOCAL-PLAYER ORIGINATED world sounds (block break/place at any
+            // distance) tagged via LoadSoundPatch.MarkLocalPlayerSoundPosition. The local
+            // player knows what action they performed; muffling their own block sounds based
+            // on neighbouring slabs/cattails/water is jarring and inconsistent. Reverb still
+            // describes the room they're in correctly.
+            bool isLocalPlayerSound = soundphysicsadapted.LoadSoundPatch
+                .IsLocalPlayerSoundPosition(soundPos);
+            if (distance < PLAYER_POS_THRESHOLD || isLocalPlayerSound)
             {
                 playerPosThisTick++;
 
-                // Apply cached player reverb only - no occlusion/filter needed
+                // Force occlusion to 0 (ensure any prior cached value is cleared)
                 int? sourceId = AudioRenderer.GetValidatedSourceId(sound);
-                if (sourceId.HasValue && sourceId.Value > 0 && ReverbEffects.IsInitialized)
+                if (sourceId.HasValue && sourceId.Value > 0)
                 {
-                    ReverbEffects.ApplyToSource(sourceId.Value, cachedPlayerReverb);
+                    if (isLocalPlayerSound && distance >= PLAYER_POS_THRESHOLD)
+                    {
+                        // Distant local-player sound (e.g. break a slab 3 blocks away):
+                        // explicitly clear any lowpass filter that may have been applied
+                        // on a prior tick before the tag landed.
+                        AudioRenderer.SetOcclusion(sound, 1.0f, soundPos, soundName);
+                    }
+                    if (ReverbEffects.IsInitialized)
+                        ReverbEffects.ApplyToSource(sourceId.Value, cachedPlayerReverb);
                 }
 
                 cache.LastUpdateTimeMs = currentTimeMs;

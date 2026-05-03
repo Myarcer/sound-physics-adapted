@@ -618,6 +618,90 @@ namespace soundphysicsadapted
         private const long POSITION_EXPIRY_MS = 2000;
         private const int MAX_POSITION_QUEUE = 32;
 
+        // ---- Local-player occlusion-skip set ----
+        // Separate from the consume-on-match fingerprint queue above. This is a
+        // non-consuming TTL set keyed by integer block coordinates. Sounds whose
+        // world position floors to a recently-tagged block coord are treated as
+        // "local player originated" and skip occlusion entirely (only reverb is
+        // applied) by AudioPhysicsSystem.ProcessSoundRaycast.
+        //
+        // Why block-int keys? Sound positions get jittered by VS (block-center,
+        // entity offset, sample randomization). Per-block matching is robust
+        // against these small offsets and avoids false-negatives for break/place
+        // sounds spawned at slightly different exact coords than the player click.
+        private static readonly Dictionary<long, long> _localPlayerOcclusionSkip
+            = new Dictionary<long, long>();
+        private const long OCCLUSION_SKIP_TTL_MS = 3000;
+        private const int OCCLUSION_SKIP_MAX = 256;
+
+        private static long PackBlockKey(int x, int y, int z)
+        {
+            // 21 bits per axis (-1M..+1M block range, plenty for VS world).
+            return ((long)(x & 0x1FFFFF)) | (((long)(y & 0x1FFFFF)) << 21) | (((long)(z & 0x1FFFFF)) << 42);
+        }
+
+        /// <summary>
+        /// Mark a world position (in world coords) as "local-player originated".
+        /// AudioPhysicsSystem will skip occlusion calculations for sounds whose
+        /// floor() position matches any tagged block within the TTL window.
+        /// Reverb is still applied normally.
+        /// </summary>
+        public static void MarkLocalPlayerSoundPosition(double x, double y, double z)
+        {
+            int bx = (int)Math.Floor(x);
+            int by = (int)Math.Floor(y);
+            int bz = (int)Math.Floor(z);
+            long now = Environment.TickCount64;
+
+            // Tag a 3x3x3 block neighborhood — the VS sound system can spawn
+            // break/place sounds at the block center while the player click
+            // hits an adjacent face; this avoids edge misses without going wider.
+            for (int dx = -1; dx <= 1; dx++)
+            for (int dy = -1; dy <= 1; dy++)
+            for (int dz = -1; dz <= 1; dz++)
+            {
+                _localPlayerOcclusionSkip[PackBlockKey(bx + dx, by + dy, bz + dz)] = now;
+            }
+
+            // Opportunistic prune.
+            if (_localPlayerOcclusionSkip.Count > OCCLUSION_SKIP_MAX)
+                PruneOcclusionSkip(now);
+        }
+
+        private static void PruneOcclusionSkip(long now)
+        {
+            List<long> stale = null;
+            foreach (var kv in _localPlayerOcclusionSkip)
+            {
+                if (now - kv.Value > OCCLUSION_SKIP_TTL_MS)
+                {
+                    if (stale == null) stale = new List<long>();
+                    stale.Add(kv.Key);
+                }
+            }
+            if (stale != null) foreach (var k in stale) _localPlayerOcclusionSkip.Remove(k);
+        }
+
+        /// <summary>
+        /// Returns true if this world position falls inside a recently tagged
+        /// local-player sound block. Used by AudioPhysicsSystem to skip occlusion.
+        /// </summary>
+        public static bool IsLocalPlayerSoundPosition(Vec3d pos)
+        {
+            if (pos == null || _localPlayerOcclusionSkip.Count == 0) return false;
+            int bx = (int)Math.Floor(pos.X);
+            int by = (int)Math.Floor(pos.Y);
+            int bz = (int)Math.Floor(pos.Z);
+            long now = Environment.TickCount64;
+            long key = PackBlockKey(bx, by, bz);
+            if (_localPlayerOcclusionSkip.TryGetValue(key, out long stamp))
+            {
+                if (now - stamp <= OCCLUSION_SKIP_TTL_MS) return true;
+                _localPlayerOcclusionSkip.Remove(key);
+            }
+            return false;
+        }
+
         /// <summary>
         /// Record that a sound was spawned at the local player entity position.
         /// Called from PlaySoundAt(Entity) / PlaySoundAt(IPlayer) prefix patches.
@@ -632,6 +716,11 @@ namespace soundphysicsadapted
                 _localPlayerSoundPositions.RemoveAt(0);
 
             _localPlayerSoundPositions.Add((x, y, z, now));
+
+            // Also tag for occlusion-skip — covers entity-position sounds the
+            // local player emits (footsteps, swing, voice) at any distance from
+            // the listener (e.g. third-person eye offset edge cases).
+            MarkLocalPlayerSoundPosition(x, y, z);
         }
 
         /// <summary>
@@ -736,6 +825,23 @@ namespace soundphysicsadapted
                     patched++;
                 }
 
+                // World-pos overload: (AssetLocation, double x, double y, double z, IPlayer dualCallByPlayer, bool, float, float)
+                // Block break/place sounds use this with dualCallByPlayer = local player.
+                // Tag the world position for occlusion-skip so player-originated block
+                // sounds are never muffled (only reverb applies).
+                var method5 = clientMainType.GetMethod("PlaySoundAt",
+                    BindingFlags.Public | BindingFlags.Instance,
+                    null,
+                    new Type[] { typeof(AssetLocation), typeof(double), typeof(double), typeof(double), typeof(IPlayer), typeof(bool), typeof(float), typeof(float) },
+                    null);
+                if (method5 != null)
+                {
+                    var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundAtWorldPosDualPrefix",
+                        BindingFlags.Static | BindingFlags.Public);
+                    harmony.Patch(method5, prefix: new HarmonyMethod(prefix));
+                    patched++;
+                }
+
                 api.Logger.Notification($"[SoundPhysicsAdapted] Patched {patched} PlaySoundAt/For overloads [LOCAL PLAYER DETECT]");
             }
             catch (Exception ex)
@@ -834,6 +940,33 @@ namespace soundphysicsadapted
                 float z = (float)entity.Pos.Z;
 
                 EnqueueLocalPlayerSoundPosition(x, y, z);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// PREFIX for PlaySoundAt(AssetLocation, double x, double y, double z, IPlayer dualCallByPlayer, bool, float, float).
+        /// This is the world-position overload used by block-break, block-place,
+        /// and other player-triggered world sounds. When dualCallByPlayer ==
+        /// local player, the local client is the originator (server skips it),
+        /// so we tag the world position for occlusion-skip.
+        ///
+        /// We do NOT enqueue the float fingerprint here because this overload
+        /// uses arbitrary world coordinates, not entity positions \u2014 mono downmix
+        /// (stereo panning) is still desirable for distant block sounds.
+        ///
+        /// Harmony: __0 = AssetLocation, __1..__3 = doubles, __4 = IPlayer dualCallByPlayer.
+        /// </summary>
+        public static void PlaySoundAtWorldPosDualPrefix(
+            AssetLocation __0, double __1, double __2, double __3, IPlayer __4)
+        {
+            try
+            {
+                if (__4 == null || cachedApi == null) return;
+                var localPlayer = cachedApi.World?.Player;
+                if (localPlayer == null || __4 != localPlayer) return;
+
+                MarkLocalPlayerSoundPosition(__1, __2, __3);
             }
             catch { }
         }
