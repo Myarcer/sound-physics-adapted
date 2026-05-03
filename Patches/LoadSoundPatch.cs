@@ -653,15 +653,18 @@ namespace soundphysicsadapted
             int bz = (int)Math.Floor(z);
             long now = Environment.TickCount64;
 
-            // Tag a 3x3x3 block neighborhood — the VS sound system can spawn
-            // break/place sounds at the block center while the player click
-            // hits an adjacent face; this avoids edge misses without going wider.
-            for (int dx = -1; dx <= 1; dx++)
-            for (int dy = -1; dy <= 1; dy++)
-            for (int dz = -1; dz <= 1; dz++)
-            {
-                _localPlayerOcclusionSkip[PackBlockKey(bx + dx, by + dy, bz + dz)] = now;
-            }
+            // SINGLE-BLOCK tagging only. We never tag neighbors — otherwise
+            // breaking a block next to a wall would mark the wall as
+            // "local-player-originated" and any unrelated sound there
+            // (e.g. another player standing at that wall) would skip
+            // occlusion for up to TTL ms.
+            //
+            // Single-block is sufficient because:
+            //   - Block break/place sounds: position = (bx+0.5, by+0.5+yOff, bz+0.5)
+            //     → floor() = exact tagged key.
+            //   - Entity sounds (footsteps/swing/voice): position computed from
+            //     entity.Pos with the same double→floor pipeline on both ends.
+            _localPlayerOcclusionSkip[PackBlockKey(bx, by, bz)] = now;
 
             // Opportunistic prune.
             if (_localPlayerOcclusionSkip.Count > OCCLUSION_SKIP_MAX)
