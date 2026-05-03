@@ -290,14 +290,21 @@ namespace soundphysicsadapted.Patches
 
                 remote.Sound.SetPosition(remote.CurrentX, remote.CurrentY, remote.CurrentZ);
 
-                // Apply vanilla resonator volume curve: 1/log10(max(1, dist*0.7)) - 0.8
+                // Disable OpenAL's own distance attenuation — same as placed resonator.
+                // Without this, OpenAL (rolloff=1.0) and SetVolume both attenuate → double dip.
+                int remoteSrcId = AudioRenderer.GetSourceId(remote.Sound);
+                if (remoteSrcId > 0 && EfxHelper.IsSourceManagementAvailable)
+                {
+                    EfxHelper.ALSetSourceRolloff(remoteSrcId, 0f);
+                    EfxHelper.ALSetSourceMaxDistance(remoteSrcId, 2000f);
+                    EfxHelper.ALSetSourceRefDistance(remoteSrcId, 1f);
+                }
+
+                // Use the same formula as placed/carried resonator so range is consistent.
                 float dist = GameMath.Sqrt(
                     (float)listenerPos.SquareDistanceTo(remote.CurrentX, remote.CurrentY, remote.CurrentZ)
                 );
-                float volume = GameMath.Clamp(
-                    1f / (float)Math.Log10(Math.Max(1, dist * 0.7f)) - 0.8f,
-                    0f, 1f
-                );
+                float volume = ResonatorPatches.CalculateResonatorDistanceAttenuation(dist);
                 remote.Sound.SetVolume(volume);
 
                 // Apply glitch pitch (same as vanilla resonator)

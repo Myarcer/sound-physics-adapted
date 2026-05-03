@@ -522,7 +522,7 @@ namespace soundphysicsadapted.Patches
             ManageVanillaMusicSuppression(capi);
         }
 
-        private static float CalculateResonatorDistanceAttenuation(float dist)
+        public static float CalculateResonatorDistanceAttenuation(float dist)
         {
             if (dist <= RESONATOR_FULL_VOLUME_RADIUS)
             {
