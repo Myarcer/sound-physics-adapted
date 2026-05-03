@@ -76,9 +76,12 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Check if a block has MULTIPLE solid faces (>= 2).
-        /// Catches stairs (solid back/bottom), etc.
-        /// Slabs (1 solid face) will fail this and fall back to accurate AABB raycasting.
+        /// Check if a block has MULTIPLE solid faces (>= 3).
+        /// Catches stairs (solid back/bottom/top), thick blocks, etc.
+        /// Slabs (exactly 2 solid faces: UP+DOWN) will fail this and fall back to
+        /// accurate AABB raycasting. The original comment said "slabs have 1 solid face"
+        /// but VS marks both the top and bottom faces of a slab as SideSolid, giving count=2.
+        /// With threshold ≥3, slab rays correctly miss when above the collision geometry.
         /// Excludes fences (no fully solid faces), flowers, grass.
         /// Used by DDA where ray is blocked by any substantial surface,
         /// not just perfect cubes. Cached per block ID for performance.
@@ -111,7 +114,7 @@ namespace soundphysicsadapted
             if (block.SideSolid[BlockFacing.indexSOUTH]) count++;
             if (block.SideSolid[BlockFacing.indexEAST]) count++;
             if (block.SideSolid[BlockFacing.indexWEST]) count++;
-            return count >= 2;
+            return count >= 3;
         }
 
         /// <summary>
