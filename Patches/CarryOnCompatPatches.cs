@@ -77,6 +77,17 @@ namespace soundphysicsadapted.Patches
         private static ILoadedSound pendingBoomboxSound = null;
 
         /// <summary>
+        /// The resonator MusicTrack object captured during pre-steal.
+        /// Used to suppress vanilla music while the boombox is being carried.
+        /// </summary>
+        private static object pendingBoomboxTrack = null;
+
+        /// <summary>
+        /// Active carried boombox MusicTrack placeholder.
+        /// </summary>
+        private static object activeBoomboxTrack = null;
+
+        /// <summary>
         /// Position of the resonator we pre-stole from.
         /// </summary>
         private static BlockPos pendingPickupPos = null;
@@ -118,6 +129,32 @@ namespace soundphysicsadapted.Patches
         /// Last computed sound position (cached for sync packets).
         /// </summary>
         private static float lastSoundX, lastSoundY, lastSoundZ;
+
+        /// <summary>
+        /// Key used to register the carried boombox with resonator music suppression.
+        /// </summary>
+        private const string BOOMBOX_SUPPRESSION_KEY = "carryon-boombox";
+
+        #endregion
+
+        #region Public Queries
+
+        /// <summary>
+        /// Returns true if a pre-steal or active boombox is in progress for the given position.
+        /// Used by OnClientTickPostfix to avoid false "track finished naturally" detection
+        /// when the sound field was nulled by pre-steal rather than actual track completion.
+        /// </summary>
+        public static bool HasPendingOrActiveSteal(BlockPos pos)
+        {
+            // Active boombox — sound is being carried
+            if (activeBoomboxSound != null) return true;
+
+            // Pending pre-steal for this specific position
+            if (pendingBoomboxSound != null && pendingPickupPos != null && pos.Equals(pendingPickupPos))
+                return true;
+
+            return false;
+        }
 
         #endregion
 
@@ -280,6 +317,10 @@ namespace soundphysicsadapted.Patches
         {
             if (capi == null) return;
 
+            // Cooldown after placement — don't immediately re-steal the block we just placed
+            if (lastPlacementTimeMs > 0 && capi.World.ElapsedMilliseconds - lastPlacementTimeMs < 2000)
+                return;
+
             var sel = player.CurrentBlockSelection;
             if (sel == null) return;
 
@@ -302,6 +343,7 @@ namespace soundphysicsadapted.Patches
                 var track = trackField.GetValue(be);
                 if (track != null)
                 {
+                    pendingBoomboxTrack = track;
                     soundField.SetValue(track, null);
                     if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
                         SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Cleared sound field from track to prevent disposal");
@@ -313,6 +355,18 @@ namespace soundphysicsadapted.Patches
             pendingStolenTimeMs = capi.World.ElapsedMilliseconds;
             pendingSourceResonator = be;
             wasPlayingWhenPickedUp = sound.IsPlaying;
+
+            // Register the captured track for vanilla-music suppression IMMEDIATELY at
+            // pre-steal time. Carry On's SetBlock(0,pos) will unload the resonator block
+            // entity, and vanilla cleanup can call StopMusic which removes the resonator's
+            // entry from activeResonatorTracksByPos. If that empties the dict before our
+            // boombox activation tick runs, ResonatorPatches releases MusicEngine.currentTrack
+            // and vanilla music starts in the gap. Registering here keeps the dict non-empty
+            // across the handoff. CancelPreSteal / OnResonatorPlacedOrDropped unregister it.
+            if (pendingBoomboxTrack != null)
+            {
+                ResonatorPatches.RegisterExternalMusicTrack(BOOMBOX_SUPPRESSION_KEY, pendingBoomboxTrack);
+            }
 
             // Capture the track asset path for multiplayer sync.
             // Remote clients need this to create their own ILoadedSound.
@@ -327,7 +381,7 @@ namespace soundphysicsadapted.Patches
             catch { }
 
             if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Sound pre-stolen successfully, wasPlaying={wasPlayingWhenPickedUp}");
+                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Sound pre-stolen successfully, wasPlaying={wasPlayingWhenPickedUp}, trackLocation={activeBoomboxTrackLocation ?? "NULL"}");
         }
 
         /// <summary>
@@ -337,6 +391,10 @@ namespace soundphysicsadapted.Patches
         private static void CancelPreSteal()
         {
             if (pendingBoomboxSound == null) return;
+
+            // Always release the suppression key registered at pre-steal time, otherwise
+            // we'd leak a stale track reference and keep vanilla music suppressed.
+            ResonatorPatches.UnregisterExternalMusicTrack(BOOMBOX_SUPPRESSION_KEY, capi);
 
             if (!pendingBoomboxSound.IsDisposed)
             {
@@ -392,6 +450,7 @@ namespace soundphysicsadapted.Patches
             }
 
             pendingBoomboxSound = null;
+            pendingBoomboxTrack = null;
             pendingPickupPos = null;
             pendingStolenTimeMs = 0;
             pendingSourceResonator = null;
@@ -482,11 +541,67 @@ namespace soundphysicsadapted.Patches
             // Check if we have a pre-stolen sound from the tick-based detection
             if (pendingBoomboxSound != null && !pendingBoomboxSound.IsDisposed)
             {
+                // Verify the block we stole from was the one Carry On actually picked up.
+                // Carry On removes the carried block via SetBlock(0, pos), so the slot at
+                // pendingPickupPos must be empty (or no longer a resonator) by now. If a
+                // resonator block is STILL there, the player's crosshair drifted to a
+                // different (playing) resonator during the carry animation while actually
+                // picking up a SILENT one nearby — we stole from the wrong block. Cancel
+                // the steal so the silent pickup stays silent and the playing resonator
+                // keeps playing.
+                bool stoleFromWrongBlock = false;
+                if (capi != null && pendingPickupPos != null)
+                {
+                    try
+                    {
+                        var blockAtPickup = capi.World.BlockAccessor.GetBlock(pendingPickupPos);
+                        if (blockAtPickup != null && blockAtPickup.Id != 0 &&
+                            (blockAtPickup.Code?.Path?.Contains("resonator") ?? false))
+                        {
+                            stoleFromWrongBlock = true;
+                        }
+                    }
+                    catch { }
+                }
+
+                if (stoleFromWrongBlock)
+                {
+                    if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Pre-stole from wrong resonator (block at {pendingPickupPos} still present) — returning sound, no boombox");
+                    CancelPreSteal();
+                    return;
+                }
+
                 activeBoomboxSound = pendingBoomboxSound;
+                activeBoomboxTrack = pendingBoomboxTrack;
                 originalResonatorPos = pendingPickupPos?.Copy();
+
+                // Pre-steal clears track.Sound to protect the audio from block cleanup disposal.
+                // Once the carried boombox is active, restore that link so MusicEngine.currentTrack
+                // points at a live track+sound pair and can suppress vanilla music correctly.
+                if (activeBoomboxTrack != null && activeBoomboxSound != null)
+                {
+                    try
+                    {
+                        ResonatorReflection.SoundField?.SetValue(activeBoomboxTrack, activeBoomboxSound);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Failed to restore sound onto carried track: {ex.Message}");
+                    }
+                }
+
+                // Suppression key was already registered at pre-steal time.
+                // Refresh in case the track reference changed.
+                if (activeBoomboxTrack != null)
+                {
+                    ResonatorPatches.RegisterExternalMusicTrack(BOOMBOX_SUPPRESSION_KEY, activeBoomboxTrack);
+                }
 
                 // Clear pending state
                 pendingBoomboxSound = null;
+                pendingBoomboxTrack = null;
                 pendingPickupPos = null;
                 pendingStolenTimeMs = 0;
                 pendingSourceResonator = null;
@@ -503,25 +618,58 @@ namespace soundphysicsadapted.Patches
         }
 
         /// <summary>
+        /// Timestamp of last placement — prevents immediate re-steal of freshly placed block.
+        /// </summary>
+        private static long lastPlacementTimeMs = 0;
+
+        /// <summary>
         /// Called when player places or drops the resonator.
         /// Sound is disposed here; vanilla StartMusic will create a fresh sound for the placed block.
         /// </summary>
         private static void OnResonatorPlacedOrDropped()
         {
+            if (capi != null)
+                lastPlacementTimeMs = capi.World.ElapsedMilliseconds;
+
+                float finalPlaybackPosition = 0f;
+                if (activeBoomboxSound != null && !activeBoomboxSound.IsDisposed)
+                {
+                    finalPlaybackPosition = activeBoomboxSound.PlaybackPosition;
+                }
+
+                var player = capi?.World?.Player?.Entity;
+                if (player != null && finalPlaybackPosition > 0f)
+                {
+                    UpdateLocalCarriedStackPlaybackPos(player, finalPlaybackPosition);
+                }
+
             StopBoomboxTick();
 
             // Notify remote clients to stop their local boombox sound
-            SendBoomboxStopPacket();
+                SendBoomboxStopPacket(finalPlaybackPosition);
+
+            ResonatorPatches.UnregisterExternalMusicTrack(BOOMBOX_SUPPRESSION_KEY, capi);
 
             if (activeBoomboxSound != null && !activeBoomboxSound.IsDisposed)
             {
                 if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
                     SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox deactivated - disposing carried sound, vanilla will restart");
+
+                if (activeBoomboxTrack != null)
+                {
+                    try
+                    {
+                        ResonatorReflection.SoundField?.SetValue(activeBoomboxTrack, null);
+                    }
+                    catch { }
+                }
+
                 activeBoomboxSound.Stop();
                 activeBoomboxSound.Dispose();
             }
 
             activeBoomboxSound = null;
+            activeBoomboxTrack = null;
             originalResonatorPos = null;
             wasPlayingWhenPickedUp = false;
             activeBoomboxTrackLocation = null;
@@ -530,7 +678,7 @@ namespace soundphysicsadapted.Patches
         /// <summary>
         /// Send a stop packet to server so remote clients dispose their boombox sound for us.
         /// </summary>
-        private static void SendBoomboxStopPacket()
+        private static void SendBoomboxStopPacket(float playbackPosition)
         {
             try
             {
@@ -540,6 +688,7 @@ namespace soundphysicsadapted.Patches
                 SoundPhysicsAdaptedModSystem.ClientChannel?.SendPacket(new BoomboxSyncPacket
                 {
                     CarrierEntityId = player.EntityId,
+                    PlaybackPosition = playbackPosition,
                     IsPlaying = false
                 });
             }
@@ -578,6 +727,8 @@ namespace soundphysicsadapted.Patches
         {
             if (activeBoomboxSound == null || activeBoomboxSound.IsDisposed)
             {
+                ResonatorPatches.UnregisterExternalMusicTrack(BOOMBOX_SUPPRESSION_KEY, capi);
+                activeBoomboxTrack = null;
                 StopBoomboxTick();
                 return;
             }
@@ -623,6 +774,10 @@ namespace soundphysicsadapted.Patches
             lastSoundY = y;
             lastSoundZ = z;
 
+            // Carried boombox is attached to the player, so it is always fully audible while active.
+            // Feed that into the same MusicEngine suppression path as placed resonators.
+            ResonatorPatches.ReportExternalMusicSuppression(capi, 1f);
+
             // Update AudioRenderer tracking for occlusion system
             var soundPos = new Vec3d(x, y, z);
             AudioRenderer.UpdateStoredPosition(activeBoomboxSound, soundPos);
@@ -633,24 +788,102 @@ namespace soundphysicsadapted.Patches
 
             // Send sync packet to server for relay to nearby players (every 500ms)
             long now = capi.World.ElapsedMilliseconds;
-            if (now - lastSyncTimeMs >= SYNC_INTERVAL_MS && activeBoomboxTrackLocation != null)
+            if (now - lastSyncTimeMs >= SYNC_INTERVAL_MS)
             {
                 lastSyncTimeMs = now;
-                try
+
+                if (activeBoomboxTrackLocation == null)
                 {
-                    SoundPhysicsAdaptedModSystem.ClientChannel?.SendPacket(new BoomboxSyncPacket
-                    {
-                        CarrierEntityId = player.EntityId,
-                        TrackLocation = activeBoomboxTrackLocation,
-                        PlaybackPosition = activeBoomboxSound.PlaybackPosition,
-                        IsPlaying = true,
-                        PosX = x,
-                        PosY = y,
-                        PosZ = z
-                    });
+                    capi.Logger.Debug("[SoundPhysicsAdapted] [Boombox] SYNC SKIPPED: activeBoomboxTrackLocation is NULL — remote players won't hear this");
                 }
-                catch { }
+                else if (SoundPhysicsAdaptedModSystem.ClientChannel == null)
+                {
+                    capi.Logger.Debug("[SoundPhysicsAdapted] [Boombox] SYNC SKIPPED: ClientChannel is NULL");
+                }
+                else
+                {
+                    try
+                    {
+                        SoundPhysicsAdaptedModSystem.ClientChannel.SendPacket(new BoomboxSyncPacket
+                        {
+                            CarrierEntityId = player.EntityId,
+                            TrackLocation = activeBoomboxTrackLocation,
+                            PlaybackPosition = activeBoomboxSound.PlaybackPosition,
+                            IsPlaying = true,
+                            PosX = x,
+                            PosY = y,
+                            PosZ = z
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        capi.Logger.Debug($"[SoundPhysicsAdapted] [Boombox] SYNC FAILED: {ex.Message}");
+                    }
+                }
+
+                // Also stamp the carrier's LOCAL carried-stack with the current playback position.
+                // The server already does this on its copy via UpdateCarrierItemStackPosition, but
+                // when CarryOn places the resonator the placement is client-predicted from the
+                // local stack. Without this, the placed BlockEntityResonator restores the pickup-
+                // moment savedPlaybackPos and the music rewinds.
+                UpdateLocalCarriedStackPlaybackPos(player, activeBoomboxSound.PlaybackPosition);
             }
+        }
+
+        /// <summary>
+        /// Mirror of server-side UpdateCarrierItemStackPosition for the local carrier client.
+        /// Writes the current PlaybackPosition into the WatchedAttributes "carryon:Carried" tree
+        /// (Hands or Back slot) so a client-predicted CarryOn place restores from a fresh stack.
+        /// </summary>
+        private static void UpdateLocalCarriedStackPlaybackPos(Entity carrier, float playbackPosition)
+        {
+            if (carrier == null) return;
+            try
+            {
+                var carriedAttr = carrier.WatchedAttributes.GetTreeAttribute(CARRYON_ATTRIBUTE_ID);
+                var carriedDataAttr = carrier.Attributes.GetTreeAttribute(CARRYON_ATTRIBUTE_ID);
+                if (carriedAttr == null && carriedDataAttr == null) return;
+
+                bool updated = false;
+                if (StampSlot(carrier, carriedAttr, carriedDataAttr, "Hands", playbackPosition)) updated = true;
+                else if (StampSlot(carrier, carriedAttr, carriedDataAttr, "Back", playbackPosition)) updated = true;
+
+                if (updated)
+                {
+                    carrier.WatchedAttributes.MarkPathDirty(CARRYON_ATTRIBUTE_ID);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: local stack stamp failed: {ex.Message}");
+            }
+        }
+
+        private static bool StampSlot(Entity carrier, ITreeAttribute carriedAttr, ITreeAttribute carriedDataAttr, string slotName, float playbackPosition)
+        {
+            var slotAttr = carriedAttr?.GetTreeAttribute(slotName);
+            if (slotAttr == null) return false;
+
+            var stack = slotAttr.GetItemstack("Stack");
+            if (stack == null) return false;
+
+            stack.ResolveBlockOrItem(carrier.World);
+            if (stack.Block == null || !(stack.Block.Code?.Path?.Contains("resonator") == true)) return false;
+
+            stack.Attributes.SetFloat("savedPlaybackPos", playbackPosition);
+            stack.Attributes.SetBool("isPaused", false);
+            slotAttr.SetItemstack("Stack", stack);
+
+            var dataSlotAttr = carriedDataAttr?.GetTreeAttribute(slotName);
+            var blockEntityData = dataSlotAttr?.GetTreeAttribute("Data");
+            if (blockEntityData != null)
+            {
+                blockEntityData.SetFloat("savedPlaybackPos", playbackPosition);
+                blockEntityData.SetBool("isPaused", false);
+            }
+
+            return true;
         }
 
         #endregion
@@ -732,6 +965,15 @@ namespace soundphysicsadapted.Patches
 
             if (activeBoomboxSound != null && !activeBoomboxSound.IsDisposed)
             {
+                if (activeBoomboxTrack != null)
+                {
+                    try
+                    {
+                        ResonatorReflection.SoundField?.SetValue(activeBoomboxTrack, null);
+                    }
+                    catch { }
+                }
+
                 activeBoomboxSound.Stop();
                 activeBoomboxSound.Dispose();
             }
@@ -744,6 +986,8 @@ namespace soundphysicsadapted.Patches
 
             activeBoomboxSound = null;
             pendingBoomboxSound = null;
+            activeBoomboxTrack = null;
+            pendingBoomboxTrack = null;
             pendingPickupPos = null;
             pendingStolenTimeMs = 0;
             pendingSourceResonator = null;
@@ -751,6 +995,8 @@ namespace soundphysicsadapted.Patches
             currentCarrySlot = CarrySlotType.None;
             activeBoomboxTrackLocation = null;
             lastSyncTimeMs = 0;
+            lastPlacementTimeMs = 0;
+            ResonatorPatches.UnregisterExternalMusicTrack(BOOMBOX_SUPPRESSION_KEY, capi);
             capi = null;
         }
 

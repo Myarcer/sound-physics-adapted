@@ -715,18 +715,20 @@ namespace soundphysicsadapted.Patches
         }
 
         /// <summary>
-        /// Read current rain intensity from VS climate data.
-        /// Uses raw Rainfall from clientClimateCond (0-1), independent of enclosure.
-        /// Previous approach of reconstructing from curRainVolume + loss was broken:
-        /// loss jumps instantly but volume smooths slowly → overshoot → rain gets louder indoors.
+        /// Read current rain intensity from VS weather state.
+        /// Mirrors vanilla's rain-track gate before roomVolumePitchLoss is applied:
+        /// precipitation type + snow-threshold attenuation + raw rainfall.
+        /// This keeps rain silent during snow instead of treating all precipitation
+        /// as plain rainfall.
         /// </summary>
         public static float ReadRainIntensity()
         {
-            // Read raw Rainfall from weatherSys.clientClimateCond
-            float rainfall = ReadClimateRainfall();
-            if (rainfall > 0f) return rainfall;
+            if (TryReadVanillaRainIntensity(out float rainIntensity))
+            {
+                return rainIntensity;
+            }
 
-            // Fallback: use VS's smoothed volumes (less accurate)
+            // Fallback: use VS's smoothed volumes when reflection data is unavailable.
             float leafy = ReadFloatField(_curRainVolumeLeafyField, "curRainVolumeLeafy");
             float leafless = ReadFloatField(_curRainVolumeLeaflessField, "curRainVolumeLeafless");
             return Math.Max(leafy, leafless);
@@ -969,7 +971,61 @@ namespace soundphysicsadapted.Patches
             }
         }
 
-        // ── Climate data access (raw values, independent of enclosure) ──
+        // ── Climate/weather data access (raw values, independent of enclosure) ──
+
+        /// <summary>
+        /// Reproduces vanilla WeatherSimulationSound rain gating without room loss.
+        /// Returns false only if required reflected state could not be read.
+        /// </summary>
+        private static bool TryReadVanillaRainIntensity(out float rainIntensity)
+        {
+            rainIntensity = 0f;
+
+            object weatherSys = ReadWeatherSys();
+            if (weatherSys == null) return false;
+
+            object climateCond = ReadMemberObject(weatherSys, "clientClimateCond");
+            object weatherData = ReadMemberObject(weatherSys, "BlendedWeatherData");
+            if (climateCond == null || weatherData == null) return false;
+
+            float rainfall = ReadClimateRainfall();
+            if (rainfall <= 0f)
+            {
+                return true;
+            }
+
+            if (!TryReadFloatMember(climateCond, "Temperature", out float temperature))
+            {
+                return false;
+            }
+
+            if (!TryReadFloatMember(weatherData, "snowThresholdTemp", out float snowThresholdTemp))
+            {
+                return false;
+            }
+
+            string precTypeName = ReadMemberObject(weatherData, "BlendedPrecType")?.ToString();
+            if (string.Equals(precTypeName, "Auto", StringComparison.Ordinal))
+            {
+                precTypeName = temperature < snowThresholdTemp ? "Snow" : "Rain";
+            }
+
+            if (string.Equals(precTypeName, "Hail", StringComparison.Ordinal))
+            {
+                rainIntensity = 0f;
+                return true;
+            }
+
+            if (string.Equals(precTypeName, "Rain", StringComparison.Ordinal) || temperature < snowThresholdTemp)
+            {
+                rainIntensity = GameMath.Clamp(
+                    rainfall * 2f - Math.Max(0f, 2f * (snowThresholdTemp - temperature)),
+                    0f,
+                    1f);
+            }
+
+            return true;
+        }
 
         /// <summary>
         /// Read raw Rainfall from weatherSys.clientClimateCond.
@@ -977,35 +1033,17 @@ namespace soundphysicsadapted.Patches
         /// </summary>
         private static float ReadClimateRainfall()
         {
-            if (_weatherSysField == null || _weatherSimInstance == null) return 0f;
-
             try
             {
-                var weatherSys = _weatherSysField.GetValue(_weatherSimInstance);
+                var weatherSys = ReadWeatherSys();
                 if (weatherSys == null) return 0f;
 
-                // Access clientClimateCond (public field on WeatherSystemClient)
-                var climateField = weatherSys.GetType().GetField("clientClimateCond",
-                    BindingFlags.Public | BindingFlags.Instance);
-                if (climateField == null) return 0f;
-
-                var climateCond = climateField.GetValue(weatherSys);
+                var climateCond = ReadMemberObject(weatherSys, "clientClimateCond");
                 if (climateCond == null) return 0f;
 
-                // Read Rainfall field (public float, 0-1)
-                var rainfallField = climateCond.GetType().GetField("Rainfall",
-                    BindingFlags.Public | BindingFlags.Instance);
-                if (rainfallField != null)
+                if (TryReadFloatMember(climateCond, "Rainfall", out float rainfall))
                 {
-                    return Convert.ToSingle(rainfallField.GetValue(climateCond));
-                }
-
-                // Try as property fallback
-                var rainfallProp = climateCond.GetType().GetProperty("Rainfall",
-                    BindingFlags.Public | BindingFlags.Instance);
-                if (rainfallProp != null)
-                {
-                    return Convert.ToSingle(rainfallProp.GetValue(climateCond));
+                    return rainfall;
                 }
             }
             catch (Exception ex)
@@ -1017,6 +1055,65 @@ namespace soundphysicsadapted.Patches
         }
 
         // ── Private helpers ──
+
+        private static object ReadWeatherSys()
+        {
+            if (_weatherSysField == null || _weatherSimInstance == null) return null;
+
+            try
+            {
+                return _weatherSysField.GetValue(_weatherSimInstance);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static object ReadMemberObject(object instance, string name)
+        {
+            if (instance == null) return null;
+
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+
+            try
+            {
+                var field = instance.GetType().GetField(name, flags);
+                if (field != null)
+                {
+                    return field.GetValue(instance);
+                }
+
+                var prop = instance.GetType().GetProperty(name, flags);
+                if (prop != null)
+                {
+                    return prop.GetValue(instance);
+                }
+            }
+            catch
+            {
+                // Best-effort reflection helper.
+            }
+
+            return null;
+        }
+
+        private static bool TryReadFloatMember(object instance, string name, out float value)
+        {
+            value = 0f;
+            object memberValue = ReadMemberObject(instance, name);
+            if (memberValue == null) return false;
+
+            try
+            {
+                value = Convert.ToSingle(memberValue);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
         private static float ReadFloatField(FieldInfo field, string name)
         {

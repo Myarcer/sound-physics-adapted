@@ -452,6 +452,109 @@ namespace soundphysicsadapted
             }
         }
 
+        // Track which sourceIds we've already applied the distance model to,
+        // so re-attaches (e.g., after underwater state change) don't double-multiply.
+        // OpenAL recycles source IDs, so the entry is overwritten naturally on reuse.
+        private static readonly Dictionary<int, int> _distanceModelApplied = new Dictionary<int, int>();
+        private static int _distanceModelGen = 0;
+
+        /// <summary>
+        /// Apply per-source distance attenuation overrides:
+        ///  - SoundRangeMultiplier → AL_MAX_DISTANCE multiplier
+        ///  - DistanceRolloffFactor → AL_ROLLOFF_FACTOR multiplier
+        ///  - AirAbsorptionFactor → AL_AIR_ABSORPTION_FACTOR (EFX, 0 = vanilla)
+        /// Skips music sounds when DistanceModelExcludeMusic is true.
+        /// Idempotent per-source: only applies once per Start() to avoid stacking.
+        /// </summary>
+        private static void ApplyDistanceModel(ILoadedSound sound, int sourceId, string soundName)
+        {
+            try
+            {
+                if (sourceId <= 0) return;
+
+                var config = SoundPhysicsAdaptedModSystem.Config;
+                if (config == null || !config.Enabled) return;
+                if (!config.EnableDistanceModelOverrides) return;
+
+                // Filter by sound type — music tracks are typically non-positional
+                // or pre-tuned, leave them alone if user prefers.
+                if (config.DistanceModelExcludeMusic)
+                {
+                    var stype = sound?.Params?.SoundType ?? EnumSoundType.Sound;
+                    if (stype == EnumSoundType.Music || stype == EnumSoundType.MusicGlitchunaffected)
+                        return;
+                }
+
+                // Weather sounds (thunder, rain) use rolloff=0 and manage their own distance
+                // model entirely. Air absorption must NOT be applied — thunder sources sit
+                // 300-1000 blocks away in world space, so factor=1.0 would kill all HF content,
+                // leaving pure bass at full volume (the "bass-boosted" distortion).
+                {
+                    var stype = sound?.Params?.SoundType ?? EnumSoundType.Sound;
+                    if (stype == EnumSoundType.Weather)
+                        return;
+                }
+
+                // De-dup against re-attachments / our own SoundStartPostfix double-fire.
+                // Generation counter rolls every ~1B starts to avoid pathological stale state.
+                int gen = _distanceModelGen;
+                if (_distanceModelApplied.TryGetValue(sourceId, out int prevGen) && prevGen == gen)
+                    return;
+                _distanceModelApplied[sourceId] = gen;
+
+                if (!EfxHelper.IsAvailable) return;
+
+                // Range multiplier — affects AL_MAX_DISTANCE.
+                // VS sets MaxDistance = SoundParams.Range when starting the source.
+                if (config.SoundRangeMultiplier > 0f &&
+                    Math.Abs(config.SoundRangeMultiplier - 1.0f) > 0.001f)
+                {
+                    float curMax = EfxHelper.ALGetSourceMaxDistance(sourceId);
+                    if (curMax > 0f && !float.IsNaN(curMax) && !float.IsInfinity(curMax))
+                    {
+                        float newMax = curMax * config.SoundRangeMultiplier;
+                        // Clamp to a sane upper bound — OpenAL accepts huge values but
+                        // they cause voice contention and stress the mixer.
+                        if (newMax > 4096f) newMax = 4096f;
+                        EfxHelper.ALSetSourceMaxDistance(sourceId, newMax);
+                    }
+                }
+
+                // Rolloff multiplier — affects AL_ROLLOFF_FACTOR (curve steepness).
+                if (config.DistanceRolloffFactor > 0f &&
+                    Math.Abs(config.DistanceRolloffFactor - 1.0f) > 0.001f)
+                {
+                    float curRoll = EfxHelper.ALGetSourceRolloff(sourceId);
+                    if (curRoll > 0f && !float.IsNaN(curRoll) && !float.IsInfinity(curRoll))
+                    {
+                        float newRoll = curRoll * config.DistanceRolloffFactor;
+                        if (newRoll < 0f) newRoll = 0f;
+                        if (newRoll > 10f) newRoll = 10f;
+                        EfxHelper.ALSetSourceRolloff(sourceId, newRoll);
+                    }
+                }
+
+                // Air absorption (EFX). 0 = vanilla. SPR uses ~1.0.
+                // Silently no-ops if the OpenAL binding lacks the enum value.
+                if (config.AirAbsorptionFactor > 0.001f && EfxHelper.IsAirAbsorptionSupported)
+                {
+                    EfxHelper.ALSetSourceAirAbsorption(sourceId, config.AirAbsorptionFactor);
+                }
+
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                {
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"[DistModel] {soundName} src={sourceId} rangeMul={config.SoundRangeMultiplier:F2} " +
+                        $"rolloffMul={config.DistanceRolloffFactor:F2} airAbs={config.AirAbsorptionFactor:F2}");
+                }
+            }
+            catch (Exception ex)
+            {
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog($"ApplyDistanceModel error: {ex.Message}");
+            }
+        }
+
         /// <summary>
         /// UNIVERSAL PREFIX for ClientMain.StartPlaying(AudioData, SoundParams, AssetLocation).
         /// This is the convergence point where BOTH PlaySoundAtInternal and LoadSound paths land.
@@ -515,6 +618,72 @@ namespace soundphysicsadapted
         private const long POSITION_EXPIRY_MS = 2000;
         private const int MAX_POSITION_QUEUE = 32;
 
+        // ---- Local-player occlusion-skip queue (consume-once) ----
+        // When the local player triggers a block break/place/plant sound, we enqueue
+        // the block coordinate here. AudioPhysicsSystem consumes it exactly ONCE on
+        // first detection (setting SoundCacheEntry.IsLocalPlayerSound = true), then
+        // uses that cached flag for the sound's entire lifetime without re-checking.
+        //
+        // Consume-once means:
+        //   - No TTL window that could catch unrelated sounds at the same position
+        //   - Each tagged sound uses exactly one entry
+        //   - Other players' sounds are never tagged (prefix guards dualCallByPlayer == localPlayer)
+        private static readonly List<long> _localPlayerOcclusionSkipQueue = new List<long>();
+        private const int OCCLUSION_SKIP_QUEUE_MAX = 64;
+
+        private static long PackBlockKey(int x, int y, int z)
+        {
+            // 21 bits per axis (-1M..+1M block range, plenty for VS world).
+            return ((long)(x & 0x1FFFFF)) | (((long)(y & 0x1FFFFF)) << 21) | (((long)(z & 0x1FFFFF)) << 42);
+        }
+
+        /// <summary>
+        /// Enqueue a world position as "local-player originated".
+        /// AudioPhysicsSystem calls ConsumeLocalPlayerOcclusionPosition once on first
+        /// detection of the matching sound, then caches the result on SoundCacheEntry.
+        /// </summary>
+        public static void MarkLocalPlayerSoundPosition(double x, double y, double z)
+        {
+            long key = PackBlockKey((int)Math.Floor(x), (int)Math.Floor(y), (int)Math.Floor(z));
+            // Trim oldest entries if the queue grows unexpectedly (e.g. rapid block spam).
+            while (_localPlayerOcclusionSkipQueue.Count >= OCCLUSION_SKIP_QUEUE_MAX)
+                _localPlayerOcclusionSkipQueue.RemoveAt(0);
+            _localPlayerOcclusionSkipQueue.Add(key);
+        }
+
+        /// <summary>
+        /// Non-consuming peek. Returns true if pos matches a queued local-player
+        /// sound block WITHOUT removing the entry. Used by SoundStartPrefix to
+        /// apply filter=1.0 immediately at sound creation, while leaving the entry
+        /// in the queue so the physics tick can later consume it and set
+        /// SoundCacheEntry.IsLocalPlayerSound for longer-lived sounds.
+        /// </summary>
+        public static bool PeekLocalPlayerSoundPosition(Vec3d pos)
+        {
+            if (pos == null || _localPlayerOcclusionSkipQueue.Count == 0) return false;
+            long key = PackBlockKey((int)Math.Floor(pos.X), (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
+            return _localPlayerOcclusionSkipQueue.Contains(key);
+        }
+
+        /// <summary>
+        /// Consume-once check. Returns true and removes the entry if pos matches a
+        /// queued local-player sound block. AudioPhysicsSystem calls this ONCE per
+        /// sound on first detection; the result is cached on SoundCacheEntry for
+        /// that sound's lifetime (no further calls needed for subsequent ticks).
+        /// </summary>
+        public static bool ConsumeLocalPlayerOcclusionPosition(Vec3d pos)
+        {
+            if (pos == null || _localPlayerOcclusionSkipQueue.Count == 0) return false;
+            long key = PackBlockKey((int)Math.Floor(pos.X), (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
+            int idx = _localPlayerOcclusionSkipQueue.IndexOf(key);
+            if (idx >= 0)
+            {
+                _localPlayerOcclusionSkipQueue.RemoveAt(idx);
+                return true;
+            }
+            return false;
+        }
+
         /// <summary>
         /// Record that a sound was spawned at the local player entity position.
         /// Called from PlaySoundAt(Entity) / PlaySoundAt(IPlayer) prefix patches.
@@ -529,6 +698,11 @@ namespace soundphysicsadapted
                 _localPlayerSoundPositions.RemoveAt(0);
 
             _localPlayerSoundPositions.Add((x, y, z, now));
+
+            // Also tag for occlusion-skip — covers entity-position sounds the
+            // local player emits (footsteps, swing, voice) at any distance from
+            // the listener (e.g. third-person eye offset edge cases).
+            MarkLocalPlayerSoundPosition(x, y, z);
         }
 
         /// <summary>
@@ -633,6 +807,82 @@ namespace soundphysicsadapted
                     patched++;
                 }
 
+                // World-pos overload: (AssetLocation, double x, double y, double z, IPlayer dualCallByPlayer, bool, float, float)
+                // Block break/place sounds use this with dualCallByPlayer = local player.
+                // Tag the world position for occlusion-skip so player-originated block
+                // sounds are never muffled (only reverb applies).
+                var method5 = clientMainType.GetMethod("PlaySoundAt",
+                    BindingFlags.Public | BindingFlags.Instance,
+                    null,
+                    new Type[] { typeof(AssetLocation), typeof(double), typeof(double), typeof(double), typeof(IPlayer), typeof(bool), typeof(float), typeof(float) },
+                    null);
+                if (method5 != null)
+                {
+                    var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundAtWorldPosDualPrefix",
+                        BindingFlags.Static | BindingFlags.Public);
+                    harmony.Patch(method5, prefix: new HarmonyMethod(prefix));
+                    patched++;
+                }
+
+                // BlockPos overload: (AssetLocation, BlockPos, double yOffset, IPlayer dualCallByPlayer, bool, float, float)
+                // Primary path for block-break / block-place sounds triggered by the local player.
+                var method6 = clientMainType.GetMethod("PlaySoundAt",
+                    BindingFlags.Public | BindingFlags.Instance,
+                    null,
+                    new Type[] { typeof(AssetLocation), typeof(BlockPos), typeof(double), typeof(IPlayer), typeof(bool), typeof(float), typeof(float) },
+                    null);
+                if (method6 != null)
+                {
+                    var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundAtBlockPosDualPrefix",
+                        BindingFlags.Static | BindingFlags.Public);
+                    harmony.Patch(method6, prefix: new HarmonyMethod(prefix));
+                    patched++;
+                }
+
+                // SoundAttributes + BlockPos overload: (SoundAttributes, BlockPos, double yOffset, IPlayer dualCallByPlayer, float volumeMult)
+                // Used by Block.OnBlockBroken (final break) and BehaviorLadder break sounds.
+                //
+                // SoundAttributes lives in VintagestoryAPI.dll, NOT in VintagestoryLib.
+                // Use AssetLocation (also API) to find the right assembly reliably.
+                var soundAttrsType = typeof(AssetLocation).Assembly.GetType("Vintagestory.API.Common.SoundAttributes")
+                    ?? Type.GetType("Vintagestory.API.Common.SoundAttributes, VintagestoryAPI");
+                if (soundAttrsType != null)
+                {
+                    var method7 = clientMainType.GetMethod("PlaySoundAt",
+                        BindingFlags.Public | BindingFlags.Instance,
+                        null,
+                        new Type[] { soundAttrsType, typeof(BlockPos), typeof(double), typeof(IPlayer), typeof(float) },
+                        null);
+                    if (method7 != null)
+                    {
+                        var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundAtSoundAttrBlockPosDualPrefix",
+                            BindingFlags.Static | BindingFlags.Public);
+                        harmony.Patch(method7, prefix: new HarmonyMethod(prefix));
+                        patched++;
+                    }
+
+                    // SoundAttributes + world XYZ + dimension overload:
+                    //   (SoundAttributes, double x, double y, double z, int dimension, IPlayer dualCallByPlayer, float volumeMult)
+                    // This is what Block.OnBlockBreaking() uses for HIT sounds every 225ms:
+                    //   player.Entity.World.PlaySoundAt(sounds.GetHitSound(player), posx, posy, posz, dimension, player);
+                    var method8 = clientMainType.GetMethod("PlaySoundAt",
+                        BindingFlags.Public | BindingFlags.Instance,
+                        null,
+                        new Type[] { soundAttrsType, typeof(double), typeof(double), typeof(double), typeof(int), typeof(IPlayer), typeof(float) },
+                        null);
+                    if (method8 != null)
+                    {
+                        var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundAtSoundAttrWorldPosDualPrefix",
+                            BindingFlags.Static | BindingFlags.Public);
+                        harmony.Patch(method8, prefix: new HarmonyMethod(prefix));
+                        patched++;
+                    }
+                }
+                else
+                {
+                    api.Logger.Warning("[SoundPhysicsAdapted] SoundAttributes type not found — block hit/break sound occlusion-skip unavailable");
+                }
+
                 api.Logger.Notification($"[SoundPhysicsAdapted] Patched {patched} PlaySoundAt/For overloads [LOCAL PLAYER DETECT]");
             }
             catch (Exception ex)
@@ -731,6 +981,102 @@ namespace soundphysicsadapted
                 float z = (float)entity.Pos.Z;
 
                 EnqueueLocalPlayerSoundPosition(x, y, z);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// PREFIX for PlaySoundAt(AssetLocation, double x, double y, double z, IPlayer dualCallByPlayer, bool, float, float).
+        /// This is the world-position overload used by block-break, block-place,
+        /// and other player-triggered world sounds. When dualCallByPlayer ==
+        /// local player, the local client is the originator (server skips it),
+        /// so we tag the world position for occlusion-skip.
+        ///
+        /// We do NOT enqueue the float fingerprint here because this overload
+        /// uses arbitrary world coordinates, not entity positions \u2014 mono downmix
+        /// (stereo panning) is still desirable for distant block sounds.
+        ///
+        /// Harmony: __0 = AssetLocation, __1..__3 = doubles, __4 = IPlayer dualCallByPlayer.
+        /// </summary>
+        public static void PlaySoundAtWorldPosDualPrefix(
+            AssetLocation __0, double __1, double __2, double __3, IPlayer __4)
+        {
+            try
+            {
+                if (__4 == null || cachedApi == null) return;
+                var localPlayer = cachedApi.World?.Player;
+                if (localPlayer == null || __4 != localPlayer) return;
+
+                MarkLocalPlayerSoundPosition(__1, __2, __3);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// PREFIX for PlaySoundAt(AssetLocation, BlockPos, double yOffsetFromCenter, IPlayer dualCallByPlayer, bool, float, float).
+        /// Primary path for block-break / block-place / plant-break sounds triggered by local player.
+        /// VS places sound at (pos.X+0.5, pos.InternalY+0.5+yOffset, pos.Z+0.5).
+        ///
+        /// Harmony: __0 = AssetLocation, __1 = BlockPos, __2 = yOffset, __3 = IPlayer.
+        /// </summary>
+        public static void PlaySoundAtBlockPosDualPrefix(
+            AssetLocation __0, BlockPos __1, double __2, IPlayer __3)
+        {
+            try
+            {
+                if (__3 == null || __1 == null || cachedApi == null) return;
+                var localPlayer = cachedApi.World?.Player;
+                if (localPlayer == null || __3 != localPlayer) return;
+
+                double x = __1.X + 0.5;
+                double y = __1.InternalY + 0.5 + __2;
+                double z = __1.Z + 0.5;
+                MarkLocalPlayerSoundPosition(x, y, z);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// PREFIX for PlaySoundAt(SoundAttributes, BlockPos, double yOffsetFromCenter, IPlayer dualCallByPlayer, float).
+        /// Used by collectibles (BehaviorLadder, etc.) block break sounds.
+        ///
+        /// Harmony: __1 = BlockPos, __2 = yOffset, __3 = IPlayer.
+        /// </summary>
+        public static void PlaySoundAtSoundAttrBlockPosDualPrefix(
+            object __0, BlockPos __1, double __2, IPlayer __3)
+        {
+            try
+            {
+                if (__3 == null || __1 == null || cachedApi == null) return;
+                var localPlayer = cachedApi.World?.Player;
+                if (localPlayer == null || __3 != localPlayer) return;
+
+                double x = __1.X + 0.5;
+                double y = __1.InternalY + 0.5 + __2;
+                double z = __1.Z + 0.5;
+                MarkLocalPlayerSoundPosition(x, y, z);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// PREFIX for PlaySoundAt(SoundAttributes, double x, double y, double z, int dimension, IPlayer dualCallByPlayer, float).
+        /// This is what Block.OnBlockBreaking() calls for HIT sounds every 225ms while the player swings at a block:
+        ///   player.Entity.World.PlaySoundAt(sounds.GetHitSound(player), posx, posy, posz, dimension, player);
+        /// The coordinates are blockSel.Position + blockSel.HitPosition (exact face impact point).
+        ///
+        /// Harmony: __1/__2/__3 = x/y/z doubles, __5 = IPlayer dualCallByPlayer.
+        /// </summary>
+        public static void PlaySoundAtSoundAttrWorldPosDualPrefix(
+            object __0, double __1, double __2, double __3, int __4, IPlayer __5)
+        {
+            try
+            {
+                if (__5 == null || cachedApi == null) return;
+                var localPlayer = cachedApi.World?.Player;
+                if (localPlayer == null || __5 != localPlayer) return;
+
+                MarkLocalPlayerSoundPosition(__1, __2, __3);
             }
             catch { }
         }
@@ -1082,8 +1428,24 @@ namespace soundphysicsadapted
                 // with recycled sourceIds that might still be playing other sounds
                 AudioRenderer.DetachGlobalFilter(sourceId);
 
-                // World is ready (gated at top of method) — apply immediate occlusion
-                ApplyOcclusion(loadedSound, position, soundName);
+                // World is ready (gated at top of method) — apply immediate occlusion.
+                // Skip occlusion for local-player-triggered sounds (block break/place/plant).
+                // The prefix for PlaySoundAt(BlockPos/double) already tagged the position;
+                // peek here (non-consuming so the physics tick can still set IsLocalPlayerSound)
+                // and apply filter=1.0 to avoid muffling our own break sounds.
+                var posd = new Vec3d(position.X, position.Y, position.Z);
+                if (PeekLocalPlayerSoundPosition(posd))
+                {
+                    // Local player sound: no occlusion, just clear any stale filter.
+                    ApplyLowPassFilter(loadedSound, 1.0f, posd, soundName);
+                    if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"INIT-SKIP (local player): {soundName} pos=({position.X:F1},{position.Y:F1},{position.Z:F1})");
+                }
+                else
+                {
+                    ApplyOcclusion(loadedSound, position, soundName);
+                }
             }
             catch (Exception ex)
             {
@@ -1126,6 +1488,10 @@ namespace soundphysicsadapted
                 {
                     AudioRenderer.ReattachFilter(loadedSound);
                 }
+
+                // Apply distance model overrides (range mult, rolloff, air absorption).
+                // Source must be in valid state — Postfix runs after AL.SourcePlay so it is.
+                ApplyDistanceModel(loadedSound, sourceId, soundName);
 
                 // Apply reverb only after world is fully loaded and warmed up.
                 // During loading, tick system will handle reverb with budget limits.

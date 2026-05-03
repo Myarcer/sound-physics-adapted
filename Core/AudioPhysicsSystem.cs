@@ -92,6 +92,11 @@ namespace soundphysicsadapted
             public Vec3d SmoothedAcousticPos;
             public bool HasSmoothedAcousticPos;
             public Vec3d CurrentBestFaceCenter; // For hysteresis: don't switch unless significantly better
+
+            // Set true on first detection via ConsumeLocalPlayerOcclusionPosition.
+            // Persists for this sound's lifetime; cleared when sound exits active set.
+            // Means: this specific sound was triggered by the local player — no occlusion, reverb only.
+            public bool IsLocalPlayerSound;
         }
 
         private Dictionary<ILoadedSound, SoundCacheEntry> soundCache = new Dictionary<ILoadedSound, SoundCacheEntry>();
@@ -458,15 +463,37 @@ namespace soundphysicsadapted
             // === PLAYER-POSITION FAST PATH ===
             // Sounds at player position (UI clicks, block breaking, bow draw) skip ALL calculations.
             // Source = listener means zero occlusion (no filter needed), only reverb applies.
-            if (distance < PLAYER_POS_THRESHOLD)
+            //
+            // Also catches LOCAL-PLAYER ORIGINATED world sounds (block break/place at any
+            // distance) tagged via LoadSoundPatch.MarkLocalPlayerSoundPosition. The local
+            // player knows what action they performed; muffling their own block sounds based
+            // on neighbouring slabs/cattails/water is jarring and inconsistent. Reverb still
+            // describes the room they're in correctly.
+            // On first detection: try to consume a queued local-player position key.
+            // Result is cached on the entry for this sound's lifetime — no per-tick
+            // position lookup after the first match. Consume-once ensures no other sound
+            // at the same block accidentally inherits the skip.
+            if (!cache.IsLocalPlayerSound)
+                cache.IsLocalPlayerSound = soundphysicsadapted.LoadSoundPatch
+                    .ConsumeLocalPlayerOcclusionPosition(soundPos);
+            bool isLocalPlayerSound = cache.IsLocalPlayerSound;
+            if (distance < PLAYER_POS_THRESHOLD || isLocalPlayerSound)
             {
                 playerPosThisTick++;
 
-                // Apply cached player reverb only - no occlusion/filter needed
+                // Force occlusion to 0 (ensure any prior cached value is cleared)
                 int? sourceId = AudioRenderer.GetValidatedSourceId(sound);
-                if (sourceId.HasValue && sourceId.Value > 0 && ReverbEffects.IsInitialized)
+                if (sourceId.HasValue && sourceId.Value > 0)
                 {
-                    ReverbEffects.ApplyToSource(sourceId.Value, cachedPlayerReverb);
+                    if (isLocalPlayerSound && distance >= PLAYER_POS_THRESHOLD)
+                    {
+                        // Distant local-player sound (e.g. break a slab 3 blocks away):
+                        // explicitly clear any lowpass filter that may have been applied
+                        // on a prior tick before the tag landed.
+                        AudioRenderer.SetOcclusion(sound, 1.0f, soundPos, soundName);
+                    }
+                    if (ReverbEffects.IsInitialized)
+                        ReverbEffects.ApplyToSource(sourceId.Value, cachedPlayerReverb);
                 }
 
                 cache.LastUpdateTimeMs = currentTimeMs;
@@ -591,7 +618,8 @@ namespace soundphysicsadapted
 
                     if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                            $"[AMBIENT-INSIDE] {soundName} playerInside=true, occ=0, centered on player");
+                            $"[AMBIENT-INSIDE] {soundName} playerInside=true bboxes={volBboxCount}, occ=0, centered on player " +
+                            $"plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2})");
                 }
                 else if (samples != null && sampleCount > 0)
                 {
@@ -805,6 +833,7 @@ namespace soundphysicsadapted
             {
                 const float BLEND_START = 2.5f; // Start blending when within 2.5 blocks of surface
                 float distToSound = (float)playerPos.DistanceTo(acousticPos);
+                float blendT = -1f; // -1 = no blend applied (outside range)
 
                 if (distToSound < BLEND_START)
                 {
@@ -812,10 +841,29 @@ namespace soundphysicsadapted
                     float t = distToSound / BLEND_START;
                     // Ease-in: panning ramps up slowly near the volume, preserving centering longer
                     t = t * t;
+                    blendT = t;
                     acousticPos = new Vec3d(
                         playerPos.X + (acousticPos.X - playerPos.X) * t,
                         playerPos.Y + (acousticPos.Y - playerPos.Y) * t,
                         playerPos.Z + (acousticPos.Z - playerPos.Z) * t);
+                }
+
+                // DIAGNOSTIC: Log ambient volume positioning details for debugging L/R panning.
+                // Shows the actual acoustic position vs player position so we can verify
+                // centering behavior. Only logs for first sound each tick to avoid spam.
+                if (updatedThisTick == 0 && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                {
+                    float stereoOffsetX = (float)(acousticPos.X - playerPos.X);
+                    float stereoOffsetZ = (float)(acousticPos.Z - playerPos.Z);
+                    float stereoOffsetTotal = MathF.Sqrt(stereoOffsetX * stereoOffsetX + stereoOffsetZ * stereoOffsetZ);
+                    var samples = AmbientSoundPatches.GetFaceSamples(sound, out int diagSampleCount, out bool diagPlayerInside);
+                    var diagBboxes = AmbientSoundPatches.GetBboxes(sound, out int diagBboxCount);
+                    SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                        $"[AMBIENT-POS] {soundName} inside={diagPlayerInside} bboxes={diagBboxCount} " +
+                        $"dist={distToSound:F2} blendT={blendT:F3} " +
+                        $"stereoXZ={stereoOffsetTotal:F3} (dx={stereoOffsetX:F2} dz={stereoOffsetZ:F2}) " +
+                        $"acPos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2}) " +
+                        $"plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2})");
                 }
             }
 

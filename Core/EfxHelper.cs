@@ -432,6 +432,7 @@ namespace soundphysicsadapted
         private static object _alSourcefRefDist;      // ALSourcef.ReferenceDistance
         private static object _alSourcefMaxDist;      // ALSourcef.MaxDistance
         private static object _alSourcefRolloff;      // ALSourcef.RolloffFactor
+        private static object _alSourcefAirAbsorption; // ALSourcef.EfxAirAbsorptionFactor
 
         // OpenAL state constants
         private const int AL_PLAYING = 0x1012;
@@ -564,6 +565,12 @@ namespace soundphysicsadapted
                     try { _alSourcefRefDist = Enum.Parse(_alSourcefType, "ReferenceDistance"); } catch { }
                     try { _alSourcefMaxDist = Enum.Parse(_alSourcefType, "MaxDistance"); } catch { }
                     try { _alSourcefRolloff = Enum.Parse(_alSourcefType, "RolloffFactor"); } catch { }
+                    // EFX-only — try multiple names, depends on OpenTK version
+                    try { _alSourcefAirAbsorption = Enum.Parse(_alSourcefType, "EfxAirAbsorptionFactor"); } catch { }
+                    if (_alSourcefAirAbsorption == null)
+                    {
+                        try { _alSourcefAirAbsorption = Enum.Parse(_alSourcefType, "AirAbsorptionFactor"); } catch { }
+                    }
                 }
                 if (_alGetSourceiType != null)
                 {
@@ -779,6 +786,22 @@ namespace soundphysicsadapted
 
         /// <summary>Set source rolloff factor.</summary>
         public static void ALSetSourceRolloff(int source, float factor) => ALSourcef(source, _alSourcefRolloff, factor);
+
+        /// <summary>Whether per-source EFX air absorption is supported by the runtime OpenAL binding.</summary>
+        public static bool IsAirAbsorptionSupported => _alSourcefAirAbsorption != null && _sourcefMethod != null;
+
+        /// <summary>
+        /// Set per-source air absorption factor (EFX AL_AIR_ABSORPTION_FACTOR).
+        /// Range 0.0-10.0. 0.0 = no atmospheric HF damping, 1.0 ≈ SPR default.
+        /// Silently no-ops if EFX is unavailable.
+        /// </summary>
+        public static void ALSetSourceAirAbsorption(int source, float factor)
+        {
+            if (_alSourcefAirAbsorption == null) return;
+            if (factor < 0f) factor = 0f;
+            else if (factor > 10f) factor = 10f;
+            ALSourcef(source, _alSourcefAirAbsorption, factor);
+        }
 
         /// <summary>Copy distance attenuation model from one source to another.</summary>
         public static void CopyDistanceModel(int fromSource, int toSource)

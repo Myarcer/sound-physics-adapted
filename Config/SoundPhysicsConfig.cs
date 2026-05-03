@@ -133,7 +133,7 @@ namespace soundphysicsadapted
         /// Higher = more aggressive lowpass filter per occlusion.
         /// 1.0 = each block significantly muffles.
         /// </summary>
-        public float BlockAbsorption { get; set; } = 1.0f;
+        public float BlockAbsorption { get; set; } = 0.7f;
 
         /// <summary>
         /// Minimum lowpass filter value (0 = silent, 1 = no filter)
@@ -214,6 +214,64 @@ namespace soundphysicsadapted
         /// 1.0 = normal, 0.5 = half reverb, 2.0 = double reverb.
         /// </summary>
         public float ReverbGain { get; set; } = 1.0f;
+
+        // ============================================================
+        // DISTANCE MODEL
+        // Per-source overrides for OpenAL distance attenuation.
+        // VS vanilla uses a hard cutoff at SoundParams.Range (default 32 blocks)
+        // with no real air absorption. Since this mod adds proper occlusion,
+        // sounds can safely carry farther without bleeding through walls.
+        //
+        // - SoundRangeMultiplier: scales AL_MAX_DISTANCE per source.
+        // - AirAbsorptionFactor: physically-based HF attenuation over distance
+        //   (EFX AL_AIR_ABSORPTION_FACTOR; SPR-equivalent ≈ 1.0).
+        // - DistanceRolloffFactor: scales AL_ROLLOFF_FACTOR (gentler curve <1.0).
+        // ============================================================
+
+        /// <summary>
+        /// Section header visible in JSON config file.
+        /// </summary>
+        public string _DistanceModelSystem { get; set; } = "--- Per-source distance attenuation overrides. Carry farther + realistic air absorption. Set EnableDistanceModelOverrides=false to keep vanilla. ---";
+
+        /// <summary>
+        /// Master toggle for distance model overrides.
+        /// When enabled: applies SoundRangeMultiplier, AirAbsorptionFactor, and
+        /// DistanceRolloffFactor to each newly started positional source.
+        /// When disabled: vanilla VS distance behavior is untouched.
+        /// </summary>
+        public bool EnableDistanceModelOverrides { get; set; } = true;
+
+        /// <summary>
+        /// Multiplier applied to AL_MAX_DISTANCE on each source.
+        /// 1.0 = vanilla (~32 blocks for most sounds).
+        /// 1.4 = sounds carry ~40% farther (recommended with occlusion enabled).
+        /// >2.0 may cause OpenAL voice saturation in busy areas.
+        /// </summary>
+        public float SoundRangeMultiplier { get; set; } = 1.4f;
+
+        /// <summary>
+        /// EFX air absorption factor (AL_AIR_ABSORPTION_FACTOR), 0.0-10.0.
+        /// 0.0 = vanilla (no HF damping over distance).
+        /// 1.0 = SPR-equivalent default (≈1 dB/m at 5kHz). Distant sounds lose
+        ///       treble naturally — bass rumble for thunder, muffled distant footsteps.
+        /// Higher values exaggerate the effect (humid jungle / dense atmosphere feel).
+        /// </summary>
+        public float AirAbsorptionFactor { get; set; } = 1.0f;
+
+        /// <summary>
+        /// Multiplier applied to AL_ROLLOFF_FACTOR on each source.
+        /// 1.0 = vanilla curve.
+        /// &lt;1.0 = gentler falloff (sounds carry farther without changing Range).
+        /// &gt;1.0 = steeper falloff (sounds get quiet faster with distance).
+        /// </summary>
+        public float DistanceRolloffFactor { get; set; } = 1.0f;
+
+        /// <summary>
+        /// When true, music sounds (EnumSoundType.Music / MusicGlitchunaffected)
+        /// are exempt from distance model overrides. Recommended — music tracks
+        /// are typically non-positional or carefully tuned.
+        /// </summary>
+        public bool DistanceModelExcludeMusic { get; set; } = true;
 
         // ============================================================
         // SUBMERSION AUDIO
@@ -617,7 +675,7 @@ namespace soundphysicsadapted
         /// At close range pitch=1.0 (bright crack), at max distance pitch drops to this value
         /// (deeper, bassier rumble). Simulates high-frequency atmospheric attenuation.
         /// </summary>
-        public float ThunderCrackPitchMin { get; set; } = 0.22f;
+        public float ThunderCrackPitchMin { get; set; } = 0.50f;
 
         /// <summary>
         /// Random pitch variation applied to each thunder event (±this value).
@@ -654,50 +712,6 @@ namespace soundphysicsadapted
         /// </summary>
         public float RainSurfaceVolume { get; set; } = 0.5f;
 
-        /// <summary>
-        /// Block code patterns that trigger rain surface impacts.
-        /// Matched as prefix against block.Code.Path (e.g., "anvil" matches "anvil-copper").
-        /// Add patterns for any block type you want rain impact sounds on.
-        /// </summary>
-        public string[] RainSurfaceBlockPatterns { get; set; } = new string[]
-        {
-            // --- Smithing / storage piles ---
-            "anvil",            // game:anvil-{metal}, game:anvilpart-{base|top}-{metal}
-            "ingotpile",        // game:ingotpile
-            "platepile",        // game:platepile
-            "metalpartpile",    // game:metalpartpile (scraps/parts pile)
-            "metalsheet",       // game:metalsheet-{metal}-{facing}
-
-            // --- Metal blocks / plates / sheets ---
-            "metalblock",       // game:metalblock-{type}-{metal}
-            "metalplate",       // game:metalplate-{metal}  (if used by mods)
-
-            // --- Metal machines / containers ---
-            "hopper",           // game:hopper-{metal}-{facing}
-            "chute",            // game:chute, chute-cross, chute-straight, chute-t
-            "verticalboiler",   // game:verticalboiler
-            "condenser",        // game:condenser
-            "cokeovendoor",     // game:cokeovendoor-{metal}
-
-            // --- Metal furniture / decor ---
-            "ironfence",        // game:ironfence-{metal}-{config}
-            "supportchain",     // game:supportchain-{metal}-{facing}
-            "supportbeam-tarnishedmetal", // game:supportbeam-tarnishedmetal-{config}
-            "chandelier",       // game:chandelier-{metal}
-            "lantern",          // game:lantern-{metal}-{facing}   (TODO: own sound?)
-            "metaldoor",        // game:metaldoor-{metal}-{config}
-            "trapdoor",         // game:trapdoor-{metal}-{config}
-            "plaque",           // game:plaque-{metal}-{facing}
-            "shingleblock",     // game:shingleblock-{metal}-{facing}  (metal roof shingles)
-            "lightningrod",     // game:lightningrod-{metal}
-
-            // Note: mechanics (angledgears, largegear3, helvehammerbase, transmission,
-            // brake, crank, pulverizerframe etc.) are all wood — skip.
-            // bloomerybase/bloomerychimney are clay/stone — skip.
-            // forge is stone — skip.
-            // Add any of these back when a rain-on-wood / rain-on-stone sound is available.
-        };
-
         // ============================================================
         // TORCH AMBIENT
         // Adds ambient crackling sound to placed torches.
@@ -729,17 +743,6 @@ namespace soundphysicsadapted
         /// Format: "domain:path" (without .ogg extension).
         /// </summary>
         public string TorchAmbientSoundPath { get; set; } = "game:sounds/held/torch-idle";
-
-        /// <summary>
-        /// Block code patterns that are considered lit torches.
-        /// Matched as prefix against block.Code.Path.
-        /// Blocks matching these AND containing "extinct" or "burnedout" are excluded.
-        /// </summary>
-        public string[] TorchBlockPatterns { get; set; } = new string[]
-        {
-            "torch",
-            "walltorch"
-        };
 
         // ============================================================
         // PERFORMANCE

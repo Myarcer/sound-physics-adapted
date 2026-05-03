@@ -21,6 +21,13 @@
         { "code": "ReverbMaxDistance",             "type": "float",   "default": 256.0,  "ingui": "Reverb Max Distance",        "comment": "Maximum distance for reverb ray detection (blocks).",                        "range": { "min": 32.0,   "max": 512.0,  "step": 16.0  } },
         { "code": "ReverbGain",                    "type": "float",   "default": 1.0,    "ingui": "Reverb Gain",                "comment": "Master reverb gain multiplier. 1.0=normal, 0.5=half, 2.0=double.",           "range": { "min": 0.0,    "max": 3.0,    "step": 0.05  } },
 
+        { "type": "separator", "title": "Distance Model" },
+        { "code": "EnableDistanceModelOverrides",  "type": "boolean", "default": true,   "ingui": "Enable Distance Overrides",  "comment": "Per-source distance attenuation overrides. Disable to keep vanilla VS behavior." },
+        { "code": "SoundRangeMultiplier",          "type": "float",   "default": 1.4,    "ingui": "Sound Range Multiplier",     "comment": "Scales AL_MAX_DISTANCE per source. 1.0=vanilla, 1.4=carry 40 percent farther.",      "range": { "min": 0.5,    "max": 3.0,    "step": 0.05  } },
+        { "code": "AirAbsorptionFactor",           "type": "float",   "default": 1.0,    "ingui": "Air Absorption Factor",      "comment": "EFX HF damping over distance. 0=off, 1.0≈SPR default (treble loss with distance).", "range": { "min": 0.0, "max": 10.0, "step": 0.1 } },
+        { "code": "DistanceRolloffFactor",         "type": "float",   "default": 1.0,    "ingui": "Distance Rolloff Factor",    "comment": "AL_ROLLOFF_FACTOR multiplier. <1=gentler curve, >1=steeper. 1.0=vanilla.",   "range": { "min": 0.3,    "max": 2.0,    "step": 0.05  } },
+        { "code": "DistanceModelExcludeMusic",     "type": "boolean", "default": true,   "ingui": "Exclude Music",              "comment": "Skip music sounds (EnumSoundType.Music) from distance overrides." },
+
         { "type": "separator", "title": "Submersion Audio" },
         { "code": "ReplaceVanillaLowpass",         "type": "boolean", "default": true,   "ingui": "Replace Vanilla Lowpass",    "comment": "Replace default underwater/lava lowpass. Stacks properly with occlusion." },
         { "code": "UnderwaterFilterValue",         "type": "float",   "default": 0.08,   "ingui": "Underwater Filter",          "comment": "Lowpass filter when fully underwater (0=silent, 1=no effect).",              "range": { "min": 0.001,  "max": 1.0,    "step": 0.005 } },
@@ -76,8 +83,8 @@
         { "type": "separator", "title": "Thunder" },
         { "code": "EnableThunderPositioning",      "type": "boolean", "default": true,   "ingui": "Enable Thunder Positioning", "comment": "Two-layer positioned thunder. Directional cracks at openings. Requires EnableWeatherEnhancement." },
         { "code": "ThunderLPFMinCutoff",           "type": "float",   "default": 800.0,  "ingui": "Thunder LPF Min Cutoff (Hz)","comment": "Min LPF cutoff for indoor thunder rumble. Lower = deeper, barely-audible rumble.", "range": { "min": 20.0, "max": 4000.0, "step": 10.0 } },
-        { "code": "ThunderLayer1Volume",           "type": "float",   "default": 1.0,    "ingui": "Thunder Layer 1 Volume",     "comment": "Volume multiplier for thunder Layer 1 (indoor muffled rumble).",            "range": { "min": 0.0,    "max": 3.0,    "step": 0.05  } },
-        { "code": "ThunderLayer2Volume",           "type": "float",   "default": 1.0,    "ingui": "Thunder Layer 2 Volume",     "comment": "Volume multiplier for thunder Layer 2 (positional crack at openings).",    "range": { "min": 0.0,    "max": 3.0,    "step": 0.05  } },
+        { "code": "ThunderLayer1Volume",           "type": "float",   "default": 1.0,    "ingui": "Thunder Layer 1 Volume",     "comment": "Volume multiplier for thunder Layer 1 (indoor muffled rumble).",            "range": { "min": 0.0,    "max": 1.0,    "step": 0.05  } },
+        { "code": "ThunderLayer2Volume",           "type": "float",   "default": 1.0,    "ingui": "Thunder Layer 2 Volume",     "comment": "Volume multiplier for thunder Layer 2 (positional crack at openings).",    "range": { "min": 0.0,    "max": 1.0,    "step": 0.05  } },
         { "code": "MaxThunderSources",             "type": "integer", "default": 10,     "ingui": "Max Thunder Sources",        "comment": "Maximum positional thunder sources (one-shot pool).",                        "range": { "min": 1,      "max": 32,     "step": 1     } },
         { "code": "ThunderCrackPitchMin",          "type": "float",   "default": 0.72,   "ingui": "Thunder Crack Pitch Min",    "comment": "Min pitch for crack (nodistance.ogg) at max distance. Lower = deeper/bassier.", "range": { "min": 0.5,    "max": 1.0,    "step": 0.01  } },
         { "code": "ThunderPitchRandomness",        "type": "float",   "default": 0.06,   "ingui": "Thunder Pitch Randomness",   "comment": "Random pitch variation per thunder event (±value). Adds natural variety.",      "range": { "min": 0.0,    "max": 0.15,   "step": 0.01  } },
@@ -100,7 +107,6 @@
         { "code": "DebugResonator",                "type": "boolean", "default": false,  "ingui": "Debug Resonator",            "comment": "Debug resonator features. Shows pause/resume events, Carry On state, boombox state." },
         { "code": "DebugWeather",                  "type": "boolean", "default": false,  "ingui": "Debug Weather",              "comment": "Debug weather audio. Shows enclosure values, LPF gainHF, sound start/stop." },
         { "code": "DebugPositionalWeather",        "type": "boolean", "default": false,  "ingui": "Debug Positional Weather",   "comment": "Debug positional weather. Shows opening tracking, clustering, source placement." },
-        { "code": "DebugWeatherVisualization",     "type": "boolean", "default": false,  "ingui": "Debug Weather Visualization","comment": "Visual block highlights showing DDA weather enclosure detection." },
         { "code": "DebugThunder",                  "type": "boolean", "default": false,  "ingui": "Debug Thunder",              "comment": "Debug thunder events. Shows layer decisions, opening selection, bolt scoring." }
     ]
 }

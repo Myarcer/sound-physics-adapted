@@ -94,7 +94,13 @@ namespace soundphysicsadapted.Patches
 
             // Ignore packets from ourselves (server shouldn't send these, but safety check)
             var localPlayer = capi.World?.Player?.Entity;
-            if (localPlayer != null && localPlayer.EntityId == packet.CarrierEntityId) return;
+            if (localPlayer != null && localPlayer.EntityId == packet.CarrierEntityId)
+            {
+                // Don't log — this is our own packet bounced back (shouldn't happen but safety)
+                return;
+            }
+
+            capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Received packet from carrier {packet.CarrierEntityId}, playing={packet.IsPlaying}, track={packet.TrackLocation}, pos=({packet.PosX:F0},{packet.PosY:F0},{packet.PosZ:F0})");
 
             if (!packet.IsPlaying)
             {
@@ -149,13 +155,28 @@ namespace soundphysicsadapted.Patches
                 }
                 assetLoc.WithPathAppendixOnce(".ogg");
 
+                capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Creating sound for carrier {packet.CarrierEntityId}, rawTrack={packet.TrackLocation}, resolved={assetLoc}");
+
+                // Request mono downmix for this asset before LoadSound runs.
+                // Music ogg files are typically stereo; OpenAL refuses to spatialize stereo
+                // sources, which would make the remote boombox play 2D for everyone but the
+                // carrier. The local carrier hears it positionally because the resonator's
+                // own StartMusic path already requests mono via AudioLoaderPatch.
+                // The 'sounds:' prefix that LoadSoundPatch keys on must be present
+                // because LoadSound normalizes paths the same way internally.
+                AudioLoaderPatch.RequestMonoForAsset(assetLoc.ToString());
+                AudioLoaderPatch.RequestMonoForAsset("game:" + assetLoc.Path);
+                AudioLoaderPatch.RequestMonoForAsset(assetLoc.Path);
+
                 var soundParams = new SoundParams(assetLoc)
                 {
                     Position = new Vec3f(packet.PosX, packet.PosY, packet.PosZ),
                     RelativePosition = false,
                     ShouldLoop = false,
                     DisposeOnFinish = false,
-                    SoundType = EnumSoundType.MusicGlitchunaffected,
+                    // Ambient (not MusicGlitchunaffected) so OpenAL spatializes it AND
+                    // it routes through the Ambient slider, matching placed resonators.
+                    SoundType = EnumSoundType.Ambient,
                     Volume = 0f, // Start silent, tick will set correct volume
                     Range = 48f,
                     ReferenceDistance = 3f
@@ -164,7 +185,7 @@ namespace soundphysicsadapted.Patches
                 var sound = capi.World.LoadSound(soundParams);
                 if (sound == null)
                 {
-                    capi.Logger.Warning($"[SoundPhysicsAdapted] BoomboxRemote: Failed to load sound for carrier {packet.CarrierEntityId}, track={packet.TrackLocation}");
+                    capi.Logger.Warning($"[SoundPhysicsAdapted] BoomboxRemote: LoadSound returned NULL for carrier {packet.CarrierEntityId}, asset={assetLoc}");
                     return;
                 }
 

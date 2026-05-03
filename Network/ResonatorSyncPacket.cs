@@ -28,5 +28,14 @@ namespace soundphysicsadapted
         /// </summary>
         [ProtoMember(5)]
         public float FrozenRotation;
+
+        /// <summary>
+        /// True only for the AutoPauseOtherPlayingResonators path: signals the server to
+        /// run StopMusic + MarkDirty on this resonator because the client paused it without
+        /// going through OnInteract (which would normally toggle the server-side state).
+        /// Regular Ctrl+RMB pause leaves this false to avoid racing with server OnInteract.
+        /// </summary>
+        [ProtoMember(6)]
+        public bool RequestServerAutoPause;
     }
 }
