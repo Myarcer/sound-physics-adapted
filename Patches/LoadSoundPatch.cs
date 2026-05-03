@@ -618,21 +618,18 @@ namespace soundphysicsadapted
         private const long POSITION_EXPIRY_MS = 2000;
         private const int MAX_POSITION_QUEUE = 32;
 
-        // ---- Local-player occlusion-skip set ----
-        // Separate from the consume-on-match fingerprint queue above. This is a
-        // non-consuming TTL set keyed by integer block coordinates. Sounds whose
-        // world position floors to a recently-tagged block coord are treated as
-        // "local player originated" and skip occlusion entirely (only reverb is
-        // applied) by AudioPhysicsSystem.ProcessSoundRaycast.
+        // ---- Local-player occlusion-skip queue (consume-once) ----
+        // When the local player triggers a block break/place/plant sound, we enqueue
+        // the block coordinate here. AudioPhysicsSystem consumes it exactly ONCE on
+        // first detection (setting SoundCacheEntry.IsLocalPlayerSound = true), then
+        // uses that cached flag for the sound's entire lifetime without re-checking.
         //
-        // Why block-int keys? Sound positions get jittered by VS (block-center,
-        // entity offset, sample randomization). Per-block matching is robust
-        // against these small offsets and avoids false-negatives for break/place
-        // sounds spawned at slightly different exact coords than the player click.
-        private static readonly Dictionary<long, long> _localPlayerOcclusionSkip
-            = new Dictionary<long, long>();
-        private const long OCCLUSION_SKIP_TTL_MS = 3000;
-        private const int OCCLUSION_SKIP_MAX = 256;
+        // Consume-once means:
+        //   - No TTL window that could catch unrelated sounds at the same position
+        //   - Each tagged sound uses exactly one entry
+        //   - Other players' sounds are never tagged (prefix guards dualCallByPlayer == localPlayer)
+        private static readonly List<long> _localPlayerOcclusionSkipQueue = new List<long>();
+        private const int OCCLUSION_SKIP_QUEUE_MAX = 64;
 
         private static long PackBlockKey(int x, int y, int z)
         {
@@ -641,66 +638,34 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Mark a world position (in world coords) as "local-player originated".
-        /// AudioPhysicsSystem will skip occlusion calculations for sounds whose
-        /// floor() position matches any tagged block within the TTL window.
-        /// Reverb is still applied normally.
+        /// Enqueue a world position as "local-player originated".
+        /// AudioPhysicsSystem calls ConsumeLocalPlayerOcclusionPosition once on first
+        /// detection of the matching sound, then caches the result on SoundCacheEntry.
         /// </summary>
         public static void MarkLocalPlayerSoundPosition(double x, double y, double z)
         {
-            int bx = (int)Math.Floor(x);
-            int by = (int)Math.Floor(y);
-            int bz = (int)Math.Floor(z);
-            long now = Environment.TickCount64;
-
-            // SINGLE-BLOCK tagging only. We never tag neighbors — otherwise
-            // breaking a block next to a wall would mark the wall as
-            // "local-player-originated" and any unrelated sound there
-            // (e.g. another player standing at that wall) would skip
-            // occlusion for up to TTL ms.
-            //
-            // Single-block is sufficient because:
-            //   - Block break/place sounds: position = (bx+0.5, by+0.5+yOff, bz+0.5)
-            //     → floor() = exact tagged key.
-            //   - Entity sounds (footsteps/swing/voice): position computed from
-            //     entity.Pos with the same double→floor pipeline on both ends.
-            _localPlayerOcclusionSkip[PackBlockKey(bx, by, bz)] = now;
-
-            // Opportunistic prune.
-            if (_localPlayerOcclusionSkip.Count > OCCLUSION_SKIP_MAX)
-                PruneOcclusionSkip(now);
-        }
-
-        private static void PruneOcclusionSkip(long now)
-        {
-            List<long> stale = null;
-            foreach (var kv in _localPlayerOcclusionSkip)
-            {
-                if (now - kv.Value > OCCLUSION_SKIP_TTL_MS)
-                {
-                    if (stale == null) stale = new List<long>();
-                    stale.Add(kv.Key);
-                }
-            }
-            if (stale != null) foreach (var k in stale) _localPlayerOcclusionSkip.Remove(k);
+            long key = PackBlockKey((int)Math.Floor(x), (int)Math.Floor(y), (int)Math.Floor(z));
+            // Trim oldest entries if the queue grows unexpectedly (e.g. rapid block spam).
+            while (_localPlayerOcclusionSkipQueue.Count >= OCCLUSION_SKIP_QUEUE_MAX)
+                _localPlayerOcclusionSkipQueue.RemoveAt(0);
+            _localPlayerOcclusionSkipQueue.Add(key);
         }
 
         /// <summary>
-        /// Returns true if this world position falls inside a recently tagged
-        /// local-player sound block. Used by AudioPhysicsSystem to skip occlusion.
+        /// Consume-once check. Returns true and removes the entry if pos matches a
+        /// queued local-player sound block. AudioPhysicsSystem calls this ONCE per
+        /// sound on first detection; the result is cached on SoundCacheEntry for
+        /// that sound's lifetime (no further calls needed for subsequent ticks).
         /// </summary>
-        public static bool IsLocalPlayerSoundPosition(Vec3d pos)
+        public static bool ConsumeLocalPlayerOcclusionPosition(Vec3d pos)
         {
-            if (pos == null || _localPlayerOcclusionSkip.Count == 0) return false;
-            int bx = (int)Math.Floor(pos.X);
-            int by = (int)Math.Floor(pos.Y);
-            int bz = (int)Math.Floor(pos.Z);
-            long now = Environment.TickCount64;
-            long key = PackBlockKey(bx, by, bz);
-            if (_localPlayerOcclusionSkip.TryGetValue(key, out long stamp))
+            if (pos == null || _localPlayerOcclusionSkipQueue.Count == 0) return false;
+            long key = PackBlockKey((int)Math.Floor(pos.X), (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
+            int idx = _localPlayerOcclusionSkipQueue.IndexOf(key);
+            if (idx >= 0)
             {
-                if (now - stamp <= OCCLUSION_SKIP_TTL_MS) return true;
-                _localPlayerOcclusionSkip.Remove(key);
+                _localPlayerOcclusionSkipQueue.RemoveAt(idx);
+                return true;
             }
             return false;
         }

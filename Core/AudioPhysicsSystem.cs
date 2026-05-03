@@ -92,6 +92,11 @@ namespace soundphysicsadapted
             public Vec3d SmoothedAcousticPos;
             public bool HasSmoothedAcousticPos;
             public Vec3d CurrentBestFaceCenter; // For hysteresis: don't switch unless significantly better
+
+            // Set true on first detection via ConsumeLocalPlayerOcclusionPosition.
+            // Persists for this sound's lifetime; cleared when sound exits active set.
+            // Means: this specific sound was triggered by the local player — no occlusion, reverb only.
+            public bool IsLocalPlayerSound;
         }
 
         private Dictionary<ILoadedSound, SoundCacheEntry> soundCache = new Dictionary<ILoadedSound, SoundCacheEntry>();
@@ -464,8 +469,14 @@ namespace soundphysicsadapted
             // player knows what action they performed; muffling their own block sounds based
             // on neighbouring slabs/cattails/water is jarring and inconsistent. Reverb still
             // describes the room they're in correctly.
-            bool isLocalPlayerSound = soundphysicsadapted.LoadSoundPatch
-                .IsLocalPlayerSoundPosition(soundPos);
+            // On first detection: try to consume a queued local-player position key.
+            // Result is cached on the entry for this sound's lifetime — no per-tick
+            // position lookup after the first match. Consume-once ensures no other sound
+            // at the same block accidentally inherits the skip.
+            if (!cache.IsLocalPlayerSound)
+                cache.IsLocalPlayerSound = soundphysicsadapted.LoadSoundPatch
+                    .ConsumeLocalPlayerOcclusionPosition(soundPos);
+            bool isLocalPlayerSound = cache.IsLocalPlayerSound;
             if (distance < PLAYER_POS_THRESHOLD || isLocalPlayerSound)
             {
                 playerPosThisTick++;
