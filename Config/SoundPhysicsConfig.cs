@@ -675,7 +675,7 @@ namespace soundphysicsadapted
         /// At close range pitch=1.0 (bright crack), at max distance pitch drops to this value
         /// (deeper, bassier rumble). Simulates high-frequency atmospheric attenuation.
         /// </summary>
-        public float ThunderCrackPitchMin { get; set; } = 0.22f;
+        public float ThunderCrackPitchMin { get; set; } = 0.50f;
 
         /// <summary>
         /// Random pitch variation applied to each thunder event (±this value).

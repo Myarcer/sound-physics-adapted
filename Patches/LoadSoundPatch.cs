@@ -485,6 +485,16 @@ namespace soundphysicsadapted
                         return;
                 }
 
+                // Weather sounds (thunder, rain) use rolloff=0 and manage their own distance
+                // model entirely. Air absorption must NOT be applied — thunder sources sit
+                // 300-1000 blocks away in world space, so factor=1.0 would kill all HF content,
+                // leaving pure bass at full volume (the "bass-boosted" distortion).
+                {
+                    var stype = sound?.Params?.SoundType ?? EnumSoundType.Sound;
+                    if (stype == EnumSoundType.Weather)
+                        return;
+                }
+
                 // De-dup against re-attachments / our own SoundStartPostfix double-fire.
                 // Generation counter rolls every ~1B starts to avoid pathological stale state.
                 int gen = _distanceModelGen;

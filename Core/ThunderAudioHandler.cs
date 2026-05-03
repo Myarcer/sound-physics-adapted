@@ -1457,14 +1457,17 @@ namespace soundphysicsadapted
         private float CalculateBoltIntensity(float distance)
         {
             // 0-100 blocks: gentle 1.0 → 0.8 (close thunder is scary-loud)
-            // 100-1000 blocks: smooth 0.8 → 0.5 (still audible at max distance)
+            // 100-500 blocks: steep 0.8 → 0.12 (rapid fade, matches perception)
+            // 500-1000 blocks: quiet tail 0.12 → 0.03 (barely audible distant rumble)
             // >1000 blocks: silent
             if (distance <= 0f)
                 return 1.0f;
             if (distance <= 100f)
                 return 1.0f - (distance / 100f) * 0.2f;
+            if (distance < 500f)
+                return 0.8f - ((distance - 100f) / 400f) * 0.68f;
             if (distance < 1000f)
-                return 0.8f - ((distance - 100f) / 900f) * 0.3f;
+                return 0.12f - ((distance - 500f) / 500f) * 0.09f;
             return 0f;
         }
 
@@ -1481,16 +1484,14 @@ namespace soundphysicsadapted
             var config = SoundPhysicsAdaptedModSystem.Config;
             float minPitch = config?.ThunderCrackPitchMin ?? 0.22f;
 
-            // Steeper pitch curve using t^0.7 (between linear and sqrt).
-            // Sqrt curve from 0 blocks — aggressive pitch drop models multi-path
-            // arrival stretching the crack into a drawn-out rumble.
-            // 0-100:    1.0 → 0.79  (noticeably deeper)
-            // 100-300:  0.79 → 0.64 (clearly bass-shifted)
-            // 300-500:  0.64 → 0.54 (slow rumble)
-            // 500-1000: 0.54 → minPitch (deep drawn-out rumble, ~3x duration)
+            // Linear pitch curve — gentler than sqrt, avoids extreme sub-bass at far range.
+            // 0-100:    1.0 → 0.89  (slightly deeper)
+            // 100-300:  0.89 → 0.78 (noticeably bass-shifted)
+            // 300-500:  0.78 → 0.72 (clearly lower character)
+            // 500-1000: 0.72 → minPitch (distant rumble, not sub-bass)
             float pitchFactor;
             float t = Math.Min(distance / 1000f, 1.0f);
-            pitchFactor = 1.0f - (float)Math.Sqrt(t) * (1.0f - minPitch);
+            pitchFactor = 1.0f - t * (1.0f - minPitch);
 
             // Distance-scaled randomness: close cracks get wide timbre variety,
             // distant cracks are already muffled so less variation needed.
