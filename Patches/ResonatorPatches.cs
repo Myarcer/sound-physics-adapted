@@ -233,14 +233,14 @@ namespace soundphysicsadapted.Patches
 
         /// <summary>
         /// Distance scale for resonator attenuation. Lower values extend audible range.
-        /// 0.175 is roughly 2x the previous effective range compared to 0.35.
+        /// 0.116 extends audible range ~50% further than previous 0.175.
         /// </summary>
-        private const float RESONATOR_DISTANCE_SCALE = 0.175f;
+        private const float RESONATOR_DISTANCE_SCALE = 0.116f;
 
         /// <summary>
         /// Near-field radius where resonator music stays at full volume before falloff begins.
         /// </summary>
-        private const float RESONATOR_FULL_VOLUME_RADIUS = 10f;
+        private const float RESONATOR_FULL_VOLUME_RADIUS = 15f;
 
         // Reflection state for ClientCoreAPI -> ClientMain -> MusicEngine -> currentTrack
         private static FieldInfo clientMainField;
@@ -785,6 +785,18 @@ namespace soundphysicsadapted.Patches
                     AudioRenderer.SetOcclusion(sound, 1.0f, soundPos, "resonator-music");
                     // Mark as positional so RecalculateAllUnderwater uses non-music underwater filter
                     AudioRenderer.MarkAsPositional(sound);
+
+                    // Disable OpenAL's own inverse-distance attenuation so our
+                    // CalculateResonatorDistanceAttenuation formula fully controls falloff.
+                    // SetPosition() made this a positional source, but without rolloff=0
+                    // OpenAL also applies its own model on top, cutting range drastically.
+                    int resSrcId = AudioRenderer.GetSourceId(sound);
+                    if (resSrcId > 0 && EfxHelper.IsAvailable)
+                    {
+                        EfxHelper.ALSetSourceRolloff(resSrcId, 0f);
+                        EfxHelper.ALSetSourceMaxDistance(resSrcId, 2000f);
+                    }
+
                     capi.Logger.Debug($"[SoundPhysicsAdapted] [Resonator] Registered sound in activeFilters for occlusion/underwater at {pos}");
                 }
 
