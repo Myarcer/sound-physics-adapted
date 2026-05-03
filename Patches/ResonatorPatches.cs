@@ -466,6 +466,12 @@ namespace soundphysicsadapted.Patches
                             resonatorOwnsMusicEngine = true;
                         }
                     }
+                    else
+                    {
+                        // Our track is already currentTrack (natural start via MusicEngine).
+                        // Claim ownership so the release path fires when we go inaudible.
+                        resonatorOwnsMusicEngine = true;
+                    }
                 }
                 else if (perceivedVolume < MUSIC_SUPPRESS_THRESHOLD && resonatorOwnsMusicEngine)
                 {
