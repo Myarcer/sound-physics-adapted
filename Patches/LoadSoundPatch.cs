@@ -840,9 +840,12 @@ namespace soundphysicsadapted
                 }
 
                 // SoundAttributes + BlockPos overload: (SoundAttributes, BlockPos, double yOffset, IPlayer dualCallByPlayer, float volumeMult)
-                // Used by collectibles / BehaviorLadder break sounds.
-                var soundAttrsType = Type.GetType("Vintagestory.API.Common.SoundAttributes, VintagestoryAPI") ??
-                    clientMainType.Assembly.GetType("Vintagestory.API.Common.SoundAttributes");
+                // Used by Block.OnBlockBroken (final break) and BehaviorLadder break sounds.
+                //
+                // SoundAttributes lives in VintagestoryAPI.dll, NOT in VintagestoryLib.
+                // Use AssetLocation (also API) to find the right assembly reliably.
+                var soundAttrsType = typeof(AssetLocation).Assembly.GetType("Vintagestory.API.Common.SoundAttributes")
+                    ?? Type.GetType("Vintagestory.API.Common.SoundAttributes, VintagestoryAPI");
                 if (soundAttrsType != null)
                 {
                     var method7 = clientMainType.GetMethod("PlaySoundAt",
@@ -857,6 +860,27 @@ namespace soundphysicsadapted
                         harmony.Patch(method7, prefix: new HarmonyMethod(prefix));
                         patched++;
                     }
+
+                    // SoundAttributes + world XYZ + dimension overload:
+                    //   (SoundAttributes, double x, double y, double z, int dimension, IPlayer dualCallByPlayer, float volumeMult)
+                    // This is what Block.OnBlockBreaking() uses for HIT sounds every 225ms:
+                    //   player.Entity.World.PlaySoundAt(sounds.GetHitSound(player), posx, posy, posz, dimension, player);
+                    var method8 = clientMainType.GetMethod("PlaySoundAt",
+                        BindingFlags.Public | BindingFlags.Instance,
+                        null,
+                        new Type[] { soundAttrsType, typeof(double), typeof(double), typeof(double), typeof(int), typeof(IPlayer), typeof(float) },
+                        null);
+                    if (method8 != null)
+                    {
+                        var prefix = typeof(LoadSoundPatch).GetMethod("PlaySoundAtSoundAttrWorldPosDualPrefix",
+                            BindingFlags.Static | BindingFlags.Public);
+                        harmony.Patch(method8, prefix: new HarmonyMethod(prefix));
+                        patched++;
+                    }
+                }
+                else
+                {
+                    api.Logger.Warning("[SoundPhysicsAdapted] SoundAttributes type not found — block hit/break sound occlusion-skip unavailable");
                 }
 
                 api.Logger.Notification($"[SoundPhysicsAdapted] Patched {patched} PlaySoundAt/For overloads [LOCAL PLAYER DETECT]");
@@ -1031,6 +1055,28 @@ namespace soundphysicsadapted
                 double y = __1.InternalY + 0.5 + __2;
                 double z = __1.Z + 0.5;
                 MarkLocalPlayerSoundPosition(x, y, z);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// PREFIX for PlaySoundAt(SoundAttributes, double x, double y, double z, int dimension, IPlayer dualCallByPlayer, float).
+        /// This is what Block.OnBlockBreaking() calls for HIT sounds every 225ms while the player swings at a block:
+        ///   player.Entity.World.PlaySoundAt(sounds.GetHitSound(player), posx, posy, posz, dimension, player);
+        /// The coordinates are blockSel.Position + blockSel.HitPosition (exact face impact point).
+        ///
+        /// Harmony: __1/__2/__3 = x/y/z doubles, __5 = IPlayer dualCallByPlayer.
+        /// </summary>
+        public static void PlaySoundAtSoundAttrWorldPosDualPrefix(
+            object __0, double __1, double __2, double __3, int __4, IPlayer __5)
+        {
+            try
+            {
+                if (__5 == null || cachedApi == null) return;
+                var localPlayer = cachedApi.World?.Player;
+                if (localPlayer == null || __5 != localPlayer) return;
+
+                MarkLocalPlayerSoundPosition(__1, __2, __3);
             }
             catch { }
         }
