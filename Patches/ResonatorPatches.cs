@@ -794,13 +794,14 @@ namespace soundphysicsadapted.Patches
                 // OnClientTick fires, so the !IsRegistered block above is already false on tick 1.
                 // ApplyDistanceModel in SoundStartPostfix overwrites rolloff with the config value.
                 // We must re-assert rolloff=0 here unconditionally to win the race.
+                // Gate on IsSourceManagementAvailable (not IsAvailable) — that ensures the
+                // _sourcefMethod lazy init has run and the ALSourcef calls will actually execute.
+                int resSrcId = AudioRenderer.GetSourceId(sound);
+                if (resSrcId > 0 && EfxHelper.IsSourceManagementAvailable)
                 {
-                    int resSrcId = AudioRenderer.GetSourceId(sound);
-                    if (resSrcId > 0 && EfxHelper.IsAvailable)
-                    {
-                        EfxHelper.ALSetSourceRolloff(resSrcId, 0f);
-                        EfxHelper.ALSetSourceMaxDistance(resSrcId, 2000f);
-                    }
+                    EfxHelper.ALSetSourceRolloff(resSrcId, 0f);
+                    EfxHelper.ALSetSourceMaxDistance(resSrcId, 2000f);
+                    EfxHelper.ALSetSourceRefDistance(resSrcId, 1f);
                 }
 
                 // 2. VOLUME - Keep long-range audibility extension, but still let far resonators go silent.
