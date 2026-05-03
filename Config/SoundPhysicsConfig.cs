@@ -133,7 +133,7 @@ namespace soundphysicsadapted
         /// Higher = more aggressive lowpass filter per occlusion.
         /// 1.0 = each block significantly muffles.
         /// </summary>
-        public float BlockAbsorption { get; set; } = 0.7f;
+        public float BlockAbsorption { get; set; } = 0.5f;
 
         /// <summary>
         /// Minimum lowpass filter value (0 = silent, 1 = no filter)
