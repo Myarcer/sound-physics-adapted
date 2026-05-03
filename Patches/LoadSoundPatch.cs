@@ -652,6 +652,20 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Non-consuming peek. Returns true if pos matches a queued local-player
+        /// sound block WITHOUT removing the entry. Used by SoundStartPrefix to
+        /// apply filter=1.0 immediately at sound creation, while leaving the entry
+        /// in the queue so the physics tick can later consume it and set
+        /// SoundCacheEntry.IsLocalPlayerSound for longer-lived sounds.
+        /// </summary>
+        public static bool PeekLocalPlayerSoundPosition(Vec3d pos)
+        {
+            if (pos == null || _localPlayerOcclusionSkipQueue.Count == 0) return false;
+            long key = PackBlockKey((int)Math.Floor(pos.X), (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
+            return _localPlayerOcclusionSkipQueue.Contains(key);
+        }
+
+        /// <summary>
         /// Consume-once check. Returns true and removes the entry if pos matches a
         /// queued local-player sound block. AudioPhysicsSystem calls this ONCE per
         /// sound on first detection; the result is cached on SoundCacheEntry for
@@ -1368,8 +1382,24 @@ namespace soundphysicsadapted
                 // with recycled sourceIds that might still be playing other sounds
                 AudioRenderer.DetachGlobalFilter(sourceId);
 
-                // World is ready (gated at top of method) — apply immediate occlusion
-                ApplyOcclusion(loadedSound, position, soundName);
+                // World is ready (gated at top of method) — apply immediate occlusion.
+                // Skip occlusion for local-player-triggered sounds (block break/place/plant).
+                // The prefix for PlaySoundAt(BlockPos/double) already tagged the position;
+                // peek here (non-consuming so the physics tick can still set IsLocalPlayerSound)
+                // and apply filter=1.0 to avoid muffling our own break sounds.
+                var posd = new Vec3d(position.X, position.Y, position.Z);
+                if (PeekLocalPlayerSoundPosition(posd))
+                {
+                    // Local player sound: no occlusion, just clear any stale filter.
+                    ApplyLowPassFilter(loadedSound, 1.0f, posd, soundName);
+                    if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"INIT-SKIP (local player): {soundName} pos=({position.X:F1},{position.Y:F1},{position.Z:F1})");
+                }
+                else
+                {
+                    ApplyOcclusion(loadedSound, position, soundName);
+                }
             }
             catch (Exception ex)
             {
