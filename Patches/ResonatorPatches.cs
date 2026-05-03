@@ -233,14 +233,14 @@ namespace soundphysicsadapted.Patches
 
         /// <summary>
         /// Distance scale for resonator attenuation. Lower values extend audible range.
-        /// 0.175 is roughly 2x the previous effective range compared to 0.35.
+        /// 0.116 extends audible range ~50% further than previous 0.175.
         /// </summary>
-        private const float RESONATOR_DISTANCE_SCALE = 0.175f;
+        private const float RESONATOR_DISTANCE_SCALE = 0.232f;
 
         /// <summary>
         /// Near-field radius where resonator music stays at full volume before falloff begins.
         /// </summary>
-        private const float RESONATOR_FULL_VOLUME_RADIUS = 10f;
+        private const float RESONATOR_FULL_VOLUME_RADIUS = 8f;
 
         // Reflection state for ClientCoreAPI -> ClientMain -> MusicEngine -> currentTrack
         private static FieldInfo clientMainField;
@@ -466,6 +466,12 @@ namespace soundphysicsadapted.Patches
                             resonatorOwnsMusicEngine = true;
                         }
                     }
+                    else
+                    {
+                        // Our track is already currentTrack (natural start via MusicEngine).
+                        // Claim ownership so the release path fires when we go inaudible.
+                        resonatorOwnsMusicEngine = true;
+                    }
                 }
                 else if (perceivedVolume < MUSIC_SUPPRESS_THRESHOLD && resonatorOwnsMusicEngine)
                 {
@@ -522,7 +528,7 @@ namespace soundphysicsadapted.Patches
             ManageVanillaMusicSuppression(capi);
         }
 
-        private static float CalculateResonatorDistanceAttenuation(float dist)
+        public static float CalculateResonatorDistanceAttenuation(float dist)
         {
             if (dist <= RESONATOR_FULL_VOLUME_RADIUS)
             {
@@ -786,6 +792,22 @@ namespace soundphysicsadapted.Patches
                     // Mark as positional so RecalculateAllUnderwater uses non-music underwater filter
                     AudioRenderer.MarkAsPositional(sound);
                     capi.Logger.Debug($"[SoundPhysicsAdapted] [Resonator] Registered sound in activeFilters for occlusion/underwater at {pos}");
+                }
+
+                // Disable OpenAL's own inverse-distance attenuation every tick so our
+                // CalculateResonatorDistanceAttenuation formula fully controls falloff.
+                // SoundStartPostfix registers the sound (via ReattachFilter) BEFORE the first
+                // OnClientTick fires, so the !IsRegistered block above is already false on tick 1.
+                // ApplyDistanceModel in SoundStartPostfix overwrites rolloff with the config value.
+                // We must re-assert rolloff=0 here unconditionally to win the race.
+                // Gate on IsSourceManagementAvailable (not IsAvailable) — that ensures the
+                // _sourcefMethod lazy init has run and the ALSourcef calls will actually execute.
+                int resSrcId = AudioRenderer.GetSourceId(sound);
+                if (resSrcId > 0 && EfxHelper.IsSourceManagementAvailable)
+                {
+                    EfxHelper.ALSetSourceRolloff(resSrcId, 0f);
+                    EfxHelper.ALSetSourceMaxDistance(resSrcId, 2000f);
+                    EfxHelper.ALSetSourceRefDistance(resSrcId, 1f);
                 }
 
                 // 2. VOLUME - Keep long-range audibility extension, but still let far resonators go silent.
