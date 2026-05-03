@@ -785,19 +785,22 @@ namespace soundphysicsadapted.Patches
                     AudioRenderer.SetOcclusion(sound, 1.0f, soundPos, "resonator-music");
                     // Mark as positional so RecalculateAllUnderwater uses non-music underwater filter
                     AudioRenderer.MarkAsPositional(sound);
+                    capi.Logger.Debug($"[SoundPhysicsAdapted] [Resonator] Registered sound in activeFilters for occlusion/underwater at {pos}");
+                }
 
-                    // Disable OpenAL's own inverse-distance attenuation so our
-                    // CalculateResonatorDistanceAttenuation formula fully controls falloff.
-                    // SetPosition() made this a positional source, but without rolloff=0
-                    // OpenAL also applies its own model on top, cutting range drastically.
+                // Disable OpenAL's own inverse-distance attenuation every tick so our
+                // CalculateResonatorDistanceAttenuation formula fully controls falloff.
+                // SoundStartPostfix registers the sound (via ReattachFilter) BEFORE the first
+                // OnClientTick fires, so the !IsRegistered block above is already false on tick 1.
+                // ApplyDistanceModel in SoundStartPostfix overwrites rolloff with the config value.
+                // We must re-assert rolloff=0 here unconditionally to win the race.
+                {
                     int resSrcId = AudioRenderer.GetSourceId(sound);
                     if (resSrcId > 0 && EfxHelper.IsAvailable)
                     {
                         EfxHelper.ALSetSourceRolloff(resSrcId, 0f);
                         EfxHelper.ALSetSourceMaxDistance(resSrcId, 2000f);
                     }
-
-                    capi.Logger.Debug($"[SoundPhysicsAdapted] [Resonator] Registered sound in activeFilters for occlusion/underwater at {pos}");
                 }
 
                 // 2. VOLUME - Keep long-range audibility extension, but still let far resonators go silent.
