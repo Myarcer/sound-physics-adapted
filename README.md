@@ -49,7 +49,7 @@ Config generates automatically at `VintagestoryData/ModConfig/soundphysicsadapte
 
 ## Building from Source
 
-Requires .NET 8 SDK.
+Requires .NET 10 SDK (VS 1.22+).
 
 ```
 git clone https://github.com/Myarcer/sound-physics-adapted.git
