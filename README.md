@@ -27,12 +27,12 @@ Realistic sound physics for [Vintage Story](https://vintagestory.at/). Hear the 
 
 | | |
 |---|---|
-| **Vintage Story** | 1.21.0+ NOT 1.22.x YET | 
+| **Vintage Story** | 1.21.0 for 0.2.2 and and prior / 1.22.x at 0.2.3| 
 | **Required on server** | No |
-| **Required on client** | No (but only the client running it hears the effects) |
+| **Required on client** | Yes (but only the client running it hears the effects) |
 | **CarryOn** | Compatible (dedicated patches) |
 | **RP Voice Chat** | Internal API Built, ready for integration (Waiting on RP Voice Chat Dev Team) |
-| **Medieval Expansion** | Compatible (doors & gates fully supported) |
+| **Medieval Expansion** | Compatible (Patch for doors & gates) |
 | **Other Mods** | Should be non issues, report here if needed. Tested with CaveSymphony / ForestSymphony |
 
 ---
