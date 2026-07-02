@@ -76,8 +76,13 @@ namespace soundphysicsadapted
 
         // ── Tunable parameters (sensible defaults, overridable per type) ──
 
-        /// <summary>Fade-in rate per tick (exponential). Higher = faster fade-in.</summary>
-        public float FadeInRate { get; set; } = 0.12f;   // ~1.5s to 90%
+        /// <summary>
+        /// Fade-in rate per tick (exponential). Higher = faster fade-in.
+        /// Fast (~0.8s to 90%) because the Layer 1 bed-hold handover carries the
+        /// missing energy until this source delivers — a slow spawn ramp here only
+        /// prolongs the muffled hole, it no longer prevents any pop.
+        /// </summary>
+        public float FadeInRate { get; set; } = 0.25f;
 
         /// <summary>Fade-out rate per tick (exponential). Higher = faster fade-out.</summary>
         public float FadeOutRate { get; set; } = 0.10f;   // ~3s to silence
@@ -159,6 +164,27 @@ namespace soundphysicsadapted
         /// </summary>
         public float Contribution { get; private set; }
 
+        /// <summary>
+        /// Summed volume of active sources (capped at 1.5). Loudness proxy for the
+        /// Layer 1 bed-hold handover: the bed only surrenders level that positional
+        /// sources have ACTUALLY delivered, so detection/slot latency never leaves
+        /// an audible hole.
+        /// </summary>
+        public float LoudnessSum { get; private set; }
+
+        // ── Orphaned sounds: fading out detached from any slot ──
+        // When a better opening takes over a busy slot, the old sound must not be
+        // hard-cut, but waiting for it to fade inside the slot stalled new sources
+        // for many seconds (Pass 1 kept re-arming the target). Instead the old
+        // sound is moved here, fades out on its own, and the slot is free NOW.
+        private class OrphanSound
+        {
+            public ILoadedSound Sound;
+            public float Volume;
+        }
+        private readonly List<OrphanSound> orphans = new List<OrphanSound>(4);
+        private const float ORPHAN_FADE_RATE = 0.20f; // per tick — ~1s to silence
+
         /// <summary>Number of active source slots.</summary>
         public int ActiveCount
         {
@@ -210,6 +236,8 @@ namespace soundphysicsadapted
             Vec3d earPos)
         {
             if (!initialized || sources == null || mode != PoolMode.Looping) return;
+
+            TickOrphans();
 
             bool debug = SoundPhysicsAdaptedModSystem.Config?.DebugMode == true
                       && SoundPhysicsAdaptedModSystem.Config?.DebugPositionalWeather == true;
@@ -330,15 +358,14 @@ namespace soundphysicsadapted
                 if (bestSlot < 0)
                 {
                     // All slots busy: if this opening clearly outclasses the weakest
-                    // active source, start fading that source out. The candidate claims
-                    // the slot on a later tick once the fade crosses the eviction
-                    // threshold — a fade-swap, never a hard cut.
+                    // active source, take its slot NOW. The old sound is orphaned and
+                    // fades out detached — waiting for an in-slot fade stalled better
+                    // openings for many seconds (Pass 1 re-armed the target each tick).
                     float candidateScore = OpeningScore(trackedOpenings[o], earPos);
                     int weakest = -1;
                     float weakestScore = float.MaxValue;
                     for (int s = 0; s < maxSlots; s++)
                     {
-                        if (sources[s].TargetVolume <= 0f) continue; // Already fading
                         if (slotScores[s] < weakestScore)
                         {
                             weakestScore = slotScores[s];
@@ -346,18 +373,17 @@ namespace soundphysicsadapted
                         }
                     }
 
-                    if (weakest >= 0 && candidateScore > weakestScore * 2f)
+                    if (weakest < 0 || candidateScore <= weakestScore * 2f) continue;
+
+                    OrphanSlotSound(sources[weakest]);
+                    slotScores[weakest] = float.MaxValue; // Claimed — not weakest anymore
+                    bestSlot = weakest;
+                    if (debug)
                     {
-                        sources[weakest].TargetVolume = 0f;
-                        slotScores[weakest] = float.MaxValue; // Don't evict twice this tick
-                        if (debug)
-                        {
-                            WeatherAudioManager.WeatherDebugLog(
-                                $"[5B-{debugTag}] EVICT-FADE slot={weakest} trackId={sources[weakest].TrackingId} " +
-                                $"score={weakestScore:F2} outclassed by trackId={trackedOpenings[o].TrackingId} score={candidateScore:F2}");
-                        }
+                        WeatherAudioManager.WeatherDebugLog(
+                            $"[5B-{debugTag}] EVICT-SWAP slot={weakest} score={weakestScore:F2} " +
+                            $"-> trackId={trackedOpenings[o].TrackingId} score={candidateScore:F2}");
                     }
-                    continue;
                 }
 
                 var targetSlot = sources[bestSlot];
@@ -793,6 +819,56 @@ namespace soundphysicsadapted
             }
         }
 
+        /// <summary>
+        /// Detach a slot's sound into the orphan list (fades out on its own) and
+        /// free the slot immediately for reassignment. No hard cut, no stall.
+        /// </summary>
+        private void OrphanSlotSound(PositionalSource slot)
+        {
+            if (slot.Sound != null)
+            {
+                orphans.Add(new OrphanSound { Sound = slot.Sound, Volume = slot.CurrentVolume });
+                slot.Sound = null;
+            }
+            slot.Active = false;
+            slot.CurrentVolume = 0f;
+            slot.TargetVolume = 0f;
+            slot.LastAppliedPos = null;
+        }
+
+        /// <summary>Fade out and dispose orphaned sounds. Called every update.</summary>
+        private void TickOrphans()
+        {
+            for (int i = orphans.Count - 1; i >= 0; i--)
+            {
+                var orphan = orphans[i];
+                orphan.Volume *= (1f - ORPHAN_FADE_RATE);
+
+                if (orphan.Sound == null || !orphan.Sound.IsPlaying || orphan.Volume <= MinVolume)
+                {
+                    DisposeOrphan(orphan);
+                    orphans.RemoveAt(i);
+                }
+                else
+                {
+                    orphan.Sound.SetVolume(orphan.Volume);
+                }
+            }
+        }
+
+        private static void DisposeOrphan(OrphanSound orphan)
+        {
+            if (orphan.Sound == null) return;
+            try
+            {
+                AudioRenderer.UnregisterSound(orphan.Sound);
+                orphan.Sound.Stop();
+                orphan.Sound.Dispose();
+            }
+            catch { }
+            orphan.Sound = null;
+        }
+
         private void StopSource(PositionalSource slot)
         {
             if (slot.Sound != null)
@@ -816,6 +892,8 @@ namespace soundphysicsadapted
         public void FadeOutAll()
         {
             if (sources == null) return;
+
+            TickOrphans();
 
             for (int i = 0; i < sources.Length; i++)
             {
@@ -853,7 +931,13 @@ namespace soundphysicsadapted
                     StopSource(sources[i]);
                 }
             }
+            for (int i = orphans.Count - 1; i >= 0; i--)
+            {
+                DisposeOrphan(orphans[i]);
+            }
+            orphans.Clear();
             Contribution = 0f;
+            LoudnessSum = 0f;
         }
 
         private void UpdateContribution()
@@ -861,6 +945,7 @@ namespace soundphysicsadapted
             if (sources == null)
             {
                 Contribution = 0f;
+                LoudnessSum = 0f;
                 return;
             }
 
@@ -878,6 +963,7 @@ namespace soundphysicsadapted
             }
 
             Contribution = activeCount > 0 ? Math.Min(totalContribution / activeCount, 1f) : 0f;
+            LoudnessSum = Math.Min(totalContribution, 1.5f);
         }
 
         // ════════════════════════════════════════════════════════════════

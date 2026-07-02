@@ -100,6 +100,31 @@ namespace soundphysicsadapted
         private float windPositionalContribution = 0f;
         private float hailPositionalContribution = 0f;
 
+        // ── Bed-hold handover (indoor transition) ──
+        // The industry-standard fix for the "walk inside → rain hole → late loud
+        // positional" jank: Layer 1 only surrenders level that Layer 2 has ACTUALLY
+        // delivered (summed positional loudness). Enclosure metrics still change the
+        // LPF character instantly, but total rain energy stays continuous no matter
+        // how late openings are detected or sources spawn. The hold also releases at
+        // a fixed rate so sealed rooms (no openings, Layer 2 never delivers) still
+        // settle to the muffled bed within ~3s instead of holding forever.
+        private float rainBedHold = 0f;
+        private float hailBedHold = 0f;
+        private float rainPositionalLoudness = 0f; // summed L2 loudness (not average)
+        private float hailPositionalLoudness = 0f;
+        // L2 loudness at the moment the hold engaged. Positional sources often
+        // already play OUTDOORS (attenuated); only loudness gained SINCE the
+        // transition counts as delivered replacement energy, else a pre-existing
+        // outdoor L2 sum would cancel the hold exactly when it's needed.
+        private float rainL2Baseline = 0f;
+        private float hailL2Baseline = 0f;
+        /// <summary>
+        /// Bed-hold release in volume/sec — fallback pace when Layer 2 never
+        /// delivers (sealed room): outdoor->muffled settles in ~1.5-2s, matching
+        /// the AAA indoor-mix crossfade timing.
+        /// </summary>
+        private const float BED_HOLD_RELEASE_RATE = 0.20f;
+
         // Track state for debug
         private bool rainLeafyPlaying, rainLeaflessPlaying;
         private bool windLeafyPlaying, windLeaflessPlaying;
@@ -115,6 +140,17 @@ namespace soundphysicsadapted
             rainPositionalContribution = Math.Clamp(rainContrib, 0f, 1f);
             windPositionalContribution = Math.Clamp(windContrib, 0f, 1f);
             hailPositionalContribution = Math.Clamp(hailContrib, 0f, 1f);
+        }
+
+        /// <summary>
+        /// Set summed Layer 2 loudness per type for the bed-hold handover.
+        /// Sum (not average) — this is the total energy Layer 2 is delivering,
+        /// which is what Layer 1 is allowed to surrender during transitions.
+        /// </summary>
+        public void SetPositionalLoudness(float rainSum, float hailSum)
+        {
+            rainPositionalLoudness = Math.Max(0f, rainSum);
+            hailPositionalLoudness = Math.Max(0f, hailSum);
         }
 
 
@@ -176,6 +212,31 @@ namespace soundphysicsadapted
                     vol = CalculateRainVolume(smoothedRainIntensity, skyCoverage);
                     vol *= DeepEnclosureFactor(skyCoverage, occlusionFactor);
                     vol *= RainDuckFactor();
+
+                    // Bed-hold handover: rises instantly (walking out = instant rain),
+                    // falls only at the release rate. Layer 2 loudness gained since the
+                    // hold engaged eats into it 1:1, so the bed drops exactly as fast
+                    // as positional sources take over — never faster. Clamped to current
+                    // intensity so rain stopping isn't held artificially.
+                    rainBedHold = Math.Max(vol, rainBedHold - BED_HOLD_RELEASE_RATE * dt);
+                    rainBedHold = Math.Min(rainBedHold, smoothedRainIntensity);
+                    if (rainBedHold <= vol + 0.001f)
+                    {
+                        // Hold inactive — keep baseline synced to current L2 output
+                        rainL2Baseline = rainPositionalLoudness;
+                    }
+                    else
+                    {
+                        // Hold active — only NEW L2 loudness counts as delivered
+                        rainL2Baseline = Math.Min(rainL2Baseline, rainPositionalLoudness);
+                        float delivered = rainPositionalLoudness - rainL2Baseline;
+                        vol = Math.Max(vol, rainBedHold - delivered);
+                    }
+                }
+                else
+                {
+                    rainBedHold = 0f;
+                    rainL2Baseline = 0f;
                 }
                 currentRainVol = vol;
 
@@ -214,6 +275,25 @@ namespace soundphysicsadapted
                     vol = CalculateHailVolume(smoothedHailIntensity, skyCoverage);
                     vol *= DeepEnclosureFactor(skyCoverage, occlusionFactor);
                     vol *= HailDuckFactor();
+
+                    // Bed-hold handover — same as rain (see rain block)
+                    hailBedHold = Math.Max(vol, hailBedHold - BED_HOLD_RELEASE_RATE * dt);
+                    hailBedHold = Math.Min(hailBedHold, smoothedHailIntensity);
+                    if (hailBedHold <= vol + 0.001f)
+                    {
+                        hailL2Baseline = hailPositionalLoudness;
+                    }
+                    else
+                    {
+                        hailL2Baseline = Math.Min(hailL2Baseline, hailPositionalLoudness);
+                        float delivered = hailPositionalLoudness - hailL2Baseline;
+                        vol = Math.Max(vol, hailBedHold - delivered);
+                    }
+                }
+                else
+                {
+                    hailBedHold = 0f;
+                    hailL2Baseline = 0f;
                 }
                 currentHailVol = vol;
 
@@ -552,6 +632,10 @@ namespace soundphysicsadapted
             smoothedRainIntensity = 0f;
             smoothedWindSpeed = 0f;
             smoothedHailIntensity = 0f;
+            rainBedHold = 0f;
+            hailBedHold = 0f;
+            rainL2Baseline = 0f;
+            hailL2Baseline = 0f;
             currentRainVol = 0f;
             currentWindVol = 0f;
             currentHailVol = 0f;
@@ -689,7 +773,7 @@ namespace soundphysicsadapted
             {
                 duckStr = $" Duck(r={rainPositionalContribution:F2} w={windPositionalContribution:F2} h={hailPositionalContribution:F2})";
             }
-            return $"Rain:{(rainLeafyPlaying || rainLeaflessPlaying ? "ON" : "off")}(v={currentRainVol:F3} lpf={smoothedRainGainHF:F3}) " +
+            return $"Rain:{(rainLeafyPlaying || rainLeaflessPlaying ? "ON" : "off")}(v={currentRainVol:F3} lpf={smoothedRainGainHF:F3} hold={rainBedHold:F2} l2={rainPositionalLoudness:F2}) " +
                    $"Hail:{(hailPlaying ? "ON" : "off")}(v={currentHailVol:F3} lpf={smoothedHailGainHF:F3}) " +
                    $"Wind:{(windLeafyPlaying || windLeaflessPlaying ? "ON" : "off")}(v={currentWindVol:F3} lpf={smoothedWindGainHF:F3}) " +
                    $"Tremble:{(tremblePlaying ? "ON" : "off")}(v={currentTrembleVol:F3} lpf={smoothedTrembleGainHF:F3})" +

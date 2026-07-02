@@ -435,7 +435,10 @@ namespace soundphysicsadapted
                     WorldPos = cluster.Centroid,
                     WindWorldPos = new Vec3d(cluster.WindCentroid.X, cluster.WindCentroid.Y, cluster.WindCentroid.Z),
                     ClusterWeight = cluster.MemberCount,
-                    SmoothedClusterWeight = Math.Min(cluster.MemberCount, 1f),  // Start at 1, ramp up
+                    // Start at the real cluster size — the source's spawn ramp handles
+                    // anti-pop. Starting at 1 made big openings (14+ members) spawn at
+                    // the 0.35 floor volume and crawl up, prolonging the transition hole.
+                    SmoothedClusterWeight = cluster.MemberCount,
                     LastKnownOcclusion = cluster.AverageOcclusion,
                     CreatedTimeMs = gameTimeMs,
                     LastVerifiedTimeMs = gameTimeMs,

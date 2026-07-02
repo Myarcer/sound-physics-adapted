@@ -35,6 +35,10 @@ namespace soundphysicsadapted
         public float WindContribution => windPool?.Contribution ?? 0f;
         public float HailContribution => hailPool?.Contribution ?? 0f;
 
+        // Per-type summed loudness for the Layer 1 bed-hold handover
+        public float RainLoudnessSum => rainPool?.LoudnessSum ?? 0f;
+        public float HailLoudnessSum => hailPool?.LoudnessSum ?? 0f;
+
         /// <summary>Combined active count across all pools.</summary>
         public int TotalActiveCount =>
             (rainPool?.ActiveCount ?? 0) +
@@ -80,8 +84,6 @@ namespace soundphysicsadapted
 
             windPool.VolumeCalculator = CalculateWindVolume;
 
-            // Wind: slightly faster fade-in for responsiveness (wind gusts are sudden)
-            windPool.FadeInRate = 0.15f;  // ~1.2s to 90%
             windPool.FadeOutRate = 0.08f; // ~3.5s fade (wind lingers)
 
             // Wind position: use WindWorldPos (ceiling height for sky openings)
@@ -97,9 +99,6 @@ namespace soundphysicsadapted
             hailPool.AssetResolver = (_) => new AssetLocation("sounds/weather/tracks/hail.ogg");
 
             hailPool.VolumeCalculator = CalculateHailVolume;
-
-            // Hail: faster fade-in (percussive onset), standard fade-out
-            hailPool.FadeInRate = 0.15f;
 
             initialized = true;
             WeatherAudioManager.WeatherDebugLog(
