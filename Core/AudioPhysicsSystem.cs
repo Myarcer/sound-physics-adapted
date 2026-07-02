@@ -1495,6 +1495,13 @@ namespace soundphysicsadapted
         /// </summary>
         public ReverbCellCache CellCache => reverbCellCache;
 
+        /// <summary>
+        /// Reverb at the player's position, refreshed every 250ms. Used as the cheap
+        /// first-frame approximation for newly started sounds (SoundStartPostfix) so
+        /// their attack is never dry — the physics tick EMA-corrects within 50ms.
+        /// </summary>
+        public ReverbResult CachedPlayerReverb => cachedPlayerReverb;
+
         public string GetStats()
         {
             var cellStats = reverbCellCache?.GetStats();

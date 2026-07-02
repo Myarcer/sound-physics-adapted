@@ -94,7 +94,20 @@ namespace soundphysicsadapted
         private static MethodInfo alSourceMethod;
         private static object efxDirectFilterValue;
 
-        // OPTIMIZATION: Cached PropertyInfo for IsDisposed check (avoids GetProperty per sound)
+        // ==== Compiled hot-path delegates (fallback: reflection Invoke) ====
+        // AttachFilter runs per sound per 25ms SmoothAll tick; SetALSourcePosition runs
+        // per repositioned sound per tick AND per VS SetPosition call (every frame for
+        // moving sounds). Compiled via EfxHelper's expression helpers — zero allocation.
+        private static Action<int, int, int> dAlSourceInt;              // AL.Source(src, ALSourcei, int)
+        private static Action<int, int, float> dAlSourceFloat;          // AL.Source(src, ALSourcef, float)
+        private static Action<int, int, float, float, float> dAlSource3f; // AL.Source(src, ALSource3f, f, f, f)
+        private static int efxDirectFilterInt;
+        private static int alSourcefPitchInt;
+        private static int alSource3fPositionInt;
+
+        // OPTIMIZATION: Compiled IsDisposed getter (no reflection Invoke + bool boxing
+        // per sound per 25ms SmoothAll tick). Falls back to PropertyInfo, then weak ref.
+        private static System.Func<ILoadedSound, bool> isDisposedGetter;
         private static PropertyInfo isDisposedProperty;
         private static bool isDisposedPropertyChecked = false;
 
@@ -118,10 +131,29 @@ namespace soundphysicsadapted
             {
                 if (!isDisposedPropertyChecked)
                 {
-                    isDisposedProperty = sound.GetType().GetProperty("IsDisposed");
                     isDisposedPropertyChecked = true;
+                    isDisposedProperty = sound.GetType().GetProperty("IsDisposed");
+                    if (isDisposedProperty != null)
+                    {
+                        try
+                        {
+                            // Compile: s => ((ConcreteType)s).IsDisposed
+                            // One-time cost; per-call is then a direct call, no boxing.
+                            var p = System.Linq.Expressions.Expression.Parameter(typeof(ILoadedSound), "s");
+                            var body = System.Linq.Expressions.Expression.Property(
+                                System.Linq.Expressions.Expression.Convert(p, sound.GetType()),
+                                isDisposedProperty);
+                            isDisposedGetter = System.Linq.Expressions.Expression
+                                .Lambda<System.Func<ILoadedSound, bool>>(body, p).Compile();
+                        }
+                        catch { /* keep PropertyInfo fallback */ }
+                    }
                 }
 
+                if (isDisposedGetter != null)
+                {
+                    return !isDisposedGetter(sound);
+                }
                 if (isDisposedProperty != null)
                 {
                     return !(bool)isDisposedProperty.GetValue(sound);
@@ -280,7 +312,11 @@ namespace soundphysicsadapted
                     return false;
                 }
 
-                api.Logger.Debug($"[SoundFilterManager] Found AL.Source: {alSourceMethod}");
+                // Compile zero-alloc delegate for the per-tick filter attach path
+                efxDirectFilterInt = Convert.ToInt32(efxDirectFilterValue);
+                dAlSourceInt = EfxHelper.CompileIntEnumInt(alSourceMethod, alSourceiType);
+
+                api.Logger.Debug($"[SoundFilterManager] Found AL.Source: {alSourceMethod} (compiled={dAlSourceInt != null})");
                 return true;
             }
             catch (Exception ex)
@@ -472,7 +508,10 @@ namespace soundphysicsadapted
                 // Clear any pending errors before our call
                 EfxHelper.GetALError();
 
-                alSourceMethod.Invoke(null, new object[] { sourceId, efxDirectFilterValue, filterId });
+                if (dAlSourceInt != null)
+                    dAlSourceInt(sourceId, efxDirectFilterInt, filterId);
+                else
+                    alSourceMethod.Invoke(null, new object[] { sourceId, efxDirectFilterValue, filterId });
 
                 // Check if OpenAL reported an error
                 int error = EfxHelper.GetALError();
@@ -537,8 +576,10 @@ namespace soundphysicsadapted
 
                     if (alSourceFloatMethod != null)
                     {
+                        alSourcefPitchInt = Convert.ToInt32(alSourcefPitchValue);
+                        dAlSourceFloat = EfxHelper.CompileIntEnumFloat(alSourceFloatMethod, alSourcefType);
                         if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
-                            SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Initialized AL.Source float method");
+                            SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Initialized AL.Source float method (compiled={dAlSourceFloat != null})");
                         return true;
                     }
                 }
@@ -575,7 +616,10 @@ namespace soundphysicsadapted
                 float finalPitch = Math.Max(0.1f, Math.Min(3.0f, basePitch + pitchOffset));
 
                 // Apply via OpenAL
-                alSourceFloatMethod.Invoke(null, new object[] { sourceId, alSourcefPitchValue, finalPitch });
+                if (dAlSourceFloat != null)
+                    dAlSourceFloat(sourceId, alSourcefPitchInt, finalPitch);
+                else
+                    alSourceFloatMethod.Invoke(null, new object[] { sourceId, alSourcefPitchValue, finalPitch });
 
                 return true;
             }
@@ -639,8 +683,10 @@ namespace soundphysicsadapted
 
                     if (alSource3fMethod != null)
                     {
+                        alSource3fPositionInt = Convert.ToInt32(alSource3fPositionValue);
+                        dAlSource3f = EfxHelper.CompileIntEnum3Float(alSource3fMethod, alSource3fType);
                         if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
-                            SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] AL.Source3f init OK via {asm.GetName().Name}");
+                            SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] AL.Source3f init OK via {asm.GetName().Name} (compiled={dAlSource3f != null})");
                         return true;
                     }
                     else
@@ -676,6 +722,11 @@ namespace soundphysicsadapted
                 return;
             try
             {
+                if (dAlSource3f != null)
+                {
+                    dAlSource3f(sourceId, alSource3fPositionInt, (float)pos.X, (float)pos.Y, (float)pos.Z);
+                    return;
+                }
                 alSource3fMethod.Invoke(null, new object[]
                 {
                     sourceId,
@@ -859,19 +910,9 @@ namespace soundphysicsadapted
             // Skip if sound was disposed — prevents OpenAL InvalidName on stale sourceId
             if (!IsSoundAlive(sound, entry)) return;
 
-            try
-            {
-                Vec3d pos = entry.CurrentRepositionedPos;
-                alSource3fMethod.Invoke(null, new object[]
-                {
-                    entry.SourceId,
-                    alSource3fPositionValue,
-                    (float)pos.X,
-                    (float)pos.Y,
-                    (float)pos.Z
-                });
-            }
-            catch { }
+            // Runs on every VS SetPosition call (per frame for moving sounds) —
+            // SetALSourcePosition uses the compiled zero-alloc delegate.
+            SetALSourcePosition(entry.SourceId, entry.CurrentRepositionedPos);
         }
 
         /// <summary>
@@ -884,7 +925,10 @@ namespace soundphysicsadapted
 
             try
             {
-                alSourceMethod.Invoke(null, new object[] { sourceId, efxDirectFilterValue, 0 });
+                if (dAlSourceInt != null)
+                    dAlSourceInt(sourceId, efxDirectFilterInt, 0);
+                else
+                    alSourceMethod.Invoke(null, new object[] { sourceId, efxDirectFilterValue, 0 });
                 return true;
             }
             catch

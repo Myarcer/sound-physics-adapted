@@ -66,11 +66,9 @@ namespace soundphysicsadapted
         public float DirectOcclusion;
         public bool HasDirectAirspace;
 
-        public ReverbCellEntry()
-        {
-            BouncePoints = new BouncePoint[256]; // 32 rays * 4 bounces max + some probe
-            Openings = new OpeningData[24];       // 12 probes * ~2 openings each
-        }
+        // Arrays are allocated right-sized by StoreCellIfEmpty (the only producer).
+        // A fixed 256-element BouncePoint array here cost ~14KB per store ATTEMPT,
+        // including TryAdd losers — significant GC churn while the player moves.
     }
 
     /// <summary>
@@ -243,20 +241,21 @@ namespace soundphysicsadapted
             float distance = (float)soundPos.DistanceTo(playerPos);
             long key = PackCompositeKey(soundPos, playerPos, distance);
 
-            // Only store if no existing entry (don't overwrite valid entries)
+            // Only store if no existing entry (don't overwrite valid entries).
+            // Cheap pre-check avoids building the entry + array copies for the
+            // common "already stored" case; TryAdd below still guards the race.
+            if (cells.ContainsKey(key)) return;
 
             var entry = new ReverbCellEntry();
             entry.Reverb = reverb;
 
-            // Copy bounce data
-            if (bounceCount > entry.BouncePoints.Length)
-                entry.BouncePoints = new BouncePoint[bounceCount];
+            // Copy bounce data (right-sized — source arrays are shared statics)
+            entry.BouncePoints = new BouncePoint[bounceCount];
             Array.Copy(bounces, entry.BouncePoints, bounceCount);
             entry.BouncePointCount = bounceCount;
 
             // Copy opening data
-            if (openingCount > entry.Openings.Length)
-                entry.Openings = new OpeningData[openingCount];
+            entry.Openings = new OpeningData[openingCount];
             if (openingCount > 0)
                 Array.Copy(openings, entry.Openings, openingCount);
             entry.OpeningCount = openingCount;
