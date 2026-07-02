@@ -391,10 +391,6 @@ namespace soundphysicsadapted
                     }
                 }
 
-                // New sound<->sourceId pairing: VS just ran createSoundSource() with fresh
-                // vanilla distance params, so the distance-model dedupe for this id must reset.
-                LoadSoundPatch.InvalidateDistanceModel(sourceId);
-
                 // Track it
                 var entry = new FilterEntry
                 {
@@ -413,6 +409,12 @@ namespace soundphysicsadapted
                     EfxHelper.DeleteFilter(filterId);
                     return true;
                 }
+
+                // New sound<->sourceId pairing: VS just ran createSoundSource() with fresh
+                // vanilla distance params, so the distance-model dedupe for this id must reset.
+                // Must run AFTER the TryAdd win — a losing thread invalidating here would let
+                // the winner's already-applied multipliers get applied a second time (stacking).
+                LoadSoundPatch.InvalidateDistanceModel(sourceId);
                 sourceIdToSound[sourceId] = sound;
                 totalFiltersCreated++;
 
