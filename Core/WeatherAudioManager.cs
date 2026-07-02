@@ -385,9 +385,13 @@ namespace soundphysicsadapted
 
             if (config.DebugMode && config.DebugPositionalWeather)
             {
+                int suppressed = 0;
+                var trackedList = openingTracker.TrackedOpenings;
+                for (int i = 0; i < trackedList.Count; i++)
+                    if (trackedList[i].Suppressed) suppressed++;
                 WeatherDebugLog(
                     $"[5B] openings={openings.Count} clusters={clusters.Count} " +
-                    $"tracked={openingTracker.Count} active={positionalHandler?.TotalActiveCount ?? 0} " +
+                    $"tracked={openingTracker.Count} suppressed={suppressed} active={positionalHandler?.TotalActiveCount ?? 0} " +
                     $"duck: rain={positionalHandler?.RainContribution ?? 0:F2} wind={positionalHandler?.WindContribution ?? 0:F2} hail={positionalHandler?.HailContribution ?? 0:F2}");
             }
         }

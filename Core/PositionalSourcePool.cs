@@ -82,6 +82,30 @@ namespace soundphysicsadapted
         /// <summary>Fade-out rate per tick (exponential). Higher = faster fade-out.</summary>
         public float FadeOutRate { get; set; } = 0.10f;   // ~3s to silence
 
+        /// <summary>
+        /// Target-tracking rate for sources already established (above spawn threshold).
+        /// Their target changes come from enclosure smoothing (~1s) which is already
+        /// smooth — chasing it with the slow FadeInRate stacked a second lag on top,
+        /// so Layer 2 rose 1.5-2s AFTER Layer 1 fell during indoor transitions (audible
+        /// rain dropout in tunnel mouths). Fast tracking makes the enclosure smoother
+        /// the single governing time constant for both layers.
+        /// </summary>
+        public float TrackRate { get; set; } = 0.35f;    // ~0.5s to 90%
+
+        /// <summary>Below this volume a rising source uses FadeInRate (spawn ramp).</summary>
+        private const float SPAWN_RAMP_THRESHOLD = 0.05f;
+
+        /// <summary>
+        /// Distance at which near-field gain compensation ends (full volume beyond).
+        /// OpenAL barely attenuates within a few meters at Range=48, so a source at
+        /// the tunnel mouth 1-2m from the ear played FAR louder than the ambient bed
+        /// it replaced. Scale volume down linearly inside this radius instead.
+        /// </summary>
+        public float NearFieldRefDist { get; set; } = 6f;
+
+        /// <summary>Gain floor at zero distance for near-field compensation.</summary>
+        public float NearFieldMinGain { get; set; } = 0.4f;
+
         /// <summary>Volume below which a source is considered silent and can be stopped.</summary>
         public float MinVolume { get; set; } = 0.005f;
 
@@ -204,6 +228,8 @@ namespace soundphysicsadapted
             int maxSlots = sources.Length;
             int openingCount = trackedOpenings.Count;
             Span<bool> openingAssigned = stackalloc bool[openingCount];
+            // Per-slot opening score for eviction decisions (0 = unmatched/fading slot)
+            Span<float> slotScores = stackalloc float[maxSlots];
 
             // Pass 1: Update existing slot assignments (matched by TrackingId)
             for (int s = 0; s < maxSlots; s++)
@@ -221,7 +247,9 @@ namespace soundphysicsadapted
                         var pos = PositionSelector != null ? PositionSelector(opening) : opening.WorldPos;
                         slot.WorldPos = pos;
                         float baseVol = CalculateVolume(opening, intensity, volumeMultiplier);
-                        slot.TargetVolume = baseVol * ProximityFadeFactor(opening, earPos);
+                        slot.TargetVolume = baseVol * ProximityFadeFactor(opening, earPos)
+                                                    * NearFieldFactor(pos, earPos);
+                        slotScores[s] = OpeningScore(opening, earPos);
 
                         if (slot.Sound != null && slot.Sound.IsPlaying)
                         {
@@ -247,10 +275,35 @@ namespace soundphysicsadapted
                 }
             }
 
-            // Pass 2: Assign unmatched openings to empty/fading-out slots
+            // Pass 2: Assign unmatched openings to empty/fading-out slots.
+            // Openings are processed best-score-first (weight/distance, verified bonus)
+            // so nearby relevant openings win slots over distant persisted ones —
+            // previously tracker insertion order let old far sources monopolize slots.
+            Span<int> candidateOrder = stackalloc int[openingCount];
+            int candidateCount = 0;
             for (int o = 0; o < openingCount; o++)
             {
                 if (openingAssigned[o]) continue;
+                if (trackedOpenings[o].Suppressed) continue; // Never assign slots to redundant openings
+                candidateOrder[candidateCount++] = o;
+            }
+            // Insertion sort by descending score (candidateCount is tiny)
+            for (int i = 1; i < candidateCount; i++)
+            {
+                int cur = candidateOrder[i];
+                float curScore = OpeningScore(trackedOpenings[cur], earPos);
+                int j = i - 1;
+                while (j >= 0 && OpeningScore(trackedOpenings[candidateOrder[j]], earPos) < curScore)
+                {
+                    candidateOrder[j + 1] = candidateOrder[j];
+                    j--;
+                }
+                candidateOrder[j + 1] = cur;
+            }
+
+            for (int c = 0; c < candidateCount; c++)
+            {
+                int o = candidateOrder[c];
 
                 int bestSlot = -1;
                 float lowestVolume = float.MaxValue;
@@ -274,7 +327,38 @@ namespace soundphysicsadapted
                     }
                 }
 
-                if (bestSlot < 0) break;
+                if (bestSlot < 0)
+                {
+                    // All slots busy: if this opening clearly outclasses the weakest
+                    // active source, start fading that source out. The candidate claims
+                    // the slot on a later tick once the fade crosses the eviction
+                    // threshold — a fade-swap, never a hard cut.
+                    float candidateScore = OpeningScore(trackedOpenings[o], earPos);
+                    int weakest = -1;
+                    float weakestScore = float.MaxValue;
+                    for (int s = 0; s < maxSlots; s++)
+                    {
+                        if (sources[s].TargetVolume <= 0f) continue; // Already fading
+                        if (slotScores[s] < weakestScore)
+                        {
+                            weakestScore = slotScores[s];
+                            weakest = s;
+                        }
+                    }
+
+                    if (weakest >= 0 && candidateScore > weakestScore * 2f)
+                    {
+                        sources[weakest].TargetVolume = 0f;
+                        slotScores[weakest] = float.MaxValue; // Don't evict twice this tick
+                        if (debug)
+                        {
+                            WeatherAudioManager.WeatherDebugLog(
+                                $"[5B-{debugTag}] EVICT-FADE slot={weakest} trackId={sources[weakest].TrackingId} " +
+                                $"score={weakestScore:F2} outclassed by trackId={trackedOpenings[o].TrackingId} score={candidateScore:F2}");
+                        }
+                    }
+                    continue;
+                }
 
                 var targetSlot = sources[bestSlot];
                 var newOpening = trackedOpenings[o];
@@ -290,7 +374,9 @@ namespace soundphysicsadapted
                 targetSlot.Active = true;
                 targetSlot.CurrentVolume = 0f;
                 float baseVol2 = CalculateVolume(newOpening, intensity, volumeMultiplier);
-                targetSlot.TargetVolume = baseVol2 * ProximityFadeFactor(newOpening, earPos);
+                targetSlot.TargetVolume = baseVol2 * ProximityFadeFactor(newOpening, earPos)
+                                                   * NearFieldFactor(newPos, earPos);
+                slotScores[bestSlot] = OpeningScore(newOpening, earPos);
 
                 EnsureSourcePlaying(targetSlot);
 
@@ -316,7 +402,13 @@ namespace soundphysicsadapted
                 }
                 else if (diff > 0)
                 {
-                    slot.CurrentVolume += diff * FadeInRate;
+                    // Spawn ramp (FadeInRate) only while the source is still quiet.
+                    // Established sources track their target fast — the target is
+                    // already smoothed upstream (enclosure EMA, cluster weight EMA),
+                    // and stacking a second slow lag here made Layer 2 rise seconds
+                    // after Layer 1 fell on indoor transitions.
+                    float rate = slot.CurrentVolume < SPAWN_RAMP_THRESHOLD ? FadeInRate : TrackRate;
+                    slot.CurrentVolume += diff * rate;
                 }
                 else
                 {
@@ -487,6 +579,10 @@ namespace soundphysicsadapted
                 if (slot.Active && slot.TrackingId == trackingId && slot.Sound != null)
                 {
                     if (slot.CurrentVolume <= MinVolume) return false;
+                    // Deliberately fading out (suppressed, evicted, or structurally
+                    // zeroed) — must not refresh tracker persistence, or a whisper-
+                    // volume far source keeps its opening alive forever.
+                    if (slot.TargetVolume <= 0f) return false;
 
                     // Use EFFECTIVE occlusion (path-resolved when available),
                     // not raw direct DDA. A sound heard around a corner via
@@ -557,7 +653,7 @@ namespace soundphysicsadapted
             // so the source can fade out and be removed by audibility timeout.
             // The 0.35 floor below only applies to real (non-zeroed) openings to
             // prevent tiny 1-member clusters from being too quiet.
-            if (opening.SmoothedClusterWeight < 0.01f)
+            if (opening.Suppressed || opening.SmoothedClusterWeight < 0.01f)
                 return 0f;
 
             // Default: same as original rain formula
@@ -589,6 +685,34 @@ namespace soundphysicsadapted
 
             // Linear fade between end and start distances
             return (dist - ProximityFadeEndDist) / (ProximityFadeStartDist - ProximityFadeEndDist);
+        }
+
+        /// <summary>
+        /// Near-field gain compensation. OpenAL's distance model barely attenuates
+        /// within a few meters at Range=48, so a source right at the ear plays at
+        /// nearly full gain — far louder than the ambient bed it crossfades against.
+        /// Linear ramp from NearFieldMinGain at 0m to 1.0 at NearFieldRefDist.
+        /// </summary>
+        private float NearFieldFactor(Vec3d sourcePos, Vec3d earPos)
+        {
+            if (earPos == null || sourcePos == null) return 1f;
+            float dist = (float)sourcePos.DistanceTo(earPos);
+            if (dist >= NearFieldRefDist) return 1f;
+            return NearFieldMinGain + (1f - NearFieldMinGain) * (dist / NearFieldRefDist);
+        }
+
+        /// <summary>
+        /// Slot-priority score: bigger and closer openings matter more, currently
+        /// verified openings beat persisted ones, suppressed openings score zero.
+        /// Used to order slot assignment and decide fade-swap evictions.
+        /// </summary>
+        private static float OpeningScore(TrackedOpening opening, Vec3d earPos)
+        {
+            if (opening.Suppressed) return 0f;
+            float dist = earPos != null ? (float)opening.WorldPos.DistanceTo(earPos) : 0f;
+            float score = (opening.SmoothedClusterWeight + 0.5f) / (1f + dist);
+            if (opening.CurrentlyVerified) score *= 1.5f;
+            return score;
         }
 
         /// <summary>

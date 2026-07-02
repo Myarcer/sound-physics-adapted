@@ -102,6 +102,14 @@ namespace soundphysicsadapted
         /// For wall openings, matches WorldPos. Used by the wind PositionalSourcePool.
         /// </summary>
         public Vec3d WindWorldPos;
+
+        /// <summary>
+        /// Set each tick by WeatherPositionalHandler when a closer, verified opening
+        /// covers the same direction from the player's ear. Suppressed openings get
+        /// zero target volume (fade out) and don't refresh audibility persistence —
+        /// they add no distinct spatial information, only redundant far-source mud.
+        /// </summary>
+        public bool Suppressed;
     }
 
     /// <summary>

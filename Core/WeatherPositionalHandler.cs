@@ -143,6 +143,11 @@ namespace soundphysicsadapted
             float outdoorAttenuation = 1f - (outdoorness * 0.85f); // Max 85% reduction when fully outdoors
             outdoorAttenuation = Math.Max(outdoorAttenuation, 0.15f); // Floor at 15% volume
 
+            // Directional redundancy: a far opening in the same direction as a closer,
+            // verified one contributes no distinct spatial information — suppress it so
+            // pool slots and audibility persistence go to openings that matter.
+            UpdateDirectionalSuppression(trackedOpenings, earPos);
+
             // Rain: always update when raining
             if (config.EnablePositionalWeather)
             {
@@ -243,6 +248,65 @@ namespace soundphysicsadapted
         }
 
         // ════════════════════════════════════════════════════════════════
+        // Directional redundancy suppression
+        // ════════════════════════════════════════════════════════════════
+
+        /// <summary>Cos of the suppression cone half-angle (~35 degrees).</summary>
+        private const float SUPPRESSION_ANGLE_COS = 0.82f;
+
+        /// <summary>An opening must be this fraction closer to suppress another.</summary>
+        private const float SUPPRESSION_DIST_RATIO = 0.6f;
+
+        /// <summary>
+        /// Mark openings as Suppressed when a closer, currently-verified opening of
+        /// comparable weight covers the same direction from the ear. Suppressed
+        /// openings fade to silence via zero target volume, and IsSourceAudible
+        /// ignores them so audibility persistence can't keep them alive forever.
+        /// </summary>
+        private static void UpdateDirectionalSuppression(
+            IReadOnlyList<TrackedOpening> openings, Vec3d earPos)
+        {
+            if (openings == null || earPos == null) return;
+
+            int n = openings.Count;
+            for (int i = 0; i < n; i++) openings[i].Suppressed = false;
+            if (n < 2) return;
+
+            for (int a = 0; a < n; a++)
+            {
+                var opA = openings[a];
+                double axd = opA.WorldPos.X - earPos.X;
+                double ayd = opA.WorldPos.Y - earPos.Y;
+                double azd = opA.WorldPos.Z - earPos.Z;
+                double distA = Math.Sqrt(axd * axd + ayd * ayd + azd * azd);
+                if (distA < 0.5) continue; // On top of it — direction meaningless
+
+                for (int b = 0; b < n; b++)
+                {
+                    if (b == a) continue;
+                    var opB = openings[b];
+                    if (!opB.CurrentlyVerified || opB.Suppressed) continue;
+                    // Only comparable-or-bigger openings may suppress
+                    if (opB.SmoothedClusterWeight < opA.SmoothedClusterWeight * 0.5f) continue;
+
+                    double bxd = opB.WorldPos.X - earPos.X;
+                    double byd = opB.WorldPos.Y - earPos.Y;
+                    double bzd = opB.WorldPos.Z - earPos.Z;
+                    double distB = Math.Sqrt(bxd * bxd + byd * byd + bzd * bzd);
+                    if (distB >= distA * SUPPRESSION_DIST_RATIO) continue;
+                    if (distB < 0.01) continue;
+
+                    double dot = (axd * bxd + ayd * byd + azd * bzd) / (distA * distB);
+                    if (dot > SUPPRESSION_ANGLE_COS)
+                    {
+                        opA.Suppressed = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
         // Per-type volume calculators
         // ════════════════════════════════════════════════════════════════
 
@@ -253,8 +317,8 @@ namespace soundphysicsadapted
         /// </summary>
         private static float CalculateRainVolume(TrackedOpening opening, float intensity, float multiplier)
         {
-            // Zero weight (structural shrink) = zero volume, don't apply floor
-            if (opening.SmoothedClusterWeight < 0.01f) return 0f;
+            // Zero weight (structural shrink) or redundant direction = zero volume
+            if (opening.Suppressed || opening.SmoothedClusterWeight < 0.01f) return 0f;
 
             float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / 8f, 1f));
             sizeWeight = Math.Max(sizeWeight, 0.35f);
@@ -268,8 +332,8 @@ namespace soundphysicsadapted
         /// </summary>
         private static float CalculateWindVolume(TrackedOpening opening, float windSpeed, float multiplier)
         {
-            // Zero weight (structural shrink) = zero volume, don't apply floor
-            if (opening.SmoothedClusterWeight < 0.01f) return 0f;
+            // Zero weight (structural shrink) or redundant direction = zero volume
+            if (opening.Suppressed || opening.SmoothedClusterWeight < 0.01f) return 0f;
 
             float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / 6f, 1f));
             sizeWeight = Math.Max(sizeWeight, 0.30f);
@@ -283,8 +347,8 @@ namespace soundphysicsadapted
         /// </summary>
         private static float CalculateHailVolume(TrackedOpening opening, float hailIntensity, float multiplier)
         {
-            // Zero weight (structural shrink) = zero volume, don't apply floor
-            if (opening.SmoothedClusterWeight < 0.01f) return 0f;
+            // Zero weight (structural shrink) or redundant direction = zero volume
+            if (opening.Suppressed || opening.SmoothedClusterWeight < 0.01f) return 0f;
 
             float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / 8f, 1f));
             sizeWeight = Math.Max(sizeWeight, 0.40f);
