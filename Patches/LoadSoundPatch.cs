@@ -45,8 +45,46 @@ namespace soundphysicsadapted
         // ambient sounds before IsWorldReady, causing them to be permanently invisible to the
         // occlusion tick system. After warmup completes, ProcessPreWarmupQueue() retroactively
         // registers and applies initial occlusion to these sounds.
-        private static List<WeakReference<ILoadedSound>> preWarmupSoundQueue = new List<WeakReference<ILoadedSound>>();
+        // Locked: Start() can fire on the music-engine worker thread (IMusicEngine.LoadTrack
+        // callback), so the queue is written off-thread while the smoothing tick drains it.
+        private static readonly List<WeakReference<ILoadedSound>> preWarmupSoundQueue = new List<WeakReference<ILoadedSound>>();
         private static bool preWarmupQueueProcessed = false;
+
+        // === MAIN THREAD GATE ===
+        // The occlusion/reverb compute cores (OcclusionCalculator, AcousticRaytracer,
+        // SoundSourceAdjuster) use shared static scratch state and are only safe on the
+        // main thread. Start()/LoadSound can fire on the music-engine worker thread
+        // (verified in VS 1.21/1.22: MusicTrack.BeginPlay's onLoaded callback runs on the
+        // music thread and resonator/boombox tracks are POSITIONAL music). Off-thread we
+        // only register the sound (thread-safe: ConcurrentDictionary + OpenAL) and let
+        // the next 50ms physics tick do the raycasting.
+        private static int _mainThreadId = -1;
+        private static bool IsMainThread => Environment.CurrentManagedThreadId == _mainThreadId;
+
+        /// <summary>
+        /// Reset all static state. Called from ModSystem.Dispose() — statics survive world
+        /// unload (the mod assembly stays loaded), so without this a second world join in
+        /// the same client session kept a stale block accessor, a dead pre-warmup queue
+        /// (ambient loops never registered), and stale local-player/dedupe queues.
+        /// </summary>
+        public static void Reset()
+        {
+            lock (preWarmupSoundQueue) preWarmupSoundQueue.Clear();
+            preWarmupQueueProcessed = false;
+            cachedBlockAccessor = null;
+            cachedApi = null;
+            soundAudioDataDict = null;
+            monoSwapKey = null;
+            monoSwapOriginal = null;
+            lock (_localPlayerSoundPositions) _localPlayerSoundPositions.Clear();
+            lock (_localPlayerOcclusionSkipQueue) _localPlayerOcclusionSkipQueue.Clear();
+            lock (_distanceModelApplied) _distanceModelApplied.Clear();
+            lock (sourceTrackLock)
+            {
+                playedSourceIds.Clear();
+                registeredSourceIds.Clear();
+            }
+        }
 
         /// <summary>
         /// Manually apply patches using reflection
@@ -55,7 +93,9 @@ namespace soundphysicsadapted
         public static void ApplyPatches(Harmony harmony, ICoreClientAPI api)
         {
             cachedApi = api;
-            
+            // StartClientSide runs on the main game thread — capture it for the gate.
+            _mainThreadId = Environment.CurrentManagedThreadId;
+
             try
             {
                 Assembly vsLib = null;
@@ -661,10 +701,13 @@ namespace soundphysicsadapted
         public static void MarkLocalPlayerSoundPosition(double x, double y, double z)
         {
             long key = PackBlockKey((int)Math.Floor(x), (int)Math.Floor(y), (int)Math.Floor(z));
-            // Trim oldest entries if the queue grows unexpectedly (e.g. rapid block spam).
-            while (_localPlayerOcclusionSkipQueue.Count >= OCCLUSION_SKIP_QUEUE_MAX)
-                _localPlayerOcclusionSkipQueue.RemoveAt(0);
-            _localPlayerOcclusionSkipQueue.Add(key);
+            lock (_localPlayerOcclusionSkipQueue)
+            {
+                // Trim oldest entries if the queue grows unexpectedly (e.g. rapid block spam).
+                while (_localPlayerOcclusionSkipQueue.Count >= OCCLUSION_SKIP_QUEUE_MAX)
+                    _localPlayerOcclusionSkipQueue.RemoveAt(0);
+                _localPlayerOcclusionSkipQueue.Add(key);
+            }
         }
 
         /// <summary>
@@ -678,7 +721,8 @@ namespace soundphysicsadapted
         {
             if (pos == null || _localPlayerOcclusionSkipQueue.Count == 0) return false;
             long key = PackBlockKey((int)Math.Floor(pos.X), (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
-            return _localPlayerOcclusionSkipQueue.Contains(key);
+            lock (_localPlayerOcclusionSkipQueue)
+                return _localPlayerOcclusionSkipQueue.Contains(key);
         }
 
         /// <summary>
@@ -691,11 +735,14 @@ namespace soundphysicsadapted
         {
             if (pos == null || _localPlayerOcclusionSkipQueue.Count == 0) return false;
             long key = PackBlockKey((int)Math.Floor(pos.X), (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
-            int idx = _localPlayerOcclusionSkipQueue.IndexOf(key);
-            if (idx >= 0)
+            lock (_localPlayerOcclusionSkipQueue)
             {
-                _localPlayerOcclusionSkipQueue.RemoveAt(idx);
-                return true;
+                int idx = _localPlayerOcclusionSkipQueue.IndexOf(key);
+                if (idx >= 0)
+                {
+                    _localPlayerOcclusionSkipQueue.RemoveAt(idx);
+                    return true;
+                }
             }
             return false;
         }
@@ -708,12 +755,15 @@ namespace soundphysicsadapted
         {
             long now = Environment.TickCount64;
 
-            // Expire old entries
-            _localPlayerSoundPositions.RemoveAll(e => now - e.tickMs > POSITION_EXPIRY_MS);
-            while (_localPlayerSoundPositions.Count >= MAX_POSITION_QUEUE)
-                _localPlayerSoundPositions.RemoveAt(0);
+            lock (_localPlayerSoundPositions)
+            {
+                // Expire old entries
+                _localPlayerSoundPositions.RemoveAll(e => now - e.tickMs > POSITION_EXPIRY_MS);
+                while (_localPlayerSoundPositions.Count >= MAX_POSITION_QUEUE)
+                    _localPlayerSoundPositions.RemoveAt(0);
 
-            _localPlayerSoundPositions.Add((x, y, z, now));
+                _localPlayerSoundPositions.Add((x, y, z, now));
+            }
 
             // Also tag for occlusion-skip — covers entity-position sounds the
             // local player emits (footsteps, swing, voice) at any distance from
@@ -734,22 +784,25 @@ namespace soundphysicsadapted
 
             long now = Environment.TickCount64;
 
-            for (int i = _localPlayerSoundPositions.Count - 1; i >= 0; i--)
+            lock (_localPlayerSoundPositions)
             {
-                var e = _localPlayerSoundPositions[i];
-
-                // Expire stale
-                if (now - e.tickMs > POSITION_EXPIRY_MS)
+                for (int i = _localPlayerSoundPositions.Count - 1; i >= 0; i--)
                 {
-                    _localPlayerSoundPositions.RemoveAt(i);
-                    continue;
-                }
+                    var e = _localPlayerSoundPositions[i];
 
-                // Exact float match — both computed from same entity.Pos doubles
-                if (position.X == e.x && position.Y == e.y && position.Z == e.z)
-                {
-                    _localPlayerSoundPositions.RemoveAt(i);
-                    return true;
+                    // Expire stale
+                    if (now - e.tickMs > POSITION_EXPIRY_MS)
+                    {
+                        _localPlayerSoundPositions.RemoveAt(i);
+                        continue;
+                    }
+
+                    // Exact float match — both computed from same entity.Pos doubles
+                    if (position.X == e.x && position.Y == e.y && position.Z == e.z)
+                    {
+                        _localPlayerSoundPositions.RemoveAt(i);
+                        return true;
+                    }
                 }
             }
             return false;
@@ -1259,12 +1312,20 @@ namespace soundphysicsadapted
                 // Get World via reflection from ClientMain
                 var worldProp = clientMainType.GetProperty("World");
                 if (worldProp == null) return;
-                
+
                 var world = worldProp.GetValue(__instance) as IClientWorldAccessor;
                 if (world == null) return;
 
                 // Cache block accessor for SetPosition patches
                 cachedBlockAccessor = world.BlockAccessor;
+
+                // OFF-THREAD (music engine worker): register only, no raycast — the
+                // compute cores use shared static scratch state. Tick picks it up.
+                if (!IsMainThread)
+                {
+                    ApplyLowPassFilter(__result, 1.0f, soundPos, soundName);
+                    return;
+                }
 
                 // Convert Vec3d to Vec3f for ApplyOcclusion
                 var soundPosF = new Vec3f((float)soundPos.X, (float)soundPos.Y, (float)soundPos.Z);
@@ -1370,7 +1431,8 @@ namespace soundphysicsadapted
                             bool hasPosition = pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0);
                             if (hasPosition)
                             {
-                                preWarmupSoundQueue.Add(new WeakReference<ILoadedSound>(queueSound));
+                                lock (preWarmupSoundQueue)
+                                    preWarmupSoundQueue.Add(new WeakReference<ILoadedSound>(queueSound));
                             }
                         }
                     }
@@ -1458,6 +1520,18 @@ namespace soundphysicsadapted
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
                             $"INIT-SKIP (local player): {soundName} pos=({position.X:F1},{position.Y:F1},{position.Z:F1})");
                 }
+                else if (!IsMainThread)
+                {
+                    // OFF-THREAD START (music engine worker — e.g. resonator/boombox tracks):
+                    // the DDA/raytrace cores use shared static scratch state and must not run
+                    // concurrently with the main-thread physics tick. Register the sound with
+                    // a passthrough filter (thread-safe path) — the next 50ms tick sees it as
+                    // a new/overdue sound and computes real occlusion immediately.
+                    ApplyLowPassFilter(loadedSound, 1.0f, posd, soundName);
+                    if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"INIT-DEFER (off-thread): {soundName} registered, occlusion deferred to tick");
+                }
                 else
                 {
                     ApplyOcclusion(loadedSound, position, soundName);
@@ -1511,7 +1585,10 @@ namespace soundphysicsadapted
 
                 // Apply reverb only after world is fully loaded and warmed up.
                 // During loading, tick system will handle reverb with budget limits.
-                if (SoundPhysicsAdaptedModSystem.IsWorldReady && config.EnableCustomReverb)
+                // OFF-THREAD: skip — AcousticRaytracer uses shared static scratch state
+                // that must not run concurrently with the main-thread physics tick.
+                // The tick applies reverb to the registered sound within ~50ms anyway.
+                if (SoundPhysicsAdaptedModSystem.IsWorldReady && config.EnableCustomReverb && IsMainThread)
                 {
                     if (cachedBlockAccessor == null)
                         cachedBlockAccessor = cachedApi?.World?.BlockAccessor;
@@ -1807,7 +1884,12 @@ namespace soundphysicsadapted
             int processed = 0;
             int disposed = 0;
 
-            foreach (var weakRef in preWarmupSoundQueue)
+            // Snapshot under lock — Start() prefixes append from the music thread.
+            WeakReference<ILoadedSound>[] queueSnapshot;
+            lock (preWarmupSoundQueue)
+                queueSnapshot = preWarmupSoundQueue.ToArray();
+
+            foreach (var weakRef in queueSnapshot)
             {
                 if (!weakRef.TryGetTarget(out var sound)) { disposed++; continue; }
 
@@ -1864,7 +1946,7 @@ namespace soundphysicsadapted
                     $"[SoundPhysicsAdapted] Pre-warmup queue: {processed} sounds registered, {disposed} already disposed");
             }
 
-            preWarmupSoundQueue.Clear();
+            lock (preWarmupSoundQueue) preWarmupSoundQueue.Clear();
         }
 
         #region AL.SourcePlay Diagnostic Hook

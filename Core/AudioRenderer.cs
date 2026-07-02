@@ -407,7 +407,14 @@ namespace soundphysicsadapted
                     SoundRef = new WeakReference<ILoadedSound>(sound)
                 };
 
-                activeFilters[sound] = entry;
+                if (!activeFilters.TryAdd(sound, entry))
+                {
+                    // Lost a race with another thread registering the same sound
+                    // (Start() can fire on the music thread). Theirs won — delete
+                    // our just-created filter so it doesn't leak.
+                    EfxHelper.DeleteFilter(filterId);
+                    return true;
+                }
                 sourceIdToSound[sourceId] = sound;
                 totalFiltersCreated++;
 

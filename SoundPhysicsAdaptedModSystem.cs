@@ -1252,6 +1252,18 @@ namespace soundphysicsadapted
                 clientApi.Event.BlockChanged -= OnBlockChanged;
             }
 
+            // Server-side cleanup: stop the boombox range tick and drop cached carrier
+            // state. Statics survive world unload — without this, stale boombox packets
+            // from the previous session get pushed to joiners of the next one.
+            if (serverApi != null && boomboxServerTickId != 0)
+            {
+                serverApi.Event.UnregisterGameTickListener(boomboxServerTickId);
+                boomboxServerTickId = 0;
+            }
+            activeBoomboxesByCarrier.Clear();
+            boomboxInRangeByReceiver.Clear();
+            serverApi = null;
+
             // Reset world readiness
             _worldReady = false;
             _warmupTicksRemaining = 0;
@@ -1289,6 +1301,12 @@ namespace soundphysicsadapted
 
             // Clear block ambient injection data
             BlockAmbientInjector.Clear();
+
+            // Reset LoadSoundPatch statics (pre-warmup queue, cached block accessor,
+            // local-player queues, distance-model dedupe). Statics survive world unload;
+            // without this, world #2 in the same session kept a dead pre-warmup queue
+            // (ambient loops never registered) and raycast against the old world's accessor.
+            LoadSoundPatch.Reset();
 
             // Unpatch Harmony
             harmony?.UnpatchAll(HARMONY_ID);
