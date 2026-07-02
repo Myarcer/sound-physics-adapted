@@ -318,35 +318,6 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// [LEGACY] Fast path occlusion ÔÇö solid-face-only check, ignores partial blocks.
-        /// Kept for reference. New code should use CalculateWeatherPathOcclusion instead.
-        /// </summary>
-        public static float CalculatePathOcclusionFast(Vec3d from, Vec3d to, IBlockAccessor blockAccessor)
-        {
-            var config = SoundPhysicsAdaptedModSystem.Config;
-            if (config == null || !config.Enabled)
-                return 0f;
-
-            return RunOcclusionFullCubeOnly(from, to, blockAccessor, config, out _);
-        }
-
-        /// <summary>
-        /// [LEGACY] Fast path occlusion with entry point ÔÇö solid-face-only check.
-        /// Kept for reference. New code should use CalculateWeatherPathOcclusionWithEntry instead.
-        /// </summary>
-        public static float CalculatePathOcclusionFastWithEntry(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, out Vec3d entryPoint)
-        {
-            var config = SoundPhysicsAdaptedModSystem.Config;
-            if (config == null || !config.Enabled)
-            {
-                entryPoint = null;
-                return 0f;
-            }
-
-            return RunOcclusionFullCubeOnly(from, to, blockAccessor, config, out entryPoint);
-        }
-
-        /// <summary>
         /// Weather-aware path occlusion. Handles both solid-face blocks AND partial
         /// blocks (doors, trapdoors, chiseled blocks) via AABB collision box checks.
         /// Returns total occlusion along the path.
@@ -584,50 +555,6 @@ namespace soundphysicsadapted
             }
 
             return false; // Continue
-        }
-
-        /// <summary>
-        /// [LEGACY] Fast DDA for weather: solid-face-only check, ignores partial blocks.
-        /// Doors, trapdoors, fences, chiseled blocks are invisible to this method.
-        /// Kept for reference ÔÇö new code should use RunWeatherOcclusion instead.
-        /// </summary>
-        private static float RunOcclusionFullCubeOnly(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, SoundPhysicsConfig config, out Vec3d entryPoint)
-        {
-            float occlusionAccumulation = 0f;
-            bool previousBlockWasSolid = false;
-            int entryX = 0, entryY = 0, entryZ = 0;
-            bool hasEntryPoint = false;
-
-            bool stopped = DDABlockTraversal.Traverse(from, to, blockAccessor, (ref DDABlockTraversal.TraversalContext ctx) =>
-            {
-                Block block = ctx.Block;
-
-                if (block != null && block.Id != 0 &&
-                    block.BlockMaterial != EnumBlockMaterial.Air &&
-                    BlockClassification.IsSolidForOcclusion(block))
-                {
-                    occlusionAccumulation += BlockClassification.GetBlockOcclusion(block, config);
-                    previousBlockWasSolid = true;
-
-                    if (occlusionAccumulation >= config.MaxOcclusion)
-                        return true; // Stop
-                }
-                else
-                {
-                    if (previousBlockWasSolid)
-                    {
-                        // Solid-to-air transition: record where sound enters player's space
-                        entryX = ctx.X; entryY = ctx.Y; entryZ = ctx.Z;
-                        hasEntryPoint = true;
-                    }
-                    previousBlockWasSolid = false;
-                }
-
-                return false; // Continue
-            }, skipFirst: true);
-
-            entryPoint = hasEntryPoint ? new Vec3d(entryX + 0.5, entryY + 0.5, entryZ + 0.5) : null;
-            return stopped ? config.MaxOcclusion : occlusionAccumulation;
         }
 
         /// <summary>
@@ -1185,58 +1112,6 @@ namespace soundphysicsadapted
             else if (rayOrigin.Z < minZ || rayOrigin.Z > maxZ) return false;
 
             return true;
-        }
-
-        /// <summary>
-        /// Get occlusion multiplier based on block code patterns
-        /// Similar to Sound Physics Remastered's block name matching
-        /// Returns null if no pattern matches (fall back to material-based)
-        /// </summary>
-        private static float? GetBlockCodeMultiplier(Block block)
-        {
-            string code = block.Code?.Path?.ToLowerInvariant() ?? "";
-            if (string.IsNullOrEmpty(code))
-                return null;
-
-            // === METAL BLOCKS - Very high occlusion (dense, reflective) ===
-            // metalblock, ironblock, steelblock, copperblock, etc.
-            if (code.Contains("metalblock") || code.Contains("ironblock") ||
-                code.Contains("steelblock") || code.Contains("copperblock") ||
-                code.Contains("tinblock") || code.Contains("goldblock") ||
-                code.Contains("silverblock") || code.Contains("bronzeblock") ||
-                code.Contains("brassblock") || code.Contains("leadblock") ||
-                code.Contains("zincblock") || code.Contains("bismuthblock") ||
-                code.Contains("titaniumblock") || code.Contains("chromiumblock") ||
-                code.Contains("platinumblock") || code.Contains("electrumblock") ||
-                code.StartsWith("metalplate", StringComparison.Ordinal) || code.StartsWith("sheetmetal", StringComparison.Ordinal) ||
-                code.Contains("anvil") || code.Contains("metalladder"))
-                return 1.0f;
-
-            // === LEATHER - Moderate-high occlusion (dense, absorptive) ===
-            if (code.Contains("leather"))
-                return 0.6f;
-
-            // === WOOL/CLOTH - Moderate occlusion (absorptive but not blocking) ===
-            if (code.Contains("wool") || code.Contains("carpet") || code.Contains("rug"))
-                return 0.4f;
-
-            // === CONCRETE/PLASTER - High occlusion ===
-            if (code.Contains("concrete") || code.Contains("plaster") || code.Contains("mortar"))
-                return 0.9f;
-
-            // === DOORS - Variable (closed = high, but material handles it) ===
-            // Let material system handle doors for now
-
-            // === CHESTS/CONTAINERS - Moderate (hollow inside) ===
-            if (code.Contains("chest") || code.Contains("barrel") || code.Contains("crate"))
-                return 0.5f;
-
-            // === BEDS - Low occlusion (soft, hollow) ===
-            if (code.Contains("bed"))
-                return 0.3f;
-
-            // No pattern match - use material-based fallback
-            return null;
         }
 
         /// <summary>

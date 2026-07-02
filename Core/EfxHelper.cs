@@ -664,32 +664,6 @@ namespace soundphysicsadapted
             }
         }
 
-        /// <summary>Get source state (AL_PLAYING, AL_STOPPED, etc).</summary>
-        public static int ALGetSourceState(int source)
-        {
-            if (source <= 0 || _getSourceiMethod == null || _alGetSourceiState == null) return AL_STOPPED;
-            try
-            {
-                object[] args = new object[] { source, _alGetSourceiState, 0 };
-                _getSourceiMethod.Invoke(null, args);
-                return (int)args[2];
-            }
-            catch { return AL_STOPPED; }
-        }
-
-        /// <summary>Get source integer property (buffer, looping, etc).</summary>
-        public static int ALGetSourcei(int source, object enumValue)
-        {
-            if (source <= 0 || _getSourceiMethod == null || enumValue == null) return 0;
-            try
-            {
-                object[] args = new object[] { source, enumValue, 0 };
-                _getSourceiMethod.Invoke(null, args);
-                return (int)args[2];
-            }
-            catch { return 0; }
-        }
-
         /// <summary>Get source float property (gain, sec offset, etc).</summary>
         public static float ALGetSourcef(int source, object enumValue)
         {
@@ -719,14 +693,6 @@ namespace soundphysicsadapted
             catch { }
         }
 
-        /// <summary>Play an OpenAL source.</summary>
-        public static void ALSourcePlay(int source)
-        {
-            if (source <= 0 || _sourcePlayMethod == null) return;
-            try { _sourcePlayMethod.Invoke(null, new object[] { source }); }
-            catch { }
-        }
-
         /// <summary>Stop an OpenAL source.</summary>
         public static void ALSourceStop(int source)
         {
@@ -735,39 +701,7 @@ namespace soundphysicsadapted
             catch { }
         }
 
-        /// <summary>Pause an OpenAL source.</summary>
-        public static void ALSourcePause(int source)
-        {
-            if (source <= 0 || _sourcePauseMethod == null) return;
-            try { _sourcePauseMethod.Invoke(null, new object[] { source }); }
-            catch { }
-        }
-
         // ---- Convenience wrappers with named parameters ----
-
-        /// <summary>Get the buffer ID attached to a source.</summary>
-        public static int ALGetSourceBuffer(int source) => ALGetSourcei(source, _alGetSourceiBuffer ?? _alSourceiBuffer);
-
-        /// <summary>Set buffer on a source.</summary>
-        public static void ALSetSourceBuffer(int source, int buffer) => ALSourcei(source, _alSourceiBuffer, buffer);
-
-        /// <summary>Get source gain.</summary>
-        public static float ALGetSourceGain(int source) => ALGetSourcef(source, _alSourcefGain);
-
-        /// <summary>Set source gain.</summary>
-        public static void ALSetSourceGain(int source, float gain) => ALSourcef(source, _alSourcefGain, gain);
-
-        /// <summary>Get source playback offset in seconds.</summary>
-        public static float ALGetSourceSecOffset(int source) => ALGetSourcef(source, _alSourcefSecOffset);
-
-        /// <summary>Set source playback offset in seconds.</summary>
-        public static void ALSetSourceSecOffset(int source, float offset) => ALSourcef(source, _alSourcefSecOffset, offset);
-
-        /// <summary>Get source looping state (1=looping, 0=not).</summary>
-        public static int ALGetSourceLooping(int source) => ALGetSourcei(source, _alGetSourceiLooping ?? _alSourceiLooping);
-
-        /// <summary>Set source looping state.</summary>
-        public static void ALSetSourceLooping(int source, int looping) => ALSourcei(source, _alSourceiLooping, looping);
 
         /// <summary>Get source reference distance (for distance attenuation).</summary>
         public static float ALGetSourceRefDistance(int source) => ALGetSourcef(source, _alSourcefRefDist);
@@ -801,15 +735,6 @@ namespace soundphysicsadapted
             if (factor < 0f) factor = 0f;
             else if (factor > 10f) factor = 10f;
             ALSourcef(source, _alSourcefAirAbsorption, factor);
-        }
-
-        /// <summary>Copy distance attenuation model from one source to another.</summary>
-        public static void CopyDistanceModel(int fromSource, int toSource)
-        {
-            if (fromSource <= 0 || toSource <= 0) return;
-            ALSetSourceRefDistance(toSource, ALGetSourceRefDistance(fromSource));
-            ALSetSourceMaxDistance(toSource, ALGetSourceMaxDistance(fromSource));
-            ALSetSourceRolloff(toSource, ALGetSourceRolloff(fromSource));
         }
 
         /// <summary>

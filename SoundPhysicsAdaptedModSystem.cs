@@ -1157,7 +1157,6 @@ namespace soundphysicsadapted
 
                         if (mode == null)
                         {
-                        {
                             string bounceLabel = viz.BounceColorMode switch
                             {
                                 1 => "ON (reflectivity)",
@@ -1173,7 +1172,6 @@ namespace soundphysicsadapted
                                 $"  openings: {(viz.ShowOpenings ? "ON" : "off")}\n" +
                                 $"  bocc: {(viz.ShowBOccPaths ? "ON" : "off")}\n" +
                                 $"  weather: {(config.DebugWeatherVisualization ? "ON" : "off")}");
-                        }
                         }
 
                         switch (mode.ToLower())

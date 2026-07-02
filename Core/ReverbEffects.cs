@@ -238,42 +238,6 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Remove reverb from a sound source (disconnect from aux slots).
-        /// </summary>
-        public static void RemoveFromSource(int sourceId)
-        {
-            if (!_initialized || sourceId <= 0) return;
-
-            try
-            {
-                // Disconnect only from sends we actually used
-                EfxHelper.DisconnectSourceFromAuxSlot(sourceId, 0);
-                if (_maxAuxSends >= 2) EfxHelper.DisconnectSourceFromAuxSlot(sourceId, 1);
-                if (_maxAuxSends >= 4)
-                {
-                    // Only used sends 2-3 in full 4-send mode
-                    EfxHelper.DisconnectSourceFromAuxSlot(sourceId, 2);
-                    EfxHelper.DisconnectSourceFromAuxSlot(sourceId, 3);
-                }
-            }
-            catch (Exception ex)
-            {
-                SoundPhysicsAdaptedModSystem.DebugLog($"Failed to remove reverb from source {sourceId}: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Update reverb effect parameters (e.g., after config change).
-        /// </summary>
-        public static void UpdateReverbParams()
-        {
-            if (!_initialized) return;
-
-            // Could be used to adjust decay times, density, etc. based on config
-            // For now, using fixed presets
-        }
-
-        /// <summary>
         /// Dispose all reverb resources.
         /// </summary>
         public static void Dispose()

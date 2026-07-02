@@ -339,33 +339,6 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Invalidate all cells within range of player.
-        /// With composite keys, this is rarely needed — player movement
-        /// naturally creates new keys. Kept for explicit invalidation (e.g. teleport).
-        /// </summary>
-        public void InvalidateNearPlayer(Vec3d playerPos, float radius)
-        {
-            List<long> toRemove = null;
-            foreach (var kvp in cells)
-            {
-                var entry = kvp.Value;
-                double dx = entry.CreatorPosX - playerPos.X;
-                double dy = entry.CreatorPosY - playerPos.Y;
-                double dz = entry.CreatorPosZ - playerPos.Z;
-                if (dx * dx + dy * dy + dz * dz < radius * radius)
-                {
-                    if (toRemove == null) toRemove = new List<long>();
-                    toRemove.Add(kvp.Key);
-                }
-            }
-            if (toRemove != null)
-            {
-                foreach (var key in toRemove)
-                    cells.TryRemove(key, out _);
-            }
-        }
-
-        /// <summary>
         /// Full clear (config change, etc.)
         /// </summary>
         public void Clear()

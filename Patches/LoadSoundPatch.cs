@@ -79,11 +79,6 @@ namespace soundphysicsadapted
             lock (_localPlayerSoundPositions) _localPlayerSoundPositions.Clear();
             lock (_localPlayerOcclusionSkipQueue) _localPlayerOcclusionSkipQueue.Clear();
             lock (_distanceModelApplied) _distanceModelApplied.Clear();
-            lock (sourceTrackLock)
-            {
-                playedSourceIds.Clear();
-                registeredSourceIds.Clear();
-            }
         }
 
         /// <summary>
@@ -1951,11 +1946,6 @@ namespace soundphysicsadapted
 
         #region AL.SourcePlay Diagnostic Hook
 
-        // Track which sourceIds we've seen played vs which we've registered
-        private static HashSet<int> playedSourceIds = new HashSet<int>();
-        private static HashSet<int> registeredSourceIds = new HashSet<int>();
-        private static object sourceTrackLock = new object();
-
         // FREEZE DIAGNOSTIC: Track HandleSourcePlay call frequency
         private static int _diagHookCallCount = 0;
         private static int _diagHookUntrackedCount = 0;
@@ -2142,12 +2132,6 @@ namespace soundphysicsadapted
                 // FREEZE DIAGNOSTIC: Count every call
                 System.Threading.Interlocked.Increment(ref _diagHookCallCount);
 
-                // Track this sourceId as "actually played"
-                lock (sourceTrackLock)
-                {
-                    playedSourceIds.Add(sid);
-                }
-
                 // Check if this sourceId is one we've registered a filter for
                 bool isTracked = AudioRenderer.IsSourceTracked(sid);
 
@@ -2222,57 +2206,6 @@ namespace soundphysicsadapted
             for (int i = 0; i < sources.Length; i++)
             {
                 HandleSourcePlay(sources[i], "span");
-            }
-        }
-
-        // Keep old method name for compatibility
-        public static void ALSourcePlayPrefix(int sid)
-        {
-            HandleSourcePlay(sid, "legacy");
-        }
-
-        /// <summary>
-        /// Register a sourceId as tracked by our system.
-        /// Called from SoundFilterManager when we register a sound.
-        /// </summary>
-        public static void TrackSourceId(int sourceId)
-        {
-            lock (sourceTrackLock)
-            {
-                registeredSourceIds.Add(sourceId);
-            }
-        }
-
-        /// <summary>
-        /// Unregister a sourceId when sound is disposed.
-        /// </summary>
-        public static void UntrackSourceId(int sourceId)
-        {
-            lock (sourceTrackLock)
-            {
-                registeredSourceIds.Remove(sourceId);
-                playedSourceIds.Remove(sourceId);
-            }
-        }
-
-        /// <summary>
-        /// Get diagnostic stats about tracked vs played sources.
-        /// </summary>
-        public static string GetSourceTrackingStats()
-        {
-            lock (sourceTrackLock)
-            {
-                int tracked = registeredSourceIds.Count;
-                int played = playedSourceIds.Count;
-                int untracked = 0;
-
-                foreach (var id in playedSourceIds)
-                {
-                    if (!registeredSourceIds.Contains(id))
-                        untracked++;
-                }
-
-                return $"Registered={tracked}, Played={played}, UntrackedPlays={untracked}";
             }
         }
 

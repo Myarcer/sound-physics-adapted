@@ -23,7 +23,6 @@ namespace soundphysicsadapted
 
         // Reusable structures for per-tick evaluation
         private readonly List<SoundDistanceEntry> _allSounds = new List<SoundDistanceEntry>();
-        private readonly List<ILoadedSound> _purgeList = new List<ILoadedSound>();
         private readonly HashSet<ILoadedSound> _newThrottled = new HashSet<ILoadedSound>();
 
         // Stats
@@ -129,15 +128,6 @@ namespace soundphysicsadapted
             _throttledSounds.Clear();
             foreach (var s in _newThrottled)
                 _throttledSounds.Add(s);
-        }
-
-        /// <summary>
-        /// Reset per-tick stats.
-        /// </summary>
-        public void ResetTickStats()
-        {
-            _throttledCount = 0;
-            _unthrottledCount = 0;
         }
 
         public int ThrottledCount => _throttledSounds.Count;
