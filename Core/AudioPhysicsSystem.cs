@@ -69,6 +69,12 @@ namespace soundphysicsadapted
             public float LastSharedAirspaceRatio;  // 0 = fully occluded, 1 = full airspace
             public bool NearAcousticBoundary;      // true = treat as close-range priority
 
+            // True only when the last raycast actually applied a repositioned path
+            // (occluded sound routed toward an opening via ApplySoundPath). Clear-LOS
+            // and permeated-only sounds are NOT repositioned. Exposed via
+            // IsSoundRepositioned.
+            public bool IsRepositioned;
+
             // Throttle fade state
             // ThrottleFade: 1.0 = fully active, 0.0 = fully throttled/silent.
             // Steps toward 1 when unthrottled, toward 0 when throttled, using elapsed time.
@@ -321,7 +327,15 @@ namespace soundphysicsadapted
                     && (currentTimeMs - lastBlockChangeInvalidationMs) < BLOCK_CHANGE_GRACE_MS;
 
                 bool staticCacheEnabled = config?.EnableStaticSoundCache ?? true;
-                if (staticCacheEnabled && !inGraceWindow && cache.LastPlayerPos != null && cache.LastSoundPos != null && !isOverdue)
+
+                // Throttled or mid-fade sounds must keep flowing to ProcessSoundRaycast:
+                // fade stepping and the throttled<->unthrottled transition are only detected
+                // there. Without this bypass, a stationary player froze the fade for up to
+                // FORCE_REFRESH_MS (e.g. a just-unthrottled sound stuck near-silent for 2s,
+                // or a throttled one stuck half-faded). The fade path is cheap (no raycast).
+                bool throttleFadeActive = cache.LastThrottledState || cache.ThrottleFade < 1f;
+
+                if (staticCacheEnabled && !throttleFadeActive && !inGraceWindow && cache.LastPlayerPos != null && cache.LastSoundPos != null && !isOverdue)
                 {
                     double playerMoved = playerPos.DistanceTo(cache.LastPlayerPos);
                     double soundMoved = soundPos.DistanceTo(cache.LastSoundPos);
@@ -376,36 +390,44 @@ namespace soundphysicsadapted
             {
                 var candidate = _candidates[i];
 
-                // TIME BUDGET: stop processing when tick exceeds budget.
-                // Always allow at least 1 sound per tick (prevents complete starvation).
-                // Overdue sounds (new/stale) bypass the time budget to prevent indefinite deferral.
-                if (timeBudgetMs > 0 && processed > 0 && !candidate.IsOverdue)
+                // Throttled candidates take the cheap fade path inside ProcessSoundRaycast
+                // (no raycast, one SetOcclusion) — they must not consume the raycast budgets,
+                // and they must never be deferred (fade stepping would freeze).
+                bool isThrottledCandidate = throttle != null && throttle.IsThrottled(candidate.Sound);
+
+                if (!isThrottledCandidate)
                 {
-                    float elapsedMs = (float)_tickStopwatch.Elapsed.TotalMilliseconds;
-                    if (elapsedMs >= timeBudgetMs)
+                    // TIME BUDGET: stop processing when tick exceeds budget.
+                    // Always allow at least 1 sound per tick (prevents complete starvation).
+                    // Overdue sounds (new/stale) bypass the time budget to prevent indefinite deferral.
+                    if (timeBudgetMs > 0 && processed > 0 && !candidate.IsOverdue)
                     {
-                        budgetExceededThisTick++;
-                        deferredThisTick++;
-                        continue;
+                        float elapsedMs = (float)_tickStopwatch.Elapsed.TotalMilliseconds;
+                        if (elapsedMs >= timeBudgetMs)
+                        {
+                            budgetExceededThisTick++;
+                            deferredThisTick++;
+                            continue;
+                        }
+                    }
+
+                    // COUNT BUDGET: overdue sounds get priority but are still capped
+                    if (maxPerTick > 0 && processed >= maxPerTick)
+                    {
+                        // Over normal budget — only allow overdue, up to maxOverdue extra
+                        if (!candidate.IsOverdue || overdueProcessed >= maxOverdue)
+                        {
+                            deferredThisTick++;
+                            continue;
+                        }
+                        overdueProcessed++;
                     }
                 }
 
-                // COUNT BUDGET: overdue sounds get priority but are still capped
-                if (maxPerTick > 0 && processed >= maxPerTick)
-                {
-                    // Over normal budget — only allow overdue, up to maxOverdue extra
-                    if (!candidate.IsOverdue || overdueProcessed >= maxOverdue)
-                    {
-                        deferredThisTick++;
-                        continue;
-                    }
-                    overdueProcessed++;
-                }
-
-                // === Raycast this sound ===
+                // === Raycast this sound (or cheap throttle-fade step) ===
                 ProcessSoundRaycast(candidate.Sound, candidate.Cache, candidate.SoundPos,
                     candidate.Distance, playerPos, blockAccessor, currentTimeMs);
-                processed++;
+                if (!isThrottledCandidate) processed++;
             }
             _tickStopwatch.Stop();
 
@@ -480,6 +502,7 @@ namespace soundphysicsadapted
             if (distance < PLAYER_POS_THRESHOLD || isLocalPlayerSound)
             {
                 playerPosThisTick++;
+                cache.IsRepositioned = false;
 
                 // Force occlusion to 0 (ensure any prior cached value is cleared)
                 int? sourceId = AudioRenderer.GetValidatedSourceId(sound);
@@ -1078,6 +1101,7 @@ namespace soundphysicsadapted
                     // Clear LOS or ambient volume: sound stays at original position.
                     // For ambient volumes: use face-sampled acousticPos (stable, EMA-smoothed)
                     // instead of vanilla soundPos which flip-flops between bbox faces at edges.
+                    cache.IsRepositioned = false;
                     Vec3d resetPos = isAmbientVolume ? acousticPos : soundPos;
                     AudioRenderer.ResetSoundPosition(sound, resetPos);
 
@@ -1148,6 +1172,10 @@ namespace soundphysicsadapted
                     // paths (L-corridors, around corners), allows more HF than direct occlusion
                     // alone. Capped at ~9dB (MaxDiffractionFilter) with entombment guards.
                     bool applied = allPermeated || AudioRenderer.ApplySoundPath(sound, pathResult.Value, soundPos);
+
+                    // Repositioned = an indirect path was actually applied. Permeated-only
+                    // sounds keep their original position and don't count.
+                    cache.IsRepositioned = applied && !allPermeated;
 
                     if (applied)
                     {
@@ -1264,6 +1292,7 @@ namespace soundphysicsadapted
                 {
                     // No paths found (rays cancelled out or no paths at all).
                     // Let position smoothly return to original via SmoothAll().
+                    cache.IsRepositioned = false;
                     AudioRenderer.ResetSoundPosition(sound, soundPos);
                 }
             }
@@ -1453,7 +1482,10 @@ namespace soundphysicsadapted
             if (sound == null) return false;
             if (soundCache.TryGetValue(sound, out var cache))
             {
-                return cache.HasSmoothedOcc;
+                // Dedicated flag set only when ApplySoundPath actually ran for the last
+                // raycast. The old check (HasSmoothedOcc) was set in the clear-LOS branch
+                // too, so every processed sound reported "repositioned" after one pass.
+                return cache.IsRepositioned;
             }
             return false;
         }
@@ -1462,6 +1494,13 @@ namespace soundphysicsadapted
         /// Provides access to the spatial reverb cell cache for block-change invalidation.
         /// </summary>
         public ReverbCellCache CellCache => reverbCellCache;
+
+        /// <summary>
+        /// Reverb at the player's position, refreshed every 250ms. Used as the cheap
+        /// first-frame approximation for newly started sounds (SoundStartPostfix) so
+        /// their attack is never dry — the physics tick EMA-corrects within 50ms.
+        /// </summary>
+        public ReverbResult CachedPlayerReverb => cachedPlayerReverb;
 
         public string GetStats()
         {

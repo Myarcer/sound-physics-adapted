@@ -150,12 +150,6 @@ namespace soundphysicsadapted
                 // Wire thunder handler to Harmony patches so lightning events get routed to us
                 WeatherSoundPatches.SetThunderHandler(thunderHandler, this);
 
-                // Wire up audibility-based persistence: OpeningTracker asks ALL positional pools
-                // if any source is still being heard before removing the opening
-                openingTracker.IsSourceAudible = (trackingId) => positionalHandler.IsSourceAudible(trackingId);
-
-
-
                 initialized = true;
                 SoundPhysicsAdaptedModSystem.Log("WeatherAudioManager initialized (L1 ambient + L2 positional rain/wind/hail + 5C thunder)");
                 return true;
@@ -168,10 +162,6 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Called from mod system tick handler (~100ms interval).
-        /// Reads VS weather state and delegates to handlers.
-        /// </summary>
-        /// <summary>
         /// Forward a block-change event to the opening tracker for entry-point
         /// proximity invalidation. Called from SoundPhysicsAdaptedModSystem.OnBlockChanged.
         /// </summary>
@@ -181,6 +171,10 @@ namespace soundphysicsadapted
             enclosureCalculator?.InvalidateNearbyColumns(pos);
         }
 
+        /// <summary>
+        /// Called from mod system tick handler (~100ms interval).
+        /// Reads VS weather state and delegates to handlers.
+        /// </summary>
         public void OnGameTick(float dt)
         {
             if (!initialized || disposed) return;
@@ -346,8 +340,15 @@ namespace soundphysicsadapted
                     currentSky,
                     currentOccl);
 
-                // Reset ducking — no positional sources active
+                // Reset ducking — outdoors Layer 1 carries everything. Loudness stays
+                // wired to the pools' actual output so the bed-hold readiness gate
+                // tracks any still-fading sources.
                 rainHandler?.SetPositionalContributions(0f, 0f, 0f);
+                rainHandler?.SetPositionalLoudness(
+                    positionalHandler?.RainEffectiveLoudness ?? 0f,
+                    positionalHandler?.RainExpectedLoudness ?? 0f,
+                    positionalHandler?.HailEffectiveLoudness ?? 0f,
+                    positionalHandler?.HailExpectedLoudness ?? 0f);
                 return;
             }
 
@@ -380,14 +381,25 @@ namespace soundphysicsadapted
                 positionalHandler?.WindContribution ?? 0f,
                 positionalHandler?.HailContribution ?? 0f);
 
+            // Feed distance-weighted Layer 2 loudness for the bed-hold readiness gate
+            rainHandler?.SetPositionalLoudness(
+                positionalHandler?.RainEffectiveLoudness ?? 0f,
+                positionalHandler?.RainExpectedLoudness ?? 0f,
+                positionalHandler?.HailEffectiveLoudness ?? 0f,
+                positionalHandler?.HailExpectedLoudness ?? 0f);
+
             // ── Tracked opening visualization (slot 92) ──
             UpdateTrackedOpeningViz(capi.World.ElapsedMilliseconds);
 
             if (config.DebugMode && config.DebugPositionalWeather)
             {
+                int suppressed = 0;
+                var trackedList = openingTracker.TrackedOpenings;
+                for (int i = 0; i < trackedList.Count; i++)
+                    if (trackedList[i].Suppressed) suppressed++;
                 WeatherDebugLog(
                     $"[5B] openings={openings.Count} clusters={clusters.Count} " +
-                    $"tracked={openingTracker.Count} active={positionalHandler?.TotalActiveCount ?? 0} " +
+                    $"tracked={openingTracker.Count} suppressed={suppressed} active={positionalHandler?.TotalActiveCount ?? 0} " +
                     $"duck: rain={positionalHandler?.RainContribution ?? 0:F2} wind={positionalHandler?.WindContribution ?? 0:F2} hail={positionalHandler?.HailContribution ?? 0:F2}");
             }
         }

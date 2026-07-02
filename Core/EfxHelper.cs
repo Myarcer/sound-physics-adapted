@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Reflection;
 using Vintagestory.API.Client;
+using Expr = System.Linq.Expressions.Expression;
 
 namespace soundphysicsadapted
 {
@@ -14,6 +15,7 @@ namespace soundphysicsadapted
         // Cached reflection info
         private static MethodInfo genFilterMethod;
         private static MethodInfo filterFloatMethod;
+        private static MethodInfo filterIntMethod;   // EFX.Filter(int, FilterInteger, int) — cached
         private static MethodInfo deleteFilterMethod;
         private static MethodInfo alGetErrorMethod;
         private static Type filterFloatType;
@@ -21,6 +23,83 @@ namespace soundphysicsadapted
         private static object lowpassGainValue;
         private static object lowpassGainHFValue;
         private static object filterTypeValue;
+
+        // ==== Compiled hot-path delegates ====
+        // MethodInfo.Invoke costs ~100-300ns plus object[]/boxing garbage per call, and
+        // these paths run per sound per 25ms smoothing tick (SetLowpassGainHF) and per
+        // reverb apply (SetFilterGains + ConnectSourceToAuxSlot x4 sends). Expression
+        // trees convert int -> runtime-discovered enum type, giving direct-call speed
+        // with zero allocation. Reflection Invoke remains the fallback when null.
+        private static Action<int, int, float> dFilterFloat;       // EFX.Filter(id, FilterFloat, float)
+        private static Action<int, int, int> dFilterInt;           // EFX.Filter(id, FilterInteger, int)
+        private static Func<int> dGenFilter;                       // EFX.GenFilter()
+        private static Func<int> dGetError;                        // AL.GetError()
+        private static Action<int, int, int, int, int> dSource3i;  // AL.Source(src, ALSource3i, i, i, i)
+        private static bool dSource3iTried;
+        private static int lowpassGainInt, lowpassGainHFInt, filterTypeInt, auxSendFilterInt;
+
+        /// <summary>Compile m(int, enum, float) into a zero-alloc delegate. Null on failure.</summary>
+        internal static Action<int, int, float> CompileIntEnumFloat(MethodInfo m, Type enumType)
+        {
+            try
+            {
+                var a = Expr.Parameter(typeof(int)); var b = Expr.Parameter(typeof(int)); var c = Expr.Parameter(typeof(float));
+                return System.Linq.Expressions.Expression.Lambda<Action<int, int, float>>(
+                    Expr.Call(m, a, Expr.Convert(b, enumType), c), a, b, c).Compile();
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Compile m(int, enum, int) into a zero-alloc delegate. Null on failure.</summary>
+        internal static Action<int, int, int> CompileIntEnumInt(MethodInfo m, Type enumType)
+        {
+            try
+            {
+                var a = Expr.Parameter(typeof(int)); var b = Expr.Parameter(typeof(int)); var c = Expr.Parameter(typeof(int));
+                return System.Linq.Expressions.Expression.Lambda<Action<int, int, int>>(
+                    Expr.Call(m, a, Expr.Convert(b, enumType), c), a, b, c).Compile();
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Compile m(int, enum, float, float, float) into a zero-alloc delegate. Null on failure.</summary>
+        internal static Action<int, int, float, float, float> CompileIntEnum3Float(MethodInfo m, Type enumType)
+        {
+            try
+            {
+                var a = Expr.Parameter(typeof(int)); var b = Expr.Parameter(typeof(int));
+                var c = Expr.Parameter(typeof(float)); var d = Expr.Parameter(typeof(float)); var e = Expr.Parameter(typeof(float));
+                return System.Linq.Expressions.Expression.Lambda<Action<int, int, float, float, float>>(
+                    Expr.Call(m, a, Expr.Convert(b, enumType), c, d, e), a, b, c, d, e).Compile();
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Compile m(int, enum, int, int, int) into a zero-alloc delegate. Null on failure.</summary>
+        internal static Action<int, int, int, int, int> CompileIntEnum3Int(MethodInfo m, Type enumType)
+        {
+            try
+            {
+                var a = Expr.Parameter(typeof(int)); var b = Expr.Parameter(typeof(int));
+                var c = Expr.Parameter(typeof(int)); var d = Expr.Parameter(typeof(int)); var e = Expr.Parameter(typeof(int));
+                return System.Linq.Expressions.Expression.Lambda<Action<int, int, int, int, int>>(
+                    Expr.Call(m, a, Expr.Convert(b, enumType), c, d, e), a, b, c, d, e).Compile();
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Compile parameterless m() returning int/enum into a zero-alloc delegate. Null on failure.</summary>
+        internal static Func<int> CompileFuncInt(MethodInfo m)
+        {
+            try
+            {
+                var call = m.ReturnType == typeof(int)
+                    ? (System.Linq.Expressions.Expression)Expr.Call(m)
+                    : Expr.Convert(Expr.Call(m), typeof(int));
+                return System.Linq.Expressions.Expression.Lambda<Func<int>>(call).Compile();
+            }
+            catch { return null; }
+        }
 
         // Filter type constant for lowpass = 1
         private const int LOWPASS_FILTER_TYPE = 1;
@@ -173,8 +252,9 @@ namespace soundphysicsadapted
                     api.Logger.Debug($"[EfxHelper] Found DeleteFilter: {deleteFilterMethod}");
                 }
 
-                // Also need Filter(int, FilterInteger, int) for setting filter type
-                var filterIntMethod = efxType.GetMethod("Filter",
+                // Also need Filter(int, FilterInteger, int) for setting filter type.
+                // Cached here — was re-looked-up on every ConfigureLowpass call.
+                filterIntMethod = efxType.GetMethod("Filter",
                     BindingFlags.Public | BindingFlags.Static,
                     null,
                     new Type[] { typeof(int), filterIntegerType, typeof(int) },
@@ -206,6 +286,18 @@ namespace soundphysicsadapted
                     if (alGetErrorMethod != null) break;
                 }
 
+                // Compile hot-path delegates + pre-convert boxed enum values to ints.
+                // Any null delegate silently falls back to reflection Invoke.
+                lowpassGainInt = Convert.ToInt32(lowpassGainValue);
+                lowpassGainHFInt = Convert.ToInt32(lowpassGainHFValue);
+                filterTypeInt = Convert.ToInt32(filterTypeValue);
+                dFilterFloat = CompileIntEnumFloat(filterFloatMethod, filterFloatType);
+                if (filterIntMethod != null) dFilterInt = CompileIntEnumInt(filterIntMethod, filterIntegerType);
+                dGenFilter = CompileFuncInt(genFilterMethod);
+                if (alGetErrorMethod != null) dGetError = CompileFuncInt(alGetErrorMethod);
+                api.Logger.Debug($"[EfxHelper] Compiled delegates: filterFloat={dFilterFloat != null} " +
+                    $"filterInt={dFilterInt != null} genFilter={dGenFilter != null} getError={dGetError != null}");
+
                 IsAvailable = true;
                 api.Logger.Notification("[EfxHelper] EFX reflection initialized successfully");
                 return true;
@@ -229,7 +321,7 @@ namespace soundphysicsadapted
 
             try
             {
-                int filterId = (int)genFilterMethod.Invoke(null, null);
+                int filterId = dGenFilter != null ? dGenFilter() : (int)genFilterMethod.Invoke(null, null);
                 totalFiltersGenerated++;
                 if (filterId == 0)
                 {
@@ -258,14 +350,11 @@ namespace soundphysicsadapted
             try
             {
                 // Set filter type to lowpass (value = 1)
-                var efxType = filterFloatMethod.DeclaringType;
-                var filterIntMethod = efxType.GetMethod("Filter",
-                    BindingFlags.Public | BindingFlags.Static,
-                    null,
-                    new Type[] { typeof(int), filterIntegerType, typeof(int) },
-                    null);
-
-                if (filterIntMethod != null)
+                if (dFilterInt != null)
+                {
+                    dFilterInt(filterId, filterTypeInt, LOWPASS_FILTER_TYPE);
+                }
+                else if (filterIntMethod != null)
                 {
                     filterIntMethod.Invoke(null, new object[] { filterId, filterTypeValue, LOWPASS_FILTER_TYPE });
                 }
@@ -276,10 +365,16 @@ namespace soundphysicsadapted
 
                 // Set AL_LOWPASS_GAIN — overall volume attenuation (SPR: pow(cutoff, 0.1))
                 float directGain = (float)Math.Pow(Math.Max(gainHF, 0.0001f), 0.1);
-                filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainValue, directGain });
-
-                // Set AL_LOWPASS_GAINHF — high-frequency cutoff
-                filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainHFValue, gainHF });
+                if (dFilterFloat != null)
+                {
+                    dFilterFloat(filterId, lowpassGainInt, directGain);
+                    dFilterFloat(filterId, lowpassGainHFInt, gainHF);
+                }
+                else
+                {
+                    filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainValue, directGain });
+                    filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainHFValue, gainHF });
+                }
                 return true;
             }
             catch (Exception ex)
@@ -305,6 +400,14 @@ namespace soundphysicsadapted
             {
                 // Set AL_LOWPASS_GAIN — overall volume attenuation (SPR: pow(cutoff, 0.1))
                 float directGain = (float)Math.Pow(Math.Max(gainHF, 0.0001f), 0.1);
+                if (dFilterFloat != null)
+                {
+                    // Hot path: per sound per 25ms SmoothAll tick — zero-alloc delegate
+                    dFilterFloat(filterId, lowpassGainInt, directGain);
+                    dFilterFloat(filterId, lowpassGainHFInt, gainHF);
+                    return true;
+                }
+
                 filterFloatMethod.Invoke(null, new object[] { filterId, lowpassGainValue, directGain });
 
                 // Set AL_LOWPASS_GAINHF — high-frequency cutoff
@@ -323,9 +426,10 @@ namespace soundphysicsadapted
         /// </summary>
         public static int GetALError()
         {
-            if (alGetErrorMethod == null) return 0;
             try
             {
+                if (dGetError != null) return dGetError();
+                if (alGetErrorMethod == null) return 0;
                 return (int)alGetErrorMethod.Invoke(null, null);
             }
             catch
@@ -664,32 +768,6 @@ namespace soundphysicsadapted
             }
         }
 
-        /// <summary>Get source state (AL_PLAYING, AL_STOPPED, etc).</summary>
-        public static int ALGetSourceState(int source)
-        {
-            if (source <= 0 || _getSourceiMethod == null || _alGetSourceiState == null) return AL_STOPPED;
-            try
-            {
-                object[] args = new object[] { source, _alGetSourceiState, 0 };
-                _getSourceiMethod.Invoke(null, args);
-                return (int)args[2];
-            }
-            catch { return AL_STOPPED; }
-        }
-
-        /// <summary>Get source integer property (buffer, looping, etc).</summary>
-        public static int ALGetSourcei(int source, object enumValue)
-        {
-            if (source <= 0 || _getSourceiMethod == null || enumValue == null) return 0;
-            try
-            {
-                object[] args = new object[] { source, enumValue, 0 };
-                _getSourceiMethod.Invoke(null, args);
-                return (int)args[2];
-            }
-            catch { return 0; }
-        }
-
         /// <summary>Get source float property (gain, sec offset, etc).</summary>
         public static float ALGetSourcef(int source, object enumValue)
         {
@@ -719,14 +797,6 @@ namespace soundphysicsadapted
             catch { }
         }
 
-        /// <summary>Play an OpenAL source.</summary>
-        public static void ALSourcePlay(int source)
-        {
-            if (source <= 0 || _sourcePlayMethod == null) return;
-            try { _sourcePlayMethod.Invoke(null, new object[] { source }); }
-            catch { }
-        }
-
         /// <summary>Stop an OpenAL source.</summary>
         public static void ALSourceStop(int source)
         {
@@ -735,39 +805,7 @@ namespace soundphysicsadapted
             catch { }
         }
 
-        /// <summary>Pause an OpenAL source.</summary>
-        public static void ALSourcePause(int source)
-        {
-            if (source <= 0 || _sourcePauseMethod == null) return;
-            try { _sourcePauseMethod.Invoke(null, new object[] { source }); }
-            catch { }
-        }
-
         // ---- Convenience wrappers with named parameters ----
-
-        /// <summary>Get the buffer ID attached to a source.</summary>
-        public static int ALGetSourceBuffer(int source) => ALGetSourcei(source, _alGetSourceiBuffer ?? _alSourceiBuffer);
-
-        /// <summary>Set buffer on a source.</summary>
-        public static void ALSetSourceBuffer(int source, int buffer) => ALSourcei(source, _alSourceiBuffer, buffer);
-
-        /// <summary>Get source gain.</summary>
-        public static float ALGetSourceGain(int source) => ALGetSourcef(source, _alSourcefGain);
-
-        /// <summary>Set source gain.</summary>
-        public static void ALSetSourceGain(int source, float gain) => ALSourcef(source, _alSourcefGain, gain);
-
-        /// <summary>Get source playback offset in seconds.</summary>
-        public static float ALGetSourceSecOffset(int source) => ALGetSourcef(source, _alSourcefSecOffset);
-
-        /// <summary>Set source playback offset in seconds.</summary>
-        public static void ALSetSourceSecOffset(int source, float offset) => ALSourcef(source, _alSourcefSecOffset, offset);
-
-        /// <summary>Get source looping state (1=looping, 0=not).</summary>
-        public static int ALGetSourceLooping(int source) => ALGetSourcei(source, _alGetSourceiLooping ?? _alSourceiLooping);
-
-        /// <summary>Set source looping state.</summary>
-        public static void ALSetSourceLooping(int source, int looping) => ALSourcei(source, _alSourceiLooping, looping);
 
         /// <summary>Get source reference distance (for distance attenuation).</summary>
         public static float ALGetSourceRefDistance(int source) => ALGetSourcef(source, _alSourcefRefDist);
@@ -801,15 +839,6 @@ namespace soundphysicsadapted
             if (factor < 0f) factor = 0f;
             else if (factor > 10f) factor = 10f;
             ALSourcef(source, _alSourcefAirAbsorption, factor);
-        }
-
-        /// <summary>Copy distance attenuation model from one source to another.</summary>
-        public static void CopyDistanceModel(int fromSource, int toSource)
-        {
-            if (fromSource <= 0 || toSource <= 0) return;
-            ALSetSourceRefDistance(toSource, ALGetSourceRefDistance(fromSource));
-            ALSetSourceMaxDistance(toSource, ALGetSourceMaxDistance(fromSource));
-            ALSetSourceRolloff(toSource, ALGetSourceRolloff(fromSource));
         }
 
         /// <summary>
@@ -1236,15 +1265,30 @@ namespace soundphysicsadapted
 
             try
             {
-                // Use enum value if we found it, otherwise use raw constant
-                object paramValue = _auxSendFilterValue ?? 0x20006;
+                // Lazy-compile the zero-alloc delegate on first use (reverb reflection
+                // init happens after EfxHelper.Initialize, so we can't compile there).
+                if (!dSource3iTried)
+                {
+                    dSource3iTried = true;
+                    auxSendFilterInt = Convert.ToInt32(_auxSendFilterValue ?? 0x20006);
+                    if (_alSource3iType != null && _source3iMethod != null)
+                        dSource3i = CompileIntEnum3Int(_source3iMethod, _alSource3iType);
+                }
 
                 // Clear any previous error
                 GetALError();
 
                 // OpenTK signature: AL.Source(int sid, ALSource3i param, int val1, int val2, int val3)
                 // val1 = effect slot, val2 = send index, val3 = filter
-                _source3iMethod.Invoke(null, new object[] { source, paramValue, slot, sendIndex, filter });
+                if (dSource3i != null)
+                {
+                    dSource3i(source, auxSendFilterInt, slot, sendIndex, filter);
+                }
+                else
+                {
+                    object paramValue = _auxSendFilterValue ?? 0x20006;
+                    _source3iMethod.Invoke(null, new object[] { source, paramValue, slot, sendIndex, filter });
+                }
 
                 // Check for OpenAL errors
                 int err = GetALError();
@@ -1299,6 +1343,14 @@ namespace soundphysicsadapted
 
             try
             {
+                if (dFilterFloat != null)
+                {
+                    // Hot path: 4 sends per sound per reverb apply — zero-alloc delegate
+                    dFilterFloat(filter, lowpassGainInt, gain);
+                    dFilterFloat(filter, lowpassGainHFInt, gainHF);
+                    return;
+                }
+
                 // Set AL_LOWPASS_GAIN — explicit reverb send gain (NOT the pow(gainHF,0.1) formula)
                 if (lowpassGainValue != null)
                 {

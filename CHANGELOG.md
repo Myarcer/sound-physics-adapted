@@ -4,6 +4,24 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.5] - 2026-07-02
+
+### Fixed
+- **Indoor weather audio no longer cuts out.** Rain/wind heard through windows and doorways used to go silent the moment you walked deeper into a building (a structural check falsely marked the opening as sealed, then a timeout deleted it). Openings now stay tracked while quiet or occluded and their sources fade naturally — and swell back when you return. Louder openings still take over the limited source slots from quieter ones.
+- Fixed a create/destroy loop that recreated silenced weather sources every tick (audio churn, wasted CPU).
+- Walking indoors during rain: the ambient rain bed now hands over smoothly to positional window/door sources — no dropout while the positional sources spin up, no double volume.
+- Fixed audio glitches after leaving and rejoining a world (stale state reset).
+- Distance-model settings could fail to re-apply when the game recycled a sound source.
+- Multiple corner-placed block sounds in the same tick could play at each other's positions (shared-buffer aliasing).
+- Sounds started from the music engine thread no longer race the physics raycasts (deferred to the next tick) — fixes rare instability when music/resonator tracks start.
+- Volume fades no longer freeze mid-fade when a sound's update budget is throttled.
+
+### Changed
+- Building from source now requires the .NET 10 SDK (VS 1.22+).
+
+### Performance
+- No more raytrace on sound start, compiled OpenAL calls, zero-allocation weather processing — less stutter when many sounds start at once.
+
 ## [0.2.4] - 2026-04-27
 
 ### Added
