@@ -452,11 +452,24 @@ namespace soundphysicsadapted
             }
         }
 
-        // Track which sourceIds we've already applied the distance model to,
-        // so re-attaches (e.g., after underwater state change) don't double-multiply.
-        // OpenAL recycles source IDs, so the entry is overwritten naturally on reuse.
-        private static readonly Dictionary<int, int> _distanceModelApplied = new Dictionary<int, int>();
-        private static int _distanceModelGen = 0;
+        // Track which sourceIds have had the distance model applied for their CURRENT sound.
+        // VS sets rolloff/max-distance in createSoundSource() (once per AL source, never in
+        // Start()), so: repeated Start() on the same sound must NOT re-multiply (values would
+        // stack), but a NEW sound taking a recycled sourceId gets fresh vanilla values and
+        // MUST be re-applied. AudioRenderer.RegisterSound calls InvalidateDistanceModel()
+        // whenever a new sound<->sourceId pairing is created.
+        private static readonly HashSet<int> _distanceModelApplied = new HashSet<int>();
+
+        /// <summary>
+        /// Reset the distance-model dedupe for a sourceId. Called by AudioRenderer.RegisterSound
+        /// when a new sound takes this sourceId (VS just re-ran createSoundSource with vanilla
+        /// distance params, so our multipliers must be applied again).
+        /// </summary>
+        public static void InvalidateDistanceModel(int sourceId)
+        {
+            if (sourceId <= 0) return;
+            lock (_distanceModelApplied) _distanceModelApplied.Remove(sourceId);
+        }
 
         /// <summary>
         /// Apply per-source distance attenuation overrides:
@@ -495,12 +508,15 @@ namespace soundphysicsadapted
                         return;
                 }
 
-                // De-dup against re-attachments / our own SoundStartPostfix double-fire.
-                // Generation counter rolls every ~1B starts to avoid pathological stale state.
-                int gen = _distanceModelGen;
-                if (_distanceModelApplied.TryGetValue(sourceId, out int prevGen) && prevGen == gen)
-                    return;
-                _distanceModelApplied[sourceId] = gen;
+                // De-dup against repeated Start() on the same sound (VS restarts looping /
+                // paused sounds without re-running createSoundSource, so multiplying again
+                // would stack). Cleared per-sourceId by InvalidateDistanceModel when a new
+                // sound registers on the id. Lock: Start() can fire on the music thread.
+                lock (_distanceModelApplied)
+                {
+                    if (!_distanceModelApplied.Add(sourceId))
+                        return;
+                }
 
                 if (!EfxHelper.IsAvailable) return;
 

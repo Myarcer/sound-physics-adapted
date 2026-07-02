@@ -392,6 +392,10 @@ namespace soundphysicsadapted
                     }
                 }
 
+                // New sound<->sourceId pairing: VS just ran createSoundSource() with fresh
+                // vanilla distance params, so the distance-model dedupe for this id must reset.
+                LoadSoundPatch.InvalidateDistanceModel(sourceId);
+
                 // Track it
                 var entry = new FilterEntry
                 {
@@ -1232,13 +1236,16 @@ namespace soundphysicsadapted
                             double toOrig = entry.TargetRepositionedPos.DistanceTo(entry.OriginalSoundPos);
                             if (toOrig < 0.1)
                             {
-                                // Smoothly returned to original position — clear state
+                                // Smoothly returned to original position — clear state.
+                                // Capture the position BEFORE nulling the fields, otherwise
+                                // the final apply below is a null no-op.
+                                Vec3d finalPos = entry.OriginalSoundPos;
                                 entry.TargetRepositionedPos = null;
                                 entry.CurrentRepositionedPos = null;
                                 entry.OriginalSoundPos = null;
                                 entry.SmoothedTargetPos = null;
                                 // Apply original pos one last time
-                                SetALSourcePosition(entry.SourceId, entry.TargetRepositionedPos ?? entry.OriginalSoundPos);
+                                SetALSourcePosition(entry.SourceId, finalPos);
                                 continue;
                             }
                         }
