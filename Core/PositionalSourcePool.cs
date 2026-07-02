@@ -123,17 +123,19 @@ namespace soundphysicsadapted
         private const float EVICTION_VOLUME_THRESHOLD = 0.02f;
 
         /// <summary>
+        /// Minimum computed target volume for an opening to be granted a voice.
+        /// Below this the opening stays tracked but VIRTUAL — no OpenAL source is
+        /// created for silence. Without this gate, zero-weight openings churned
+        /// through create → fade-out → dispose every tick.
+        /// </summary>
+        private const float SPAWN_MIN_VOLUME = 0.02f;
+
+        /// <summary>
         /// Minimum squared distance an OpenAL source must move before SetPosition
         /// is called. Prevents panning jitter from sub-block centroid micro-shifts.
         /// 0.25 = 0.5 blocks minimum movement.
         /// </summary>
         private const float POSITION_UPDATE_MIN_DIST_SQ = 0.25f;
-
-        /// <summary>
-        /// Direct DDA occlusion above this = sound is inaudible.
-        /// At occ=5.0: filter = exp(-5) = 0.007 = nearly silent.
-        /// </summary>
-        public float AudibilityOccThreshold { get; set; } = 5.0f;
 
         /// <summary>Sound range for OpenAL 3D distance model.</summary>
         public float SoundRange { get; set; } = 48f;
@@ -337,7 +339,18 @@ namespace soundphysicsadapted
             for (int o = 0; o < openingCount; o++)
             {
                 if (openingAssigned[o]) continue;
-                if (trackedOpenings[o].Suppressed) continue; // Never assign slots to redundant openings
+                var cand = trackedOpenings[o];
+                if (cand.Suppressed) continue; // Never assign slots to redundant openings
+
+                // Virtualization gate: openings whose target volume is inaudible
+                // get no voice. They stay tracked and re-qualify here the moment
+                // their weight/volume returns.
+                var candPos = PositionSelector != null ? PositionSelector(cand) : cand.WorldPos;
+                float candVol = CalculateVolume(cand, intensity, volumeMultiplier)
+                              * ProximityFadeFactor(cand, earPos)
+                              * NearFieldFactor(candPos, earPos);
+                if (candVol < SPAWN_MIN_VOLUME) continue;
+
                 candidateOrder[candidateCount++] = o;
             }
             // Insertion sort by descending score (candidateCount is tiny)
@@ -600,55 +613,6 @@ namespace soundphysicsadapted
                     StopSource(slot);
                 }
             }
-        }
-
-        // ════════════════════════════════════════════════════════════════
-        // Audibility Check (for OpeningTracker persistence)
-        // ════════════════════════════════════════════════════════════════
-
-        /// <summary>
-        /// Check if a source at the given TrackingId is still audible to the player.
-        /// Queries AudioPhysicsSystem's cached occlusion for the sound.
-        /// </summary>
-        public bool IsSourceAudible(int trackingId)
-        {
-            if (sources == null) return false;
-
-            var audioPhysics = SoundPhysicsAdaptedModSystem.Acoustics;
-            if (audioPhysics == null) return false;
-
-            for (int i = 0; i < sources.Length; i++)
-            {
-                var slot = sources[i];
-                if (slot.Active && slot.TrackingId == trackingId && slot.Sound != null)
-                {
-                    if (slot.CurrentVolume <= MinVolume) return false;
-                    // Deliberately fading out (suppressed, evicted, or structurally
-                    // zeroed) — must not refresh tracker persistence, or a whisper-
-                    // volume far source keeps its opening alive forever.
-                    if (slot.TargetVolume <= 0f) return false;
-
-                    // Use EFFECTIVE occlusion (path-resolved when available),
-                    // not raw direct DDA. A sound heard around a corner via
-                    // bounce rays has low effective occlusion even when direct
-                    // DDA is very high (wall between player and source).
-                    float occ = audioPhysics.GetEffectiveOcclusion(slot.Sound);
-                    if (occ < 0) return false; // Sound not in cache — unregistered or stale, not audible
-                    bool audible = occ <= AudibilityOccThreshold;
-
-                    var cfg = SoundPhysicsAdaptedModSystem.Config;
-                    if (cfg?.DebugMode == true && cfg?.DebugPositionalWeather == true)
-                    {
-                        float directOcc = audioPhysics.GetSoundOcclusion(slot.Sound);
-                        WeatherAudioManager.WeatherDebugLog(
-                            $"[5B-{debugTag}-AUDIBLE] trackId={trackingId} slot={i} directOcc={directOcc:F2} " +
-                            $"effectiveOcc={occ:F2} vol={slot.CurrentVolume:F3} audible={audible}");
-                    }
-
-                    return audible;
-                }
-            }
-            return false;
         }
 
         // ════════════════════════════════════════════════════════════════
@@ -1009,7 +973,6 @@ namespace soundphysicsadapted
                 float directOcc = audioPhysics?.GetSoundOcclusion(slot.Sound) ?? -1f;
                 float effectiveOcc = audioPhysics?.GetEffectiveOcclusion(slot.Sound) ?? -1f;
                 bool registered = AudioRenderer.IsRegistered(slot.Sound);
-                bool audible = effectiveOcc >= 0 ? effectiveOcc <= AudibilityOccThreshold : false;
                 string directStr = directOcc >= 0 ? $"{directOcc:F2}" : "N/A";
                 string effectiveStr = effectiveOcc >= 0 ? $"{effectiveOcc:F2}" : "N/A";
 
@@ -1017,7 +980,7 @@ namespace soundphysicsadapted
                     $"  [{debugTag}] Slot[{i}] id={slot.TrackingId} " +
                     $"pos=({slot.WorldPos?.X:F0},{slot.WorldPos?.Y:F0},{slot.WorldPos?.Z:F0}) " +
                     $"vol={slot.CurrentVolume:F3}/{slot.TargetVolume:F3} " +
-                    $"directOcc={directStr} effOcc={effectiveStr} audible={audible} reg={registered} " +
+                    $"directOcc={directStr} effOcc={effectiveStr} reg={registered} " +
                     $"playing={slot.Sound?.IsPlaying ?? false} " +
                     $"posMode={(PositionSelector != null ? "wind" : "default")}");
             }

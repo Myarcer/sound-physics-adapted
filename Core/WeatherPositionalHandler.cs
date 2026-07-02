@@ -218,23 +218,6 @@ namespace soundphysicsadapted
         }
 
         // ════════════════════════════════════════════════════════════════
-        // Multi-pool audibility (for OpeningTracker persistence)
-        // ════════════════════════════════════════════════════════════════
-
-        /// <summary>
-        /// Check if ANY pool has an audible source at the given TrackingId.
-        /// If rain OR wind OR hail source at that opening is still audible,
-        /// the opening stays alive in OpeningTracker.
-        /// </summary>
-        public bool IsSourceAudible(int trackingId)
-        {
-            if (rainPool?.IsSourceAudible(trackingId) == true) return true;
-            if (windPool?.IsSourceAudible(trackingId) == true) return true;
-            if (hailPool?.IsSourceAudible(trackingId) == true) return true;
-            return false;
-        }
-
-        // ════════════════════════════════════════════════════════════════
         // Directional redundancy suppression
         // ════════════════════════════════════════════════════════════════
 
@@ -247,8 +230,8 @@ namespace soundphysicsadapted
         /// <summary>
         /// Mark openings as Suppressed when a closer, currently-verified opening of
         /// comparable weight covers the same direction from the ear. Suppressed
-        /// openings fade to silence via zero target volume, and IsSourceAudible
-        /// ignores them so audibility persistence can't keep them alive forever.
+        /// openings fade to silence via zero target volume and are never granted
+        /// a new voice by the pool's spawn gate.
         /// </summary>
         private static void UpdateDirectionalSuppression(
             IReadOnlyList<TrackedOpening> openings, Vec3d earPos)

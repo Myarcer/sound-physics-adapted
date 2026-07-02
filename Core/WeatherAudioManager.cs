@@ -150,12 +150,6 @@ namespace soundphysicsadapted
                 // Wire thunder handler to Harmony patches so lightning events get routed to us
                 WeatherSoundPatches.SetThunderHandler(thunderHandler, this);
 
-                // Wire up audibility-based persistence: OpeningTracker asks ALL positional pools
-                // if any source is still being heard before removing the opening
-                openingTracker.IsSourceAudible = (trackingId) => positionalHandler.IsSourceAudible(trackingId);
-
-
-
                 initialized = true;
                 SoundPhysicsAdaptedModSystem.Log("WeatherAudioManager initialized (L1 ambient + L2 positional rain/wind/hail + 5C thunder)");
                 return true;

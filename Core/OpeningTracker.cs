@@ -127,29 +127,23 @@ namespace soundphysicsadapted
     /// the sound around corners via bounce rays.
     ///
     /// Removal conditions:
-    /// 1. Persistence timeout: opening hasn't been re-verified for N seconds
-    /// 2. Distance: player moved too far from the opening
-    /// 3. Weather stopped: no rain/hail
-    /// 4. Structural change: heightmap now covers the opening column
+    /// 1. Distance: player moved too far from the opening
+    /// 2. Weather stopped: no rain/hail
+    /// 3. Structural sealing: heightmap covers all member columns, or a solid
+    ///    block sits at/above a member position
+    /// 4. Block-change event: ForceReverify flagged by OnBlockChanged
     ///
-    /// This solves the L-shaped room problem: the door opening stays tracked
-    /// even when occluded from the new player position.
+    /// Audibility and occlusion NEVER remove an opening (voice-virtualization
+    /// model): a quiet or occluded opening stays tracked without a source and
+    /// re-qualifies for one when its volume returns. This solves the L-shaped
+    /// room problem: the door opening stays tracked even when occluded from
+    /// the new player position.
     /// </summary>
     public class OpeningTracker
     {
         private readonly ICoreClientAPI capi;
         private readonly List<TrackedOpening> trackedOpenings = new List<TrackedOpening>(8);
         private int nextTrackingId = 1;
-
-        /// <summary>
-        /// Callback to check if a tracked opening's positional source is still audible.
-        /// Takes TrackingId, returns true if the sound is being heard by the player
-        /// (even if occluded/repositioned by AudioPhysicsSystem).
-        /// When null, falls back to flat persistence timeout.
-        /// </summary>
-        public System.Func<int, bool> IsSourceAudible { get; set; }
-
-
 
         /// <summary>
         /// Current tracked openings (read by RainAudioHandler for source placement).
@@ -203,15 +197,7 @@ namespace soundphysicsadapted
         // so tracked openings survive as long as the cache feeds them clusters.
         private const float REMOVAL_DISTANCE_PADDING = 8f;
 
-        /// <summary>
-        /// Maximum DDA occlusion for a member column to count as "still open" in the
-        /// structural integrity check. Verified openings pass at occ &lt; 0.3 (DDA threshold).
-        /// Using 0.5 gives headroom so normal scan variance doesn't cause false positives,
-        /// while still catching placed blocks (~1.0 occ each).
-        /// </summary>
-        private const float STRUCTURAL_OCC_THRESHOLD = 0.5f;
-
-        /// <summary>Minimum interval between DDA structural integrity checks per opening.</summary>
+        /// <summary>Minimum interval between structural integrity checks per opening.</summary>
         private const long INTEGRITY_CHECK_INTERVAL_MS = 500;
 
         public OpeningTracker(ICoreClientAPI api)
@@ -245,7 +231,6 @@ namespace soundphysicsadapted
             int scanRadius)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
-            float persistenceMs = (config?.OpeningPersistenceSeconds ?? 10f) * 1000f;
             bool debug = config?.DebugMode == true && config?.DebugPositionalWeather == true;
 
             // Step 1: Mark all existing as unverified this cycle
@@ -265,7 +250,7 @@ namespace soundphysicsadapted
 
             // Step 4: Remove stale/invalid openings
             var blockAccessor = capi.World.BlockAccessor;
-            RemoveStaleOpenings(playerEarPos, gameTimeMs, persistenceMs, scanRadius, blockAccessor, debug);
+            RemoveStaleOpenings(playerEarPos, gameTimeMs, scanRadius, blockAccessor, debug);
         }
 
         /// <summary>Mark all existing openings as unverified for this cycle.</summary>
@@ -524,12 +509,13 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Remove stale/invalid openings based on distance, structural changes,
-        /// and audibility persistence.
+        /// Remove stale/invalid openings based on distance and structural changes.
+        /// Audibility/occlusion never remove an opening — quiet openings stay
+        /// tracked as virtual emitters (no source) until physically invalidated.
         /// </summary>
         private void RemoveStaleOpenings(
             Vec3d playerEarPos, long gameTimeMs,
-            float persistenceMs, int scanRadius,
+            int scanRadius,
             IBlockAccessor blockAccessor, bool debug)
         {
             for (int i = trackedOpenings.Count - 1; i >= 0; i--)
@@ -541,9 +527,6 @@ namespace soundphysicsadapted
                 // When a block was placed/removed near an entry point, IMMEDIATELY REMOVE
                 // the opening. If it's still genuinely open, the enclosure calculator will
                 // re-discover it within ~500ms and create a fresh tracked opening.
-                // We can't soft-reset here because 4d (audibility persistence) would
-                // resurrect the opening: the sound is still playing → IsSourceAudible=true
-                // → LastVerifiedTimeMs gets reset → opening survives forever.
                 if (tracked.ForceReverify)
                 {
                     if (debug)
@@ -610,61 +593,21 @@ namespace soundphysicsadapted
                     catch { /* BlockAccessor may fail at chunk boundaries */ }
                 }
 
-                // 4c: DDA structural integrity check for persisted openings.
-                // Rate-limited: up to (members × height offsets) block reads plus a
-                // DDA ray per member — at the 10Hz tick that burned hundreds of rays
-                // per second per persisted opening for a check that answers a
-                // block-placement question. 500ms is still instant to a player.
+                // 4c: Structural integrity check for persisted openings (block-at-member
+                // reads only, no rays). Rate-limited to 500ms — still instant to a player.
                 if (removeReason == null && !tracked.CurrentlyVerified
                     && tracked.MemberPositions != null && tracked.MemberPositions.Count > 0
-                    && tracked.LastVerifiedPlayerPos != null && blockAccessor != null
+                    && blockAccessor != null
                     && gameTimeMs - tracked.LastIntegrityCheckMs >= INTEGRITY_CHECK_INTERVAL_MS)
                 {
                     tracked.LastIntegrityCheckMs = gameTimeMs;
                     CheckStructuralIntegrity(tracked, blockAccessor, debug);
                 }
 
-                // ── AUDIBILITY PERSISTENCE (soft hint, only after structural checks pass) ──
-
-                // 4d: Audibility-based persistence.
-                // As long as the source is physically intact (structural checks passed)
-                // AND audible to the player, keep it alive. This allows natural fade-out
-                // via OpenAL distance attenuation + acoustics occlusion as the player
-                // walks away, instead of abruptly killing sources.
-                //
-                // Pool slots are stable: each source keeps its slot by TrackingId match.
-                // No competition/oscillation between sources at similar volumes.
-                // Sources only free their slot when removed from tracker here.
-                //
-                // When no longer audible: full persistence timeout before removal,
-                // giving time for the player to turn back / opening to re-verify.
-                if (removeReason == null && !tracked.CurrentlyVerified)
-                {
-                    bool stillAudible = false;
-                    try { stillAudible = IsSourceAudible?.Invoke(tracked.TrackingId) == true; }
-                    catch { /* callback failure = not audible */ }
-
-                    if (stillAudible)
-                    {
-                        // Sound is audible — keep alive regardless of fresh openings.
-                        // Natural fade-out via distance attenuation handles the transition.
-                        tracked.LastVerifiedTimeMs = gameTimeMs;
-                        if (debug)
-                        {
-                            WeatherAudioManager.WeatherDebugLog(
-                                $"[5B-TRACK] AUDIBLE-PERSIST id={tracked.TrackingId}");
-                        }
-                    }
-                    else
-                    {
-                        // Not audible — use full persistence timeout
-                        long timeSinceVerified = gameTimeMs - tracked.LastVerifiedTimeMs;
-                        if (timeSinceVerified > persistenceMs)
-                        {
-                            removeReason = $"inaudible timeout ({timeSinceVerified}ms > {persistenceMs}ms)";
-                        }
-                    }
-                }
+                // NOTE: No audibility/persistence-timeout removal here (virtualization
+                // model). An opening that is occluded or quiet keeps its tracker entry
+                // with no source; the pool re-grants a voice when its volume returns.
+                // Removal is exclusively physical: distance, sealing, block events.
 
                 if (removeReason != null)
                 {
@@ -748,12 +691,13 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// DDA structural integrity check for persisted openings.
-        /// Detects blocks placed IN the opening. Two checks per member column:
-        ///   1. Direct block check at the member position itself (bypasses DDA skipFirst)
-        ///   2. DDA from member to stored player position (catches blocks between)
-        /// Uses stored player pos (not current) so walking around corners doesn't
-        /// false-trigger — only placing/removing blocks changes these paths.
+        /// Structural integrity check for persisted openings: solid block AT the
+        /// member position or at fixed offsets above it = column sealed.
+        /// Deliberately NO ray to the player: a ray from a window member to a
+        /// player inside always crosses the wall the window sits in (occ ~1.0),
+        /// which falsely zeroed legit openings the moment verification lapsed.
+        /// Blocks placed BETWEEN member and player are caught by the event-driven
+        /// OnBlockChanged → ForceReverify path instead.
         /// </summary>
         private void CheckStructuralIntegrity(TrackedOpening tracked, IBlockAccessor blockAccessor, bool debug)
         {
@@ -806,36 +750,18 @@ namespace soundphysicsadapted
                         }
                     }
 
-                    // Check 2: DDA from member to stored player position.
-                    // Catches blocks placed BETWEEN the member and the player
-                    // (not at the exact member position).
-                    if (!columnBlocked)
-                    {
-                        float occ = OcclusionCalculator.CalculateWeatherPathOcclusion(
-                            memberPos, tracked.LastVerifiedPlayerPos, blockAccessor);
-                        if (occ >= STRUCTURAL_OCC_THRESHOLD)
-                            columnBlocked = true;
-                    }
-
                     if (!columnBlocked)
                         openCount++;
                 }
 
                 // Structural change: update weight immediately (no smoothing —
-                // block placement response should be instant)
+                // block placement response should be instant). Weight 0 silences
+                // the source but the opening stays tracked (virtual); removal only
+                // happens via heightmap sealing, block events, or distance.
                 if (openCount != tracked.MemberPositions.Count)
                 {
                     tracked.SmoothedClusterWeight = openCount;
 
-                    // NOTE: Never set removeReason here. The DDA check
-                    // (member→stored player pos) false-triggers on existing
-                    // walls when rounding corners inside houses. Instead:
-                    //  - Weight goes to 0 → volume drops to 0 (instant silence)
-                    //  - 4d (audibility check) handles actual removal:
-                    //    · If audible through walls → stays alive (repositioned/muffled)
-                    //    · If truly inaudible → persistence timeout removes it
-                    // This preserves block-placement responsiveness (volume=0 immediately)
-                    // while preventing false-kills on corner navigation.
                     if (debug)
                     {
                         WeatherAudioManager.WeatherDebugLog(
