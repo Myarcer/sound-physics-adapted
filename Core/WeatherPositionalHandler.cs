@@ -35,9 +35,11 @@ namespace soundphysicsadapted
         public float WindContribution => windPool?.Contribution ?? 0f;
         public float HailContribution => hailPool?.Contribution ?? 0f;
 
-        // Per-type summed loudness for the Layer 1 bed-hold handover
-        public float RainLoudnessSum => rainPool?.LoudnessSum ?? 0f;
-        public float HailLoudnessSum => hailPool?.LoudnessSum ?? 0f;
+        // Per-type distance-weighted loudness for the Layer 1 bed-hold readiness gate
+        public float RainEffectiveLoudness => rainPool?.EffectiveLoudness ?? 0f;
+        public float RainExpectedLoudness => rainPool?.ExpectedLoudness ?? 0f;
+        public float HailEffectiveLoudness => hailPool?.EffectiveLoudness ?? 0f;
+        public float HailExpectedLoudness => hailPool?.ExpectedLoudness ?? 0f;
 
         /// <summary>Combined active count across all pools.</summary>
         public int TotalActiveCount =>

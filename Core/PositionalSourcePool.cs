@@ -45,6 +45,7 @@ namespace soundphysicsadapted
             public float TargetVolume;       // What we're fading toward
             public float CurrentVolume;      // What's currently set (for smooth fading)
             public Vec3f LastAppliedPos;     // Last position sent to OpenAL (dead zone filter)
+            public long AssignedAtMs;        // Game time of last assignment (swap cooldown)
         }
 
         private readonly ICoreClientAPI capi;
@@ -95,7 +96,7 @@ namespace soundphysicsadapted
         /// rain dropout in tunnel mouths). Fast tracking makes the enclosure smoother
         /// the single governing time constant for both layers.
         /// </summary>
-        public float TrackRate { get; set; } = 0.35f;    // ~0.5s to 90%
+        public float TrackRate { get; set; } = 0.5f;    // ~0.3s to 90%
 
         /// <summary>Below this volume a rising source uses FadeInRate (spawn ramp).</summary>
         private const float SPAWN_RAMP_THRESHOLD = 0.05f;
@@ -165,12 +166,35 @@ namespace soundphysicsadapted
         public float Contribution { get; private set; }
 
         /// <summary>
-        /// Summed volume of active sources (capped at 1.5). Loudness proxy for the
-        /// Layer 1 bed-hold handover: the bed only surrenders level that positional
-        /// sources have ACTUALLY delivered, so detection/slot latency never leaves
-        /// an audible hole.
+        /// Distance-weighted sum of CURRENT source volumes — what the pool is
+        /// actually delivering at the ear right now. Weight = 6/(6+dist) approximates
+        /// OpenAL distance attenuation so far sources count for little.
         /// </summary>
-        public float LoudnessSum { get; private set; }
+        public float EffectiveLoudness { get; private set; }
+
+        /// <summary>
+        /// Distance-weighted sum of TARGET source volumes — what the pool WILL
+        /// deliver once all fades complete. EffectiveLoudness/ExpectedLoudness is the
+        /// dimensionless "readiness" that gates the Layer 1 bed-hold release: unit
+        /// mismatch between bed volume and positional volume cancels out in the ratio.
+        /// </summary>
+        public float ExpectedLoudness { get; private set; }
+
+        /// <summary>Distance weight for loudness sums: 1.0 at 0m, 0.5 at 6m, 0.23 at 20m.</summary>
+        private const float LOUDNESS_DIST_HALF = 6f;
+
+        /// <summary>Last ear position from UpdateSources (for loudness distance weighting).</summary>
+        private Vec3d lastEarPos;
+
+        /// <summary>
+        /// Instant volume a newly assigned source starts at (clamped to its target).
+        /// The Layer 1 bed-hold still carries the mix while this ramps, but starting
+        /// from true silence wasted the first ~0.3s doing nothing audible.
+        /// </summary>
+        private const float SPAWN_HEAD_START = 0.15f;
+
+        /// <summary>Minimum age before an active slot can be evict-swapped (churn guard).</summary>
+        private const long SWAP_COOLDOWN_MS = 2500;
 
         // ── Orphaned sounds: fading out detached from any slot ──
         // When a better opening takes over a busy slot, the old sound must not be
@@ -237,6 +261,7 @@ namespace soundphysicsadapted
         {
             if (!initialized || sources == null || mode != PoolMode.Looping) return;
 
+            lastEarPos = earPos;
             TickOrphans();
 
             bool debug = SoundPhysicsAdaptedModSystem.Config?.DebugMode == true
@@ -362,10 +387,14 @@ namespace soundphysicsadapted
                     // fades out detached — waiting for an in-slot fade stalled better
                     // openings for many seconds (Pass 1 re-armed the target each tick).
                     float candidateScore = OpeningScore(trackedOpenings[o], earPos);
+                    long nowMs = capi.World.ElapsedMilliseconds;
                     int weakest = -1;
                     float weakestScore = float.MaxValue;
                     for (int s = 0; s < maxSlots; s++)
                     {
+                        // Cooldown: freshly assigned sources are not evictable yet —
+                        // without this, borderline scores churned slots every ~3s.
+                        if (nowMs - sources[s].AssignedAtMs < SWAP_COOLDOWN_MS) continue;
                         if (slotScores[s] < weakestScore)
                         {
                             weakestScore = slotScores[s];
@@ -398,10 +427,14 @@ namespace soundphysicsadapted
                 var newPos = PositionSelector != null ? PositionSelector(newOpening) : newOpening.WorldPos;
                 targetSlot.WorldPos = newPos;
                 targetSlot.Active = true;
-                targetSlot.CurrentVolume = 0f;
                 float baseVol2 = CalculateVolume(newOpening, intensity, volumeMultiplier);
                 targetSlot.TargetVolume = baseVol2 * ProximityFadeFactor(newOpening, earPos)
                                                    * NearFieldFactor(newPos, earPos);
+                // Head start: skip the silent bottom of the ramp — the bed-hold is
+                // still carrying the mix, so an instantly-audible (but modest) start
+                // is smoother than 0.3s of nothing followed by a swell.
+                targetSlot.CurrentVolume = Math.Min(SPAWN_HEAD_START, targetSlot.TargetVolume);
+                targetSlot.AssignedAtMs = capi.World.ElapsedMilliseconds;
                 slotScores[bestSlot] = OpeningScore(newOpening, earPos);
 
                 EnsureSourcePlaying(targetSlot);
@@ -937,7 +970,8 @@ namespace soundphysicsadapted
             }
             orphans.Clear();
             Contribution = 0f;
-            LoudnessSum = 0f;
+            EffectiveLoudness = 0f;
+            ExpectedLoudness = 0f;
         }
 
         private void UpdateContribution()
@@ -945,25 +979,42 @@ namespace soundphysicsadapted
             if (sources == null)
             {
                 Contribution = 0f;
-                LoudnessSum = 0f;
+                EffectiveLoudness = 0f;
+                ExpectedLoudness = 0f;
                 return;
             }
 
             float totalContribution = 0f;
             int activeCount = 0;
+            float effective = 0f;
+            float expected = 0f;
 
             for (int i = 0; i < sources.Length; i++)
             {
                 var slot = sources[i];
-                if (slot.Active && slot.CurrentVolume > MinVolume)
+                if (!slot.Active) continue;
+
+                // Distance weight approximates OpenAL attenuation so a far source's
+                // numeric volume doesn't masquerade as delivered at-ear loudness
+                float distWeight = 1f;
+                if (lastEarPos != null && slot.WorldPos != null)
+                {
+                    float dist = (float)slot.WorldPos.DistanceTo(lastEarPos);
+                    distWeight = LOUDNESS_DIST_HALF / (LOUDNESS_DIST_HALF + dist);
+                }
+
+                if (slot.CurrentVolume > MinVolume)
                 {
                     totalContribution += slot.CurrentVolume;
                     activeCount++;
+                    effective += slot.CurrentVolume * distWeight;
                 }
+                expected += slot.TargetVolume * distWeight;
             }
 
             Contribution = activeCount > 0 ? Math.Min(totalContribution / activeCount, 1f) : 0f;
-            LoudnessSum = Math.Min(totalContribution, 1.5f);
+            EffectiveLoudness = effective;
+            ExpectedLoudness = expected;
         }
 
         // ════════════════════════════════════════════════════════════════

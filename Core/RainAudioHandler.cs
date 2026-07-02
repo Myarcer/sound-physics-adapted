@@ -100,30 +100,29 @@ namespace soundphysicsadapted
         private float windPositionalContribution = 0f;
         private float hailPositionalContribution = 0f;
 
-        // ── Bed-hold handover (indoor transition) ──
-        // The industry-standard fix for the "walk inside → rain hole → late loud
-        // positional" jank: Layer 1 only surrenders level that Layer 2 has ACTUALLY
-        // delivered (summed positional loudness). Enclosure metrics still change the
-        // LPF character instantly, but total rain energy stays continuous no matter
-        // how late openings are detected or sources spawn. The hold also releases at
-        // a fixed rate so sealed rooms (no openings, Layer 2 never delivers) still
-        // settle to the muffled bed within ~3s instead of holding forever.
+        // ── Bed-hold handover with readiness gate (indoor transition) ──
+        // The fix for the "walk inside → rain hole → late loud positional" jank:
+        // the bed floors at a hold level that only RELEASES as fast as Layer 2 is
+        // ready. Readiness = effective/expected positional loudness — a dimensionless
+        // ratio, so the incomparable units of bed volume vs positional source volume
+        // never meet (the v0.2.5 subtraction approach failed exactly on that: 8
+        // sources summing to 1.5 numeric "loudness" cancelled the hold in 0.4s while
+        // delivering a fraction of that at the ear). Enclosure metrics still change
+        // the LPF character instantly; only the LEVEL path is gated.
+        // Sealed rooms (expected≈0, nothing will ever deliver) get readiness=1 so
+        // the bed settles to the muffled level at the full release rate (~2s).
         private float rainBedHold = 0f;
         private float hailBedHold = 0f;
-        private float rainPositionalLoudness = 0f; // summed L2 loudness (not average)
-        private float hailPositionalLoudness = 0f;
-        // L2 loudness at the moment the hold engaged. Positional sources often
-        // already play OUTDOORS (attenuated); only loudness gained SINCE the
-        // transition counts as delivered replacement energy, else a pre-existing
-        // outdoor L2 sum would cancel the hold exactly when it's needed.
-        private float rainL2Baseline = 0f;
-        private float hailL2Baseline = 0f;
-        /// <summary>
-        /// Bed-hold release in volume/sec — fallback pace when Layer 2 never
-        /// delivers (sealed room): outdoor->muffled settles in ~1.5-2s, matching
-        /// the AAA indoor-mix crossfade timing.
-        /// </summary>
-        private const float BED_HOLD_RELEASE_RATE = 0.20f;
+        private float rainL2Effective = 0f;
+        private float rainL2Expected = 0f;
+        private float hailL2Effective = 0f;
+        private float hailL2Expected = 0f;
+        /// <summary>Bed-hold release in volume/sec at readiness 1 — full crossfade ~2s.</summary>
+        private const float BED_HOLD_RELEASE_RATE = 0.30f;
+        /// <summary>Release fraction at readiness 0 — hold never fully freezes.</summary>
+        private const float BED_HOLD_MIN_RELEASE = 0.15f;
+        /// <summary>Below this expected loudness, Layer 2 has no indoor role — readiness 1.</summary>
+        private const float READINESS_MIN_EXPECTED = 0.02f;
 
         // Track state for debug
         private bool rainLeafyPlaying, rainLeaflessPlaying;
@@ -143,14 +142,28 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Set summed Layer 2 loudness per type for the bed-hold handover.
-        /// Sum (not average) — this is the total energy Layer 2 is delivering,
-        /// which is what Layer 1 is allowed to surrender during transitions.
+        /// Set distance-weighted Layer 2 loudness per type for the bed-hold
+        /// readiness gate: effective = delivered now, expected = once fades finish.
         /// </summary>
-        public void SetPositionalLoudness(float rainSum, float hailSum)
+        public void SetPositionalLoudness(
+            float rainEffective, float rainExpected,
+            float hailEffective, float hailExpected)
         {
-            rainPositionalLoudness = Math.Max(0f, rainSum);
-            hailPositionalLoudness = Math.Max(0f, hailSum);
+            rainL2Effective = Math.Max(0f, rainEffective);
+            rainL2Expected = Math.Max(0f, rainExpected);
+            hailL2Effective = Math.Max(0f, hailEffective);
+            hailL2Expected = Math.Max(0f, hailExpected);
+        }
+
+        /// <summary>
+        /// How ready Layer 2 is to carry its indoor role: 0 = sources assigned but
+        /// still silent/ramping, 1 = delivering everything they're going to.
+        /// No expected role (sealed room / no openings) counts as fully ready.
+        /// </summary>
+        private static float L2Readiness(float effective, float expected)
+        {
+            if (expected < READINESS_MIN_EXPECTED) return 1f;
+            return Math.Clamp(effective / expected, 0f, 1f);
         }
 
 
@@ -213,30 +226,21 @@ namespace soundphysicsadapted
                     vol *= DeepEnclosureFactor(skyCoverage, occlusionFactor);
                     vol *= RainDuckFactor();
 
-                    // Bed-hold handover: rises instantly (walking out = instant rain),
-                    // falls only at the release rate. Layer 2 loudness gained since the
-                    // hold engaged eats into it 1:1, so the bed drops exactly as fast
-                    // as positional sources take over — never faster. Clamped to current
-                    // intensity so rain stopping isn't held artificially.
-                    rainBedHold = Math.Max(vol, rainBedHold - BED_HOLD_RELEASE_RATE * dt);
+                    // Bed-hold: rises instantly (walking out = instant rain), releases
+                    // only as fast as Layer 2 is ready to take over. The bed floors at
+                    // the hold — total rain level can never drop faster than positional
+                    // sources actually replace it. Clamped to current intensity so rain
+                    // stopping isn't held artificially.
+                    float readiness = L2Readiness(rainL2Effective, rainL2Expected);
+                    float release = BED_HOLD_RELEASE_RATE
+                        * (BED_HOLD_MIN_RELEASE + (1f - BED_HOLD_MIN_RELEASE) * readiness);
+                    rainBedHold = Math.Max(vol, rainBedHold - release * dt);
                     rainBedHold = Math.Min(rainBedHold, smoothedRainIntensity);
-                    if (rainBedHold <= vol + 0.001f)
-                    {
-                        // Hold inactive — keep baseline synced to current L2 output
-                        rainL2Baseline = rainPositionalLoudness;
-                    }
-                    else
-                    {
-                        // Hold active — only NEW L2 loudness counts as delivered
-                        rainL2Baseline = Math.Min(rainL2Baseline, rainPositionalLoudness);
-                        float delivered = rainPositionalLoudness - rainL2Baseline;
-                        vol = Math.Max(vol, rainBedHold - delivered);
-                    }
+                    vol = Math.Max(vol, rainBedHold);
                 }
                 else
                 {
                     rainBedHold = 0f;
-                    rainL2Baseline = 0f;
                 }
                 currentRainVol = vol;
 
@@ -276,24 +280,17 @@ namespace soundphysicsadapted
                     vol *= DeepEnclosureFactor(skyCoverage, occlusionFactor);
                     vol *= HailDuckFactor();
 
-                    // Bed-hold handover — same as rain (see rain block)
-                    hailBedHold = Math.Max(vol, hailBedHold - BED_HOLD_RELEASE_RATE * dt);
+                    // Bed-hold with readiness gate — same as rain (see rain block)
+                    float hailReadiness = L2Readiness(hailL2Effective, hailL2Expected);
+                    float hailRelease = BED_HOLD_RELEASE_RATE
+                        * (BED_HOLD_MIN_RELEASE + (1f - BED_HOLD_MIN_RELEASE) * hailReadiness);
+                    hailBedHold = Math.Max(vol, hailBedHold - hailRelease * dt);
                     hailBedHold = Math.Min(hailBedHold, smoothedHailIntensity);
-                    if (hailBedHold <= vol + 0.001f)
-                    {
-                        hailL2Baseline = hailPositionalLoudness;
-                    }
-                    else
-                    {
-                        hailL2Baseline = Math.Min(hailL2Baseline, hailPositionalLoudness);
-                        float delivered = hailPositionalLoudness - hailL2Baseline;
-                        vol = Math.Max(vol, hailBedHold - delivered);
-                    }
+                    vol = Math.Max(vol, hailBedHold);
                 }
                 else
                 {
                     hailBedHold = 0f;
-                    hailL2Baseline = 0f;
                 }
                 currentHailVol = vol;
 
@@ -634,8 +631,6 @@ namespace soundphysicsadapted
             smoothedHailIntensity = 0f;
             rainBedHold = 0f;
             hailBedHold = 0f;
-            rainL2Baseline = 0f;
-            hailL2Baseline = 0f;
             currentRainVol = 0f;
             currentWindVol = 0f;
             currentHailVol = 0f;
@@ -773,7 +768,8 @@ namespace soundphysicsadapted
             {
                 duckStr = $" Duck(r={rainPositionalContribution:F2} w={windPositionalContribution:F2} h={hailPositionalContribution:F2})";
             }
-            return $"Rain:{(rainLeafyPlaying || rainLeaflessPlaying ? "ON" : "off")}(v={currentRainVol:F3} lpf={smoothedRainGainHF:F3} hold={rainBedHold:F2} l2={rainPositionalLoudness:F2}) " +
+            return $"Rain:{(rainLeafyPlaying || rainLeaflessPlaying ? "ON" : "off")}(v={currentRainVol:F3} lpf={smoothedRainGainHF:F3} hold={rainBedHold:F2} " +
+                   $"l2={rainL2Effective:F2}/{rainL2Expected:F2} rdy={L2Readiness(rainL2Effective, rainL2Expected):F2}) " +
                    $"Hail:{(hailPlaying ? "ON" : "off")}(v={currentHailVol:F3} lpf={smoothedHailGainHF:F3}) " +
                    $"Wind:{(windLeafyPlaying || windLeaflessPlaying ? "ON" : "off")}(v={currentWindVol:F3} lpf={smoothedWindGainHF:F3}) " +
                    $"Tremble:{(tremblePlaying ? "ON" : "off")}(v={currentTrembleVol:F3} lpf={smoothedTrembleGainHF:F3})" +

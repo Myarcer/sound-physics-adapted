@@ -347,12 +347,14 @@ namespace soundphysicsadapted
                     currentOccl);
 
                 // Reset ducking — outdoors Layer 1 carries everything. Loudness stays
-                // wired to the pools' actual output so the bed-hold handover tracks
-                // any still-fading sources instead of double-counting them.
+                // wired to the pools' actual output so the bed-hold readiness gate
+                // tracks any still-fading sources.
                 rainHandler?.SetPositionalContributions(0f, 0f, 0f);
                 rainHandler?.SetPositionalLoudness(
-                    positionalHandler?.RainLoudnessSum ?? 0f,
-                    positionalHandler?.HailLoudnessSum ?? 0f);
+                    positionalHandler?.RainEffectiveLoudness ?? 0f,
+                    positionalHandler?.RainExpectedLoudness ?? 0f,
+                    positionalHandler?.HailEffectiveLoudness ?? 0f,
+                    positionalHandler?.HailExpectedLoudness ?? 0f);
                 return;
             }
 
@@ -385,10 +387,12 @@ namespace soundphysicsadapted
                 positionalHandler?.WindContribution ?? 0f,
                 positionalHandler?.HailContribution ?? 0f);
 
-            // Feed summed Layer 2 loudness for the bed-hold handover
+            // Feed distance-weighted Layer 2 loudness for the bed-hold readiness gate
             rainHandler?.SetPositionalLoudness(
-                positionalHandler?.RainLoudnessSum ?? 0f,
-                positionalHandler?.HailLoudnessSum ?? 0f);
+                positionalHandler?.RainEffectiveLoudness ?? 0f,
+                positionalHandler?.RainExpectedLoudness ?? 0f,
+                positionalHandler?.HailEffectiveLoudness ?? 0f,
+                positionalHandler?.HailExpectedLoudness ?? 0f);
 
             // ── Tracked opening visualization (slot 92) ──
             UpdateTrackedOpeningViz(capi.World.ElapsedMilliseconds);
