@@ -71,8 +71,8 @@ namespace soundphysicsadapted
 
             // True only when the last raycast actually applied a repositioned path
             // (occluded sound routed toward an opening via ApplySoundPath). Clear-LOS
-            // and permeated-only sounds are NOT repositioned. Consumed by
-            // IsSoundRepositioned for weather persistence decisions.
+            // and permeated-only sounds are NOT repositioned. Exposed via
+            // IsSoundRepositioned.
             public bool IsRepositioned;
 
             // Throttle fade state

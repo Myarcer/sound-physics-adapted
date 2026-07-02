@@ -110,6 +110,9 @@ namespace soundphysicsadapted
         /// they add no distinct spatial information, only redundant far-source mud.
         /// </summary>
         public bool Suppressed;
+
+        /// <summary>Game time of the last DDA structural integrity check (rate limit).</summary>
+        public long LastIntegrityCheckMs;
     }
 
     /// <summary>
@@ -208,6 +211,9 @@ namespace soundphysicsadapted
         /// </summary>
         private const float STRUCTURAL_OCC_THRESHOLD = 0.5f;
 
+        /// <summary>Minimum interval between DDA structural integrity checks per opening.</summary>
+        private const long INTEGRITY_CHECK_INTERVAL_MS = 500;
+
         public OpeningTracker(ICoreClientAPI api)
         {
             capi = api;
@@ -221,7 +227,7 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Update tracked openings from the latest clustering results.
-        /// Called every scan cycle (~500ms) from WeatherAudioManager.
+        /// Called every weather tick (~100ms) from WeatherAudioManager.
         ///
         /// 1. Mark all existing openings as unverified
         /// 2. Match new clusters to existing tracked openings
@@ -371,9 +377,11 @@ namespace soundphysicsadapted
                     tracked.LastKnownOcclusion = cluster.AverageOcclusion;
                     tracked.LastVerifiedTimeMs = gameTimeMs;
                     tracked.CurrentlyVerified = true;
-                    tracked.MemberPositions = new List<Vec3d>(cluster.MemberPositions);
-                    tracked.MemberEntryPositions = cluster.MemberEntryPositions != null
-                        ? new List<Vec3d>(cluster.MemberEntryPositions) : null;
+                    // Adopt the cluster's lists directly — OpeningClusterer allocates
+                    // them fresh every call and nothing else retains them, so copying
+                    // here was pure GC churn at 10Hz.
+                    tracked.MemberPositions = cluster.MemberPositions;
+                    tracked.MemberEntryPositions = cluster.MemberEntryPositions;
                     tracked.LastVerifiedPlayerPos = new Vec3d(playerEarPos.X, playerEarPos.Y, playerEarPos.Z);
 
                     // WindWorldPos: smooth toward cluster's WindCentroid (same logic as WorldPos)
@@ -444,9 +452,8 @@ namespace soundphysicsadapted
                     LastVerifiedTimeMs = gameTimeMs,
                     CurrentlyVerified = true,
                     TrackingId = nextTrackingId++,
-                    MemberPositions = new List<Vec3d>(cluster.MemberPositions),
-                    MemberEntryPositions = cluster.MemberEntryPositions != null
-                        ? new List<Vec3d>(cluster.MemberEntryPositions) : null,
+                    MemberPositions = cluster.MemberPositions,
+                    MemberEntryPositions = cluster.MemberEntryPositions,
                     LastVerifiedPlayerPos = new Vec3d(playerEarPos.X, playerEarPos.Y, playerEarPos.Z)
                 };
 
@@ -603,11 +610,17 @@ namespace soundphysicsadapted
                     catch { /* BlockAccessor may fail at chunk boundaries */ }
                 }
 
-                // 4c: DDA structural integrity check for persisted openings
+                // 4c: DDA structural integrity check for persisted openings.
+                // Rate-limited: up to (members × height offsets) block reads plus a
+                // DDA ray per member — at the 10Hz tick that burned hundreds of rays
+                // per second per persisted opening for a check that answers a
+                // block-placement question. 500ms is still instant to a player.
                 if (removeReason == null && !tracked.CurrentlyVerified
                     && tracked.MemberPositions != null && tracked.MemberPositions.Count > 0
-                    && tracked.LastVerifiedPlayerPos != null && blockAccessor != null)
+                    && tracked.LastVerifiedPlayerPos != null && blockAccessor != null
+                    && gameTimeMs - tracked.LastIntegrityCheckMs >= INTEGRITY_CHECK_INTERVAL_MS)
                 {
+                    tracked.LastIntegrityCheckMs = gameTimeMs;
                     CheckStructuralIntegrity(tracked, blockAccessor, debug);
                 }
 

@@ -501,32 +501,17 @@ namespace soundphysicsadapted
         /// <summary>
         /// Play a one-shot positional sound at a world position (oneshot mode).
         /// Grabs an available slot, plays the sound, slot auto-recycles when done.
-        /// Returns true if a slot was available and sound was started.
-        /// </summary>
-        /// <param name="worldPos">World position to play at</param>
-        /// <param name="volume">Initial volume (0-1)</param>
-        /// <param name="isLeafy">Whether current biome is leafy</param>
-        public bool PlayOneShot(Vec3d worldPos, float volume, bool isLeafy)
-        {
-            return PlayOneShot(worldPos, volume, isLeafy, 0);
-        }
-
-        public bool PlayOneShot(Vec3d worldPos, float volume, bool isLeafy, int preApplyFilterId)
-        {
-            return PlayOneShot(worldPos, volume, isLeafy, preApplyFilterId, 1.0f);
-        }
-
-        /// <summary>
-        /// Play a one-shot positional sound at a world position (oneshot mode) with optional
-        /// pre-applied LPF filter and pitch. The filter is attached BEFORE Start() to prevent transient
+        /// The optional LPF filter is attached BEFORE Start() to prevent transient
         /// bypass on sharp thunder cracks heard through walls.
+        /// Returns true if a slot was available and sound was started.
         /// </summary>
         /// <param name="worldPos">World position to play at</param>
         /// <param name="volume">Initial volume (0-1)</param>
         /// <param name="isLeafy">Whether current biome is leafy</param>
         /// <param name="preApplyFilterId">OpenAL EFX filter ID to attach before Start(), 0 = none</param>
         /// <param name="pitch">Pitch multiplier (1.0 = normal)</param>
-        public bool PlayOneShot(Vec3d worldPos, float volume, bool isLeafy, int preApplyFilterId, float pitch)
+        public bool PlayOneShot(Vec3d worldPos, float volume, bool isLeafy,
+            int preApplyFilterId = 0, float pitch = 1.0f)
         {
             if (!initialized || sources == null || mode != PoolMode.OneShot) return false;
             if (AssetResolver == null) return false;
@@ -666,30 +651,6 @@ namespace soundphysicsadapted
             return false;
         }
 
-        /// <summary>
-        /// Check if a source at the given TrackingId is currently being repositioned
-        /// by AudioPhysicsSystem (heard through indirect paths via bounce rays).
-        /// When true, the sound is occluded but a path around the obstacle was found.
-        /// When false, the sound either has clear LOS or no indirect path exists.
-        /// </summary>
-        public bool IsSourceRepositioned(int trackingId)
-        {
-            if (sources == null) return false;
-
-            var audioPhysics = SoundPhysicsAdaptedModSystem.Acoustics;
-            if (audioPhysics == null) return false;
-
-            for (int i = 0; i < sources.Length; i++)
-            {
-                var slot = sources[i];
-                if (slot.Active && slot.TrackingId == trackingId && slot.Sound != null)
-                {
-                    return audioPhysics.IsSoundRepositioned(slot.Sound);
-                }
-            }
-            return false;
-        }
-
         // ════════════════════════════════════════════════════════════════
         // Source Lifecycle
         // ════════════════════════════════════════════════════════════════
@@ -708,16 +669,26 @@ namespace soundphysicsadapted
             if (VolumeCalculator != null)
                 return VolumeCalculator(opening, intensity, multiplier);
 
-            // Weight near zero (structural shrink zeroed it) → volume must reach 0
-            // so the source can fade out and be removed by audibility timeout.
-            // The 0.35 floor below only applies to real (non-zeroed) openings to
-            // prevent tiny 1-member clusters from being too quiet.
+            return SizeWeightVolume(opening, intensity, multiplier, 8f, 0.35f);
+        }
+
+        /// <summary>
+        /// Shared per-type volume formula: intensity * sqrt(clusterWeight/divisor) * multiplier.
+        /// The floor keeps tiny 1-member clusters audible; suppressed or structurally
+        /// zeroed openings return 0 so their source fades out and gets removed by the
+        /// audibility timeout. Weather types differ only in divisor and floor:
+        /// rain (8, 0.35), wind (6, 0.30 — fills openings more evenly), hail (8, 0.40 —
+        /// percussive, slightly louder per source).
+        /// </summary>
+        public static float SizeWeightVolume(
+            TrackedOpening opening, float intensity, float multiplier,
+            float sizeDivisor, float sizeFloor)
+        {
             if (opening.Suppressed || opening.SmoothedClusterWeight < 0.01f)
                 return 0f;
 
-            // Default: same as original rain formula
-            float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / 8f, 1f));
-            sizeWeight = Math.Max(sizeWeight, 0.35f);
+            float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / sizeDivisor, 1f));
+            sizeWeight = Math.Max(sizeWeight, sizeFloor);
             return Math.Clamp(intensity * sizeWeight * multiplier, 0f, 1f);
         }
 

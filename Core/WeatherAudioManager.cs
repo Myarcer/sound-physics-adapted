@@ -168,10 +168,6 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Called from mod system tick handler (~100ms interval).
-        /// Reads VS weather state and delegates to handlers.
-        /// </summary>
-        /// <summary>
         /// Forward a block-change event to the opening tracker for entry-point
         /// proximity invalidation. Called from SoundPhysicsAdaptedModSystem.OnBlockChanged.
         /// </summary>
@@ -181,6 +177,10 @@ namespace soundphysicsadapted
             enclosureCalculator?.InvalidateNearbyColumns(pos);
         }
 
+        /// <summary>
+        /// Called from mod system tick handler (~100ms interval).
+        /// Reads VS weather state and delegates to handlers.
+        /// </summary>
         public void OnGameTick(float dt)
         {
             if (!initialized || disposed) return;

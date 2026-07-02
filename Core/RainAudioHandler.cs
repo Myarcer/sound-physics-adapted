@@ -166,6 +166,25 @@ namespace soundphysicsadapted
             return Math.Clamp(effective / expected, 0f, 1f);
         }
 
+        /// <summary>
+        /// Bed-hold with readiness gate: the hold rises instantly (walking out =
+        /// instant rain) but releases only as fast as Layer 2 is ready to take over.
+        /// The bed floors at the hold, so the total rain level can never drop faster
+        /// than positional sources actually replace it. Clamped to current intensity
+        /// so weather stopping isn't held artificially.
+        /// </summary>
+        private static float ApplyBedHold(
+            ref float hold, float vol, float l2Effective, float l2Expected,
+            float intensityCap, float dt)
+        {
+            float readiness = L2Readiness(l2Effective, l2Expected);
+            float release = BED_HOLD_RELEASE_RATE
+                * (BED_HOLD_MIN_RELEASE + (1f - BED_HOLD_MIN_RELEASE) * readiness);
+            hold = Math.Max(vol, hold - release * dt);
+            hold = Math.Min(hold, intensityCap);
+            return Math.Max(vol, hold);
+        }
+
 
 
         public RainAudioHandler(ICoreClientAPI api)
@@ -226,17 +245,8 @@ namespace soundphysicsadapted
                     vol *= DeepEnclosureFactor(skyCoverage, occlusionFactor);
                     vol *= RainDuckFactor();
 
-                    // Bed-hold: rises instantly (walking out = instant rain), releases
-                    // only as fast as Layer 2 is ready to take over. The bed floors at
-                    // the hold — total rain level can never drop faster than positional
-                    // sources actually replace it. Clamped to current intensity so rain
-                    // stopping isn't held artificially.
-                    float readiness = L2Readiness(rainL2Effective, rainL2Expected);
-                    float release = BED_HOLD_RELEASE_RATE
-                        * (BED_HOLD_MIN_RELEASE + (1f - BED_HOLD_MIN_RELEASE) * readiness);
-                    rainBedHold = Math.Max(vol, rainBedHold - release * dt);
-                    rainBedHold = Math.Min(rainBedHold, smoothedRainIntensity);
-                    vol = Math.Max(vol, rainBedHold);
+                    vol = ApplyBedHold(ref rainBedHold, vol,
+                        rainL2Effective, rainL2Expected, smoothedRainIntensity, dt);
                 }
                 else
                 {
@@ -280,13 +290,8 @@ namespace soundphysicsadapted
                     vol *= DeepEnclosureFactor(skyCoverage, occlusionFactor);
                     vol *= HailDuckFactor();
 
-                    // Bed-hold with readiness gate — same as rain (see rain block)
-                    float hailReadiness = L2Readiness(hailL2Effective, hailL2Expected);
-                    float hailRelease = BED_HOLD_RELEASE_RATE
-                        * (BED_HOLD_MIN_RELEASE + (1f - BED_HOLD_MIN_RELEASE) * hailReadiness);
-                    hailBedHold = Math.Max(vol, hailBedHold - hailRelease * dt);
-                    hailBedHold = Math.Min(hailBedHold, smoothedHailIntensity);
-                    vol = Math.Max(vol, hailBedHold);
+                    vol = ApplyBedHold(ref hailBedHold, vol,
+                        hailL2Effective, hailL2Expected, smoothedHailIntensity, dt);
                 }
                 else
                 {

@@ -234,20 +234,6 @@ namespace soundphysicsadapted
             return false;
         }
 
-        /// <summary>
-        /// Check if ANY pool has a repositioned source at the given TrackingId.
-        /// Repositioned = AudioPhysicsSystem is routing the sound through indirect
-        /// paths (bounce rays) because direct LOS is occluded. This means the player
-        /// is hearing the sound around a corner, NOT through a sealed opening.
-        /// </summary>
-        public bool IsSourceRepositioned(int trackingId)
-        {
-            if (rainPool?.IsSourceRepositioned(trackingId) == true) return true;
-            if (windPool?.IsSourceRepositioned(trackingId) == true) return true;
-            if (hailPool?.IsSourceRepositioned(trackingId) == true) return true;
-            return false;
-        }
-
         // ════════════════════════════════════════════════════════════════
         // Directional redundancy suppression
         // ════════════════════════════════════════════════════════════════
@@ -308,53 +294,18 @@ namespace soundphysicsadapted
         }
 
         // ════════════════════════════════════════════════════════════════
-        // Per-type volume calculators
+        // Per-type volume calculators — shared formula, per-type parameters
+        // (see PositionalSourcePool.SizeWeightVolume for curve details)
         // ════════════════════════════════════════════════════════════════
 
-        /// <summary>
-        /// Rain positional volume: intensity * sqrt(openingSize) * multiplier.
-        /// sqrt curve: 1 col=0.35, 2=0.50, 4=0.71, 8=1.0.
-        /// Floor 0.35 — even single-column openings should be audible.
-        /// </summary>
         private static float CalculateRainVolume(TrackedOpening opening, float intensity, float multiplier)
-        {
-            // Zero weight (structural shrink) or redundant direction = zero volume
-            if (opening.Suppressed || opening.SmoothedClusterWeight < 0.01f) return 0f;
+            => PositionalSourcePool.SizeWeightVolume(opening, intensity, multiplier, 8f, 0.35f);
 
-            float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / 8f, 1f));
-            sizeWeight = Math.Max(sizeWeight, 0.35f);
-            return Math.Clamp(intensity * sizeWeight * multiplier, 0f, 1f);
-        }
-
-        /// <summary>
-        /// Wind positional volume: windSpeed * sqrt(openingSize) * multiplier.
-        /// Wind is broader — every opening contributes more evenly.
-        /// Floor 0.30, divisor 6 instead of 8 (wind fills openings more).
-        /// </summary>
         private static float CalculateWindVolume(TrackedOpening opening, float windSpeed, float multiplier)
-        {
-            // Zero weight (structural shrink) or redundant direction = zero volume
-            if (opening.Suppressed || opening.SmoothedClusterWeight < 0.01f) return 0f;
+            => PositionalSourcePool.SizeWeightVolume(opening, windSpeed, multiplier, 6f, 0.30f);
 
-            float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / 6f, 1f));
-            sizeWeight = Math.Max(sizeWeight, 0.30f);
-            return Math.Clamp(windSpeed * sizeWeight * multiplier, 0f, 1f);
-        }
-
-        /// <summary>
-        /// Hail positional volume: hailIntensity * sqrt(openingSize) * multiplier.
-        /// Hail is percussive — slightly louder per-source than rain.
-        /// Floor 0.40, same divisor as rain.
-        /// </summary>
         private static float CalculateHailVolume(TrackedOpening opening, float hailIntensity, float multiplier)
-        {
-            // Zero weight (structural shrink) or redundant direction = zero volume
-            if (opening.Suppressed || opening.SmoothedClusterWeight < 0.01f) return 0f;
-
-            float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / 8f, 1f));
-            sizeWeight = Math.Max(sizeWeight, 0.40f);
-            return Math.Clamp(hailIntensity * sizeWeight * multiplier, 0f, 1f);
-        }
+            => PositionalSourcePool.SizeWeightVolume(opening, hailIntensity, multiplier, 8f, 0.40f);
 
         // ════════════════════════════════════════════════════════════════
         // Debug
