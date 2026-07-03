@@ -843,7 +843,7 @@ namespace soundphysicsadapted
 
             if (BlockClassification.IsChiseledBlock(block))
             {
-                var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0)) as BlockEntityMicroBlock;
+                var be = blockAccessor.GetBlockEntity(_beLookupPos.Set(x, y, z)) as BlockEntityMicroBlock;
                 if (be != null)
                 {
                     // If any face is almost solid, this is a wall/slab shape — full occlusion scale
@@ -890,7 +890,7 @@ namespace soundphysicsadapted
         /// </summary>
         private static bool IsDoorOpen(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
         {
-            var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0));
+            var be = blockAccessor.GetBlockEntity(_beLookupPos.Set(x, y, z));
             if (be != null)
             {
                 var doorBeh = be.GetBehavior<BEBehaviorDoor>();
@@ -910,6 +910,10 @@ namespace soundphysicsadapted
 
         // Pooled BlockPos for multiblock controller lookup in DDA (avoid alloc per call)
         private static readonly BlockPos _mbControllerPos = new BlockPos(0, 0, 0, 0);
+
+        // Pooled BlockPos for block-entity lookups (door state, chiseled volume) in the
+        // DDA visitor — GetBlockEntity doesn't retain the pos, so reuse is safe.
+        private static readonly BlockPos _beLookupPos = new BlockPos(0, 0, 0, 0);
 
         /// <summary>
         /// Check if a block should be treated as air because it's an open door/gate.

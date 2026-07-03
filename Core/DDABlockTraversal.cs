@@ -224,15 +224,11 @@ namespace soundphysicsadapted
                 dz /= len;
             }
 
-            // Compute endpoint from direction + distance
-            Vec3d to = new Vec3d(
-                origin.X + dx * maxDistance,
-                origin.Y + dy * maxDistance,
-                origin.Z + dz * maxDistance
-            );
-
+            // Endpoint block coords from direction + distance (no Vec3d needed)
             return TraverseCore(origin, dx, dy, dz, blockAccessor, visitor, skipFirst,
-                (int)Math.Floor(to.X), (int)Math.Floor(to.Y), (int)Math.Floor(to.Z));
+                (int)Math.Floor(origin.X + dx * maxDistance),
+                (int)Math.Floor(origin.Y + dy * maxDistance),
+                (int)Math.Floor(origin.Z + dz * maxDistance));
         }
 
         /// <summary>

@@ -58,7 +58,6 @@ namespace soundphysicsadapted
         public bool IsOutdoors;
         public long CreatedTimeMs;
         public long LastUsedTimeMs;
-        public double PlayerPosX, PlayerPosY, PlayerPosZ;  // Player pos at creation
         public double CreatorPosX, CreatorPosY, CreatorPosZ; // Sound pos that created this entry
         public int UseCount;
 
@@ -263,9 +262,6 @@ namespace soundphysicsadapted
             entry.SharedAirspaceRatio = sharedAirspaceRatio;
             entry.CreatedTimeMs = currentTimeMs;
             entry.LastUsedTimeMs = currentTimeMs;
-            entry.PlayerPosX = playerPos.X;
-            entry.PlayerPosY = playerPos.Y;
-            entry.PlayerPosZ = playerPos.Z;
             entry.CreatorPosX = soundPos.X;
             entry.CreatorPosY = soundPos.Y;
             entry.CreatorPosZ = soundPos.Z;
@@ -287,7 +283,7 @@ namespace soundphysicsadapted
             // LRU check
             if (cells.Count > MAX_CELLS)
             {
-                Cleanup(currentTimeMs);
+                Cleanup(currentTimeMs, playerPos);
             }
         }
 
@@ -350,8 +346,11 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// LRU cleanup - remove oldest/expired cells when over MAX_CELLS.
+        /// TTL distance is measured from the CURRENT player position — an entry
+        /// created nearby that the player has since walked away from must age out
+        /// as "far", not keep the long-lived TTL of its creation distance.
         /// </summary>
-        public void Cleanup(long currentTimeMs)
+        public void Cleanup(long currentTimeMs, Vec3d currentPlayerPos)
         {
             if (cells.Count <= MAX_CELLS / 2) return;
 
@@ -361,9 +360,9 @@ namespace soundphysicsadapted
             {
                 var entry = kvp.Value;
                 float dist = (float)Math.Sqrt(
-                    (entry.CreatorPosX - entry.PlayerPosX) * (entry.CreatorPosX - entry.PlayerPosX) +
-                    (entry.CreatorPosY - entry.PlayerPosY) * (entry.CreatorPosY - entry.PlayerPosY) +
-                    (entry.CreatorPosZ - entry.PlayerPosZ) * (entry.CreatorPosZ - entry.PlayerPosZ));
+                    (entry.CreatorPosX - currentPlayerPos.X) * (entry.CreatorPosX - currentPlayerPos.X) +
+                    (entry.CreatorPosY - currentPlayerPos.Y) * (entry.CreatorPosY - currentPlayerPos.Y) +
+                    (entry.CreatorPosZ - currentPlayerPos.Z) * (entry.CreatorPosZ - currentPlayerPos.Z));
 
                 // Far entries expire by TTL; close/medium entries only expire by LRU
                 if (dist > FAR_DISTANCE && currentTimeMs - entry.CreatedTimeMs > FAR_TTL_MS)

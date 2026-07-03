@@ -4,6 +4,21 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6] - 2026-07-03
+
+### Fixed
+- **Sounds behind a doorway are no longer near-silent.** When the system repositioned an occluded sound to a found opening (door, window, air gap), the muffle floor ignored that verified path — the sound appeared at the doorway but stayed almost inaudible. Probe-found openings now lift the muffle floor (conservatively, below the full open-air floor).
+- Opening or sealing a wall near you (door, block place/break) now triggers an immediate weather rescan instead of waiting out the scan interval — rain/wind entry reacts audibly faster.
+- A single blocked sky ray (tree branch, roof eave) no longer flips the fallback outdoor detection to "indoors".
+- Reverb cache entries now age out based on your current position, not where you were when they were created.
+- Downgrading the mod with a newer config file regenerates the config instead of silently mis-stamping its version.
+
+### Performance
+- **Sealed-cavity pre-check:** heavily muffled sounds in fully sealed spaces (cave pockets, walled-off cellars) are detected with a cheap flood fill and skip the full raytrace entirely — they play dry and heavily muffled, as before, at a fraction of the cost.
+- Removed the remaining per-bounce allocations in the reverb raytracer and per-visit allocations in door/chisel checks.
+- Freeze-diagnostic logging (5s heartbeat) is now gated behind DebugMode.
+- No longer creates an unused reverb slot on audio devices reporting exactly 3 auxiliary sends.
+
 ## [0.2.5] - 2026-07-02
 
 ### Fixed

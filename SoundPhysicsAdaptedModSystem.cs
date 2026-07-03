@@ -139,17 +139,18 @@ namespace soundphysicsadapted
                     config.ConfigVersion = CurrentConfigVersion;
                     api.Logger.Notification("[SoundPhysicsAdapted] No config found, generating defaults.");
                 }
-                else if (config.ConfigVersion < CurrentConfigVersion)
+                else if (config.ConfigVersion != CurrentConfigVersion)
                 {
-                    // Any config older than current version gets regenerated from fresh defaults.
-                    // This replaces incremental migrations — cleaner than maintaining legacy chains.
-                    api.Logger.Notification($"[SoundPhysicsAdapted] Config v{config.ConfigVersion} is outdated (current: v{CurrentConfigVersion}). Regenerating with fresh defaults.");
+                    // Older OR newer (mod downgrade) config gets regenerated from fresh
+                    // defaults — a newer config may carry values this version can't
+                    // interpret, so silently re-stamping its version would be wrong.
+                    api.Logger.Notification($"[SoundPhysicsAdapted] Config v{config.ConfigVersion} doesn't match mod's v{CurrentConfigVersion}. Regenerating with fresh defaults.");
                     config = new SoundPhysicsConfig();
                     config.ConfigVersion = CurrentConfigVersion;
                 }
                 else
                 {
-                    // Current version — no migration needed
+                    // Current version — clamp-only sanity pass
                     MigrateConfig(config);
                 }
                 api.StoreModConfig(config, "soundphysicsadapted.json");
@@ -715,8 +716,6 @@ namespace soundphysicsadapted
                 smoothingTimerId = api.Event.RegisterGameTickListener(OnSmoothingTick, (int)AudioRenderer.SmoothTickIntervalMs);
                 api.Logger.Debug("[SoundPhysicsAdapted] Registered cleanup, occlusion, and smoothing tick handlers");
 
-                // FREEZE DIAGNOSTIC: Log that diagnostics are active
-                DiagnosticLog("DIAG-INIT: Freeze diagnostic logging ACTIVE. Heartbeat every 5s. Look for [SPA-DIAG] entries.");
                 _diagLastHeartbeatLogMs = api.ElapsedMilliseconds;
 
                 // Optimization: Invalidate cache on block changes
@@ -731,7 +730,6 @@ namespace soundphysicsadapted
             {
                 _worldReady = true;
                 _warmupTicksRemaining = WARMUP_TICKS;
-                DiagnosticLog($"WORLD-READY: LevelFinalize fired. Warming up for {WARMUP_TICKS} ticks before enabling raycasting.");
                 api.Logger.Notification("[SoundPhysicsAdapted] World ready — warmup started, raycasting deferred");
 
                 // Block ambient injection: inject Sounds.Ambient onto matching block types.
@@ -816,7 +814,6 @@ namespace soundphysicsadapted
                 _warmupTicksRemaining--;
                 if (_warmupTicksRemaining == 0)
                 {
-                    DiagnosticLog("WARMUP-DONE: Raycasting now enabled.");
                     clientApi?.Logger.Notification("[SoundPhysicsAdapted] Warmup complete — occlusion/reverb processing enabled");
 
                     // Retroactively process sounds that started during warmup (querns, forges, etc.)
@@ -844,7 +841,7 @@ namespace soundphysicsadapted
             _diagSmoothTotalMs += smoothMs;
             if (smoothMs > _diagSmoothMaxMs) _diagSmoothMaxMs = smoothMs;
 
-            // Heartbeat: log stats every 5s (always, bypass DebugMode)
+            // Heartbeat: log stats every 5s (DebugMode only — gated in DiagnosticLog)
             EmitDiagnosticHeartbeat();
         }
 
@@ -1398,12 +1395,12 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// FREEZE DIAGNOSTIC: Always logs to debug log, bypasses DebugMode and rate limiting.
-        /// Used only for critical diagnostic messages during freeze investigation.
-        /// Remove after freeze is resolved.
+        /// Performance diagnostics (heartbeat, slow-tick warnings). Gated behind
+        /// DebugMode — the always-on freeze investigation this was built for is resolved.
         /// </summary>
         public static void DiagnosticLog(string message)
         {
+            if (config == null || !config.DebugMode) return;
             clientApi?.Logger.Debug($"[SPA-DIAG] {message}");
         }
 

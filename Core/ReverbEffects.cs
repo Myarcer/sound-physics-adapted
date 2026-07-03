@@ -74,10 +74,12 @@ namespace soundphysicsadapted
                     return false;
                 }
 
-                // Create auxiliary effect slots (only as many as the device supports)
+                // Create auxiliary effect slots (only as many as we actually use:
+                // apply paths run in 4-send, 2-send or 1-send mode — at exactly
+                // 3 sends we run 2-send mode, so slot 2 would sit idle)
                 _auxSlot0 = CreateAuxSlot();
                 if (_maxAuxSends >= 2) _auxSlot1 = CreateAuxSlot();
-                if (_maxAuxSends >= 3) _auxSlot2 = CreateAuxSlot();
+                if (_maxAuxSends >= 4) _auxSlot2 = CreateAuxSlot();
                 if (_maxAuxSends >= 4) _auxSlot3 = CreateAuxSlot();
 
                 // Verify at least one slot was created
@@ -128,7 +130,7 @@ namespace soundphysicsadapted
                 // Create send filters (only for sends we actually use)
                 _sendFilter0 = EfxHelper.CreateLowpassFilter();
                 if (_maxAuxSends >= 2) _sendFilter1 = EfxHelper.CreateLowpassFilter();
-                if (_maxAuxSends >= 3) _sendFilter2 = EfxHelper.CreateLowpassFilter();
+                if (_maxAuxSends >= 4) _sendFilter2 = EfxHelper.CreateLowpassFilter();
                 if (_maxAuxSends >= 4) _sendFilter3 = EfxHelper.CreateLowpassFilter();
 
                 int effectsCreated = (_reverb0 > 0 ? 1 : 0) + (_reverb1 > 0 ? 1 : 0) +

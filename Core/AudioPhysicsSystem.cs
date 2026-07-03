@@ -103,7 +103,17 @@ namespace soundphysicsadapted
             // Persists for this sound's lifetime; cleared when sound exits active set.
             // Means: this specific sound was triggered by the local player — no occlusion, reverb only.
             public bool IsLocalPlayerSound;
+
+            // ISSUE 20: cached entombment verdict (BFS pre-check). Re-verified every
+            // ENTOMB_RECHECK_MS or after a block change, whichever comes first.
+            public bool IsEntombed;
+            public long LastEntombCheckMs;
         }
+
+        // ISSUE 20: how long a BFS entombment verdict (either way) stays valid.
+        // Covers the player physically entering the cavity; digging is covered by
+        // block-change invalidation.
+        private const long ENTOMB_RECHECK_MS = 1000;
 
         private Dictionary<ILoadedSound, SoundCacheEntry> soundCache = new Dictionary<ILoadedSound, SoundCacheEntry>();
 
@@ -205,7 +215,7 @@ namespace soundphysicsadapted
             // Periodic cell cache cleanup
             if (reverbCellCache != null && currentTimeMs - lastCellCacheCleanupMs > CELL_CACHE_CLEANUP_INTERVAL_MS)
             {
-                reverbCellCache.Cleanup(currentTimeMs);
+                reverbCellCache.Cleanup(currentTimeMs, playerPos);
                 lastCellCacheCleanupMs = currentTimeMs;
             }
 
@@ -949,13 +959,53 @@ namespace soundphysicsadapted
                 SoundPathResult? pathResult;
                 bool didFullRaytrace = false;
 
+                // === ISSUE 20: BFS ENTOMBMENT PRE-CHECK ===
+                // Heavily occluded sounds may sit in a sealed cavity (cave below the
+                // player, walled-off cellar). A cheap flood fill proves "no air path
+                // exists" before the raytrace wastes 32x4 rays discovering the same.
+                // Entombed treatment: dry (no reverb), no repositioning, direct-
+                // occlusion filter with no floors.
+                bool entombed = false;
+                if (occlusion >= EntombmentChecker.MIN_OCCLUSION_TO_CHECK)
+                {
+                    bool verdictValid = cache.LastEntombCheckMs > 0
+                        && currentTimeMs - cache.LastEntombCheckMs < ENTOMB_RECHECK_MS
+                        && cache.LastEntombCheckMs > lastBlockChangeInvalidationMs;
+
+                    if (verdictValid)
+                    {
+                        entombed = cache.IsEntombed;
+                    }
+                    else
+                    {
+                        entombed = EntombmentChecker.Check(soundPos, playerPos, blockAccessor)
+                            == EntombmentChecker.Result.Entombed;
+                        cache.IsEntombed = entombed;
+                        cache.LastEntombCheckMs = currentTimeMs;
+
+                        if (entombed && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                            SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                                $"[ENTOMB] {soundName} occ={occlusion:F1} sealed cavity — raytrace skipped");
+                    }
+                }
+                else
+                {
+                    cache.IsEntombed = false;
+                    cache.LastEntombCheckMs = 0;
+                }
+
+                if (entombed)
+                {
+                    reverbResult = ReverbResult.None;
+                    pathResult = null;
+                }
                 // === CELL CACHE CHECK ===
                 // Composite key = (soundCell, playerCell) — cache auto-invalidates
                 // when player moves to a new cell. No skip threshold needed.
                 // Close sounds use 2-block player cells (responsive), far sounds use
                 // 8-block player cells (stable). Cache is purely for deduplication:
                 // 50 entities in same pen share one reverb computation.
-                if (reverbCellCache != null && config.EnableReverbCellCache)
+                else if (reverbCellCache != null && config.EnableReverbCellCache)
                 {
                     var cellEntry = reverbCellCache.TryGetCell(soundPos, playerPos, currentTimeMs, blockAccessor, out bool canStore);
                     if (cellEntry != null)
@@ -1189,6 +1239,21 @@ namespace soundphysicsadapted
                         // SPR: directCutoff = max(directCutoff, sqrt(sharedAirspace) * 0.2)
                         float sharedAirspaceFloor = MathF.Sqrt(airspaceRatio) * 0.2f;
 
+                        // ISSUE 19: probe-found openings are DDA-verified acoustic paths.
+                        // Fibonacci bounces often miss small openings (a 1-block doorway
+                        // ≈ 0.4% of the sphere), leaving airspaceRatio at 0 — the sound
+                        // repositions to the doorway yet stays near-silent. Verified
+                        // openings get their own floor: the filter their best path
+                        // supports, at 75% weight, capped below the full-airspace SPR
+                        // floor (0.2) so probes stay conservative vs. bounce consensus.
+                        float bestOpeningOcc = pathResult.Value.BestOpeningOcclusion;
+                        if (bestOpeningOcc < float.MaxValue)
+                        {
+                            float openingFilter = OcclusionCalculator.OcclusionToFilter(bestOpeningOcc);
+                            float probeOpeningFloor = Math.Min(openingFilter, 0.2f) * 0.75f;
+                            sharedAirspaceFloor = Math.Max(sharedAirspaceFloor, probeOpeningFloor);
+                        }
+
                         // ACOUSTIC BOUNDARY DETECTION:
                         cache.LastSharedAirspaceRatio = airspaceRatio;
                         cache.NearAcousticBoundary = (airspaceRatio > 0.02f && airspaceRatio < 0.5f)
@@ -1278,7 +1343,7 @@ namespace soundphysicsadapted
 
                         if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                             SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                                $"[4B-LPF] dOcc={occlusion:F2} smooth={smoothedOcc:F2} filt={finalFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} airFloor={sharedAirspaceFloor:F2} diffFloor={diffractionFloor:F3} air={airspaceRatio:F2} open={openPaths} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
+                                $"[4B-LPF] dOcc={occlusion:F2} smooth={smoothedOcc:F2} filt={finalFilter:F3} bend={bendRatio:F2} diffFilt={diffractionDarkening:F2} airFloor={sharedAirspaceFloor:F2} diffFloor={diffractionFloor:F3} air={airspaceRatio:F2} openOcc={(bestOpeningOcc < float.MaxValue ? bestOpeningOcc.ToString("F1") : "-")} open={openPaths} alpha={occSmoothFactor:F2}{(cache.NearAcousticBoundary ? " BOUNDARY" : "")}");
                     }
 
                     if (updatedThisTick == 0 && pathResult.Value.RepositionOffset > 0.1)
@@ -1374,7 +1439,9 @@ namespace soundphysicsadapted
             }
 
             bool was2 = isOutdoors;
-            isOutdoors = (skyHits == SKY_PROBE_RAY_COUNT);
+            // 4 of 5 is enough: a single blocked diagonal (tree branch, eave, cave
+            // entrance lip) must not flip the player to "indoors".
+            isOutdoors = (skyHits >= SKY_PROBE_RAY_COUNT - 1);
             if (isOutdoors != was2)
                 if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
                     SoundPhysicsAdaptedModSystem.DebugLog($"SKY PROBE (fallback): {(isOutdoors ? "OUTDOORS" : "INDOORS")} ({skyHits}/{SKY_PROBE_RAY_COUNT})");
