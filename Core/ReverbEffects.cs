@@ -29,6 +29,17 @@ namespace soundphysicsadapted
         private static int _reverb3;
 
         // Send filters (for per-source gain/cutoff control)
+        //
+        // TRAP — SHARED filter objects, correct ONLY via copy-on-attach:
+        // These 4 filter ids are shared across ALL sources. EFX copies a filter's
+        // parameters into the send at alSource3i(AL_AUXILIARY_SEND_FILTER) attach
+        // time, so the per-source pattern MUST always be:
+        //   SetFilterGains(filter, ...) THEN ConnectSourceToAuxSlot(source, ...)
+        // (as ApplyToSource does). Editing a send filter WITHOUT re-attaching does
+        // NOT update already-attached sends — and conversely never add a path that
+        // mutates these filters expecting it to affect connected sources. If a
+        // future feature needs live per-source send updates, it needs per-source
+        // filter objects instead.
         private static int _sendFilter0;
         private static int _sendFilter1;
         private static int _sendFilter2;

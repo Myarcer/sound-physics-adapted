@@ -229,6 +229,31 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Read-only cell lookup for the sound-start reverb approximation.
+        /// Same key/TTL/wall-check logic as TryGetCell but does NOT touch hit/miss
+        /// stats, UseCount, or LastUsedTimeMs — start-time peeks were inflating the
+        /// hit-rate stats used for tuning and skewing LRU recency.
+        /// </summary>
+        public ReverbCellEntry PeekCell(Vec3d soundPos, Vec3d playerPos,
+            long currentTimeMs, IBlockAccessor blockAccessor)
+        {
+            float distance = (float)soundPos.DistanceTo(playerPos);
+            long key = PackCompositeKey(soundPos, playerPos, distance);
+
+            if (!cells.TryGetValue(key, out var entry)) return null;
+
+            if (distance > FAR_DISTANCE && currentTimeMs - entry.CreatedTimeMs > FAR_TTL_MS)
+                return null; // Expired — leave eviction to the real read path
+
+            // Same acoustic-zone guard as TryGetCell (1 DDA)
+            Vec3d creatorPos = new Vec3d(entry.CreatorPosX, entry.CreatorPosY, entry.CreatorPosZ);
+            if (OcclusionCalculator.CalculatePathOcclusion(soundPos, creatorPos, blockAccessor) >= 1.0f)
+                return null;
+
+            return entry;
+        }
+
+        /// <summary>
         /// Store computed reverb data for a cell.
         /// Only stores if no existing entry for this composite key.
         /// </summary>

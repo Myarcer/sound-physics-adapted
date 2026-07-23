@@ -248,11 +248,15 @@ namespace soundphysicsadapted
             if (currentTimeMs > 0)
                 lastBlockChangeInvalidationMs = currentTimeMs;
 
-            reverbCellCache?.Clear();
+            // NOTE: cell cache is NOT cleared here. The block-change path already does
+            // targeted invalidation (OnBlockChanged -> CellCache.InvalidateCellAt for the
+            // changed cell + boundary neighbors). A blanket Clear() on every debounced
+            // block change threw away every unrelated cell — mining/combat degraded the
+            // dedupe cache to ~0% hit rate exactly when raycast load peaks.
 
             if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
                 SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"ACOUSTICS: Cache invalidated ({soundCache.Count} entries, cell cache cleared)");
+                    $"ACOUSTICS: Cache invalidated ({soundCache.Count} entries, cell cache untouched — targeted invalidation)");
         }
 
         private void UpdateAllSounds(Vec3d playerPos, IBlockAccessor blockAccessor, long currentTimeMs)

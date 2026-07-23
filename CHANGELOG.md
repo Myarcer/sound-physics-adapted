@@ -4,6 +4,33 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.7-dev.1] - 2026-07-23
+
+Architecture-audit fixes (review 2026-07-23; remaining findings tracked in
+docs/REMAINING_ARCHITECTURAL_ISSUES.md backlog).
+
+### Fixed
+- **Standing inside a solid block no longer muffles all sounds.** The occlusion ray now
+  skips the listener's own block when it is fully solid (mirrors the weather ray logic) —
+  ear positions clipped into snow layers, chiseled blocks, or walls previously counted
+  their own block as a wall in front of every sound.
+- **Mod-API queries are now main-thread-gated.** `SoundPhysicsAPI` (used by voice-chat
+  mods) calls into main-thread-only compute cores; off-thread calls previously risked
+  silently corrupting occlusion/reverb of unrelated sounds. They now return passthrough
+  values and log a one-time warning telling the caller to marshal to the game thread.
+
+### Performance
+- **Block changes no longer wipe the reverb dedupe cache.** Mining/building cleared the
+  entire reverb cell cache on every (debounced) block change even though targeted
+  per-cell invalidation already covered the changed geometry — raycast load during
+  combat/mining drops accordingly.
+- Sound-start reverb approximation now uses a stats-free cache peek (hit-rate stats and
+  LRU recency are no longer skewed by start-time reads).
+- Removed the last per-visit allocation in the occlusion ray's door/gate check.
+
+### Internal
+- Documented the EFX copy-on-attach dependency on the shared reverb send filters.
+
 ## [0.2.6] - 2026-07-03
 
 ### Fixed

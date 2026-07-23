@@ -63,6 +63,14 @@ namespace soundphysicsadapted
         private static bool IsMainThread => Environment.CurrentManagedThreadId == _mainThreadId;
 
         /// <summary>
+        /// Public main-thread check for external callers (SoundPhysicsAPI).
+        /// The occlusion/raytrace cores are main-thread-only (shared static scratch
+        /// state) — API queries from other threads must be rejected, not computed.
+        /// Returns false when patches haven't initialized yet (id -1).
+        /// </summary>
+        public static bool IsOnMainThread => _mainThreadId != -1 && IsMainThread;
+
+        /// <summary>
         /// Reset all static state. Called from ModSystem.Dispose() — statics survive world
         /// unload (the mod assembly stays loaded), so without this a second world join in
         /// the same client session kept a stale block accessor, a dead pre-warmup queue
@@ -1582,9 +1590,12 @@ namespace soundphysicsadapted
                         {
                             Vec3d soundPosD = new Vec3d(pos.X, pos.Y, pos.Z);
 
-                            var cell = acoustics.CellCache?.TryGetCell(
+                            // PeekCell: stats-free read — this approximation path must not
+                            // inflate hit-rate stats or LRU recency (physics tick re-reads
+                            // the cell properly within 50ms).
+                            var cell = acoustics.CellCache?.PeekCell(
                                 soundPosD, playerPos, cachedApi.World.ElapsedMilliseconds,
-                                cachedBlockAccessor, out _);
+                                cachedBlockAccessor);
                             if (cell != null) startReverb = cell.Reverb;
 
                             // Underwater source reduces reverb (fluid layer covers waterlogged blocks)
