@@ -67,6 +67,28 @@ namespace soundphysicsadapted
         public static bool IsOnMainThread => _mainThreadId != -1 && IsMainThread;
 
         /// <summary>
+        /// Reset all static state. Called from ModSystem.Dispose() — statics survive world
+        /// unload (the mod assembly stays loaded), so without this a second world join in
+        /// the same client session kept a stale block accessor, a dead pre-warmup queue
+        /// (ambient loops never registered), and stale local-player/dedupe queues.
+        /// </summary>
+        public static void Reset()
+        {
+            lock (preWarmupSoundQueue) preWarmupSoundQueue.Clear();
+            preWarmupQueueProcessed = false;
+            cachedBlockAccessor = null;
+            cachedApi = null;
+            soundAudioDataDict = null;
+            monoSwapKey = null;
+            monoSwapOriginal = null;
+            lock (_localPlayerSoundPositions) _localPlayerSoundPositions.Clear();
+            lock (_localPlayerOcclusionSkipQueue) _localPlayerOcclusionSkipQueue.Clear();
+            lock (_distanceModelApplied) _distanceModelApplied.Clear();
+            _distanceModelGen = 0;
+            _mainThreadId = -1;
+        }
+
+        /// <summary>
         /// Manually apply patches using reflection
         /// Called from ModSystem.StartClientSide
         /// </summary>
@@ -460,7 +482,7 @@ namespace soundphysicsadapted
                 bool isSourceUnderwater = soundBlock != null && soundBlock.IsLiquid();
 
                 // Calculate reverb parameters
-                var reverbResult = AcousticRaytracer.Calculate(soundPos, playerPos, blockAccessor);
+                var (reverbResult, _) = AcousticRaytracer.CalculateWithPaths(soundPos, playerPos, blockAccessor);
 
                 // Apply to source (with underwater state for both player and source)
                 ReverbEffects.ApplyToSource(sourceId, reverbResult, isSourceUnderwater);
@@ -477,6 +499,16 @@ namespace soundphysicsadapted
         // OpenAL recycles source IDs, so the entry is overwritten naturally on reuse.
         private static readonly Dictionary<int, int> _distanceModelApplied = new Dictionary<int, int>();
         private static int _distanceModelGen = 0;
+
+        /// <summary>
+        /// Clear the distance-model dedupe flag for a specific source so it gets
+        /// re-applied on the next sound start (called when VS recycles a source ID
+        /// with a fresh vanilla distance model via createSoundSource).
+        /// </summary>
+        public static void InvalidateDistanceModel(int sourceId)
+        {
+            lock (_distanceModelApplied) _distanceModelApplied.Remove(sourceId);
+        }
 
         /// <summary>
         /// Apply per-source distance attenuation overrides:
@@ -517,10 +549,15 @@ namespace soundphysicsadapted
 
                 // De-dup against re-attachments / our own SoundStartPostfix double-fire.
                 // Generation counter rolls every ~1B starts to avoid pathological stale state.
+                // Lock because InvalidateDistanceModel can be called from the AudioRenderer
+                // registration path which may run off the main thread.
                 int gen = _distanceModelGen;
-                if (_distanceModelApplied.TryGetValue(sourceId, out int prevGen) && prevGen == gen)
-                    return;
-                _distanceModelApplied[sourceId] = gen;
+                lock (_distanceModelApplied)
+                {
+                    if (_distanceModelApplied.TryGetValue(sourceId, out int prevGen) && prevGen == gen)
+                        return;
+                    _distanceModelApplied[sourceId] = gen;
+                }
 
                 if (!EfxHelper.IsAvailable) return;
 

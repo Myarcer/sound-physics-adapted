@@ -205,7 +205,7 @@ namespace soundphysicsadapted
             // Periodic cell cache cleanup
             if (reverbCellCache != null && currentTimeMs - lastCellCacheCleanupMs > CELL_CACHE_CLEANUP_INTERVAL_MS)
             {
-                reverbCellCache.Cleanup(currentTimeMs);
+                reverbCellCache.Cleanup(currentTimeMs, playerPos);
                 lastCellCacheCleanupMs = currentTimeMs;
             }
 
