@@ -35,6 +35,12 @@ namespace soundphysicsadapted
         public float WindContribution => windPool?.Contribution ?? 0f;
         public float HailContribution => hailPool?.Contribution ?? 0f;
 
+        // Per-type distance-weighted loudness for the Layer 1 bed-hold readiness gate
+        public float RainEffectiveLoudness => rainPool?.EffectiveLoudness ?? 0f;
+        public float RainExpectedLoudness => rainPool?.ExpectedLoudness ?? 0f;
+        public float HailEffectiveLoudness => hailPool?.EffectiveLoudness ?? 0f;
+        public float HailExpectedLoudness => hailPool?.ExpectedLoudness ?? 0f;
+
         /// <summary>Combined active count across all pools.</summary>
         public int TotalActiveCount =>
             (rainPool?.ActiveCount ?? 0) +
@@ -80,8 +86,6 @@ namespace soundphysicsadapted
 
             windPool.VolumeCalculator = CalculateWindVolume;
 
-            // Wind: slightly faster fade-in for responsiveness (wind gusts are sudden)
-            windPool.FadeInRate = 0.15f;  // ~1.2s to 90%
             windPool.FadeOutRate = 0.08f; // ~3.5s fade (wind lingers)
 
             // Wind position: use WindWorldPos (ceiling height for sky openings)
@@ -97,9 +101,6 @@ namespace soundphysicsadapted
             hailPool.AssetResolver = (_) => new AssetLocation("sounds/weather/tracks/hail.ogg");
 
             hailPool.VolumeCalculator = CalculateHailVolume;
-
-            // Hail: faster fade-in (percussive onset), standard fade-out
-            hailPool.FadeInRate = 0.15f;
 
             initialized = true;
             WeatherAudioManager.WeatherDebugLog(
@@ -142,6 +143,11 @@ namespace soundphysicsadapted
             float outdoorness = (1f - skyCoverage) * (1f - occlusionFactor);
             float outdoorAttenuation = 1f - (outdoorness * 0.85f); // Max 85% reduction when fully outdoors
             outdoorAttenuation = Math.Max(outdoorAttenuation, 0.15f); // Floor at 15% volume
+
+            // Directional redundancy: a far opening in the same direction as a closer,
+            // verified one contributes no distinct spatial information — suppress it so
+            // pool slots and audibility persistence go to openings that matter.
+            UpdateDirectionalSuppression(trackedOpenings, earPos);
 
             // Rain: always update when raining
             if (config.EnablePositionalWeather)
@@ -212,84 +218,77 @@ namespace soundphysicsadapted
         }
 
         // ════════════════════════════════════════════════════════════════
-        // Multi-pool audibility (for OpeningTracker persistence)
+        // Directional redundancy suppression
         // ════════════════════════════════════════════════════════════════
 
+        /// <summary>Cos of the suppression cone half-angle (~35 degrees).</summary>
+        private const float SUPPRESSION_ANGLE_COS = 0.82f;
+
+        /// <summary>An opening must be this fraction closer to suppress another.</summary>
+        private const float SUPPRESSION_DIST_RATIO = 0.6f;
+
         /// <summary>
-        /// Check if ANY pool has an audible source at the given TrackingId.
-        /// If rain OR wind OR hail source at that opening is still audible,
-        /// the opening stays alive in OpeningTracker.
+        /// Mark openings as Suppressed when a closer, currently-verified opening of
+        /// comparable weight covers the same direction from the ear. Suppressed
+        /// openings fade to silence via zero target volume and are never granted
+        /// a new voice by the pool's spawn gate.
         /// </summary>
-        public bool IsSourceAudible(int trackingId)
+        private static void UpdateDirectionalSuppression(
+            IReadOnlyList<TrackedOpening> openings, Vec3d earPos)
         {
-            if (rainPool?.IsSourceAudible(trackingId) == true) return true;
-            if (windPool?.IsSourceAudible(trackingId) == true) return true;
-            if (hailPool?.IsSourceAudible(trackingId) == true) return true;
-            return false;
+            if (openings == null || earPos == null) return;
+
+            int n = openings.Count;
+            for (int i = 0; i < n; i++) openings[i].Suppressed = false;
+            if (n < 2) return;
+
+            for (int a = 0; a < n; a++)
+            {
+                var opA = openings[a];
+                double axd = opA.WorldPos.X - earPos.X;
+                double ayd = opA.WorldPos.Y - earPos.Y;
+                double azd = opA.WorldPos.Z - earPos.Z;
+                double distA = Math.Sqrt(axd * axd + ayd * ayd + azd * azd);
+                if (distA < 0.5) continue; // On top of it — direction meaningless
+
+                for (int b = 0; b < n; b++)
+                {
+                    if (b == a) continue;
+                    var opB = openings[b];
+                    if (!opB.CurrentlyVerified || opB.Suppressed) continue;
+                    // Only comparable-or-bigger openings may suppress
+                    if (opB.SmoothedClusterWeight < opA.SmoothedClusterWeight * 0.5f) continue;
+
+                    double bxd = opB.WorldPos.X - earPos.X;
+                    double byd = opB.WorldPos.Y - earPos.Y;
+                    double bzd = opB.WorldPos.Z - earPos.Z;
+                    double distB = Math.Sqrt(bxd * bxd + byd * byd + bzd * bzd);
+                    if (distB >= distA * SUPPRESSION_DIST_RATIO) continue;
+                    if (distB < 0.01) continue;
+
+                    double dot = (axd * bxd + ayd * byd + azd * bzd) / (distA * distB);
+                    if (dot > SUPPRESSION_ANGLE_COS)
+                    {
+                        opA.Suppressed = true;
+                        break;
+                    }
+                }
+            }
         }
 
-        /// <summary>
-        /// Check if ANY pool has a repositioned source at the given TrackingId.
-        /// Repositioned = AudioPhysicsSystem is routing the sound through indirect
-        /// paths (bounce rays) because direct LOS is occluded. This means the player
-        /// is hearing the sound around a corner, NOT through a sealed opening.
-        /// </summary>
-        public bool IsSourceRepositioned(int trackingId)
-        {
-            if (rainPool?.IsSourceRepositioned(trackingId) == true) return true;
-            if (windPool?.IsSourceRepositioned(trackingId) == true) return true;
-            if (hailPool?.IsSourceRepositioned(trackingId) == true) return true;
-            return false;
-        }
-
         // ════════════════════════════════════════════════════════════════
-        // Per-type volume calculators
+        // Per-type volume calculators — shared formula, per-type parameters
+        // (see PositionalSourcePool.SizeWeightVolume for curve details)
         // ════════════════════════════════════════════════════════════════
 
-        /// <summary>
-        /// Rain positional volume: intensity * sqrt(openingSize) * multiplier.
-        /// sqrt curve: 1 col=0.35, 2=0.50, 4=0.71, 8=1.0.
-        /// Floor 0.35 — even single-column openings should be audible.
-        /// </summary>
         private static float CalculateRainVolume(TrackedOpening opening, float intensity, float multiplier)
-        {
-            // Zero weight (structural shrink) = zero volume, don't apply floor
-            if (opening.SmoothedClusterWeight < 0.01f) return 0f;
+            => PositionalSourcePool.SizeWeightVolume(opening, intensity, multiplier, 8f, 0.35f);
 
-            float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / 8f, 1f));
-            sizeWeight = Math.Max(sizeWeight, 0.35f);
-            return Math.Clamp(intensity * sizeWeight * multiplier, 0f, 1f);
-        }
-
-        /// <summary>
-        /// Wind positional volume: windSpeed * sqrt(openingSize) * multiplier.
-        /// Wind is broader — every opening contributes more evenly.
-        /// Floor 0.30, divisor 6 instead of 8 (wind fills openings more).
-        /// </summary>
         private static float CalculateWindVolume(TrackedOpening opening, float windSpeed, float multiplier)
-        {
-            // Zero weight (structural shrink) = zero volume, don't apply floor
-            if (opening.SmoothedClusterWeight < 0.01f) return 0f;
+            => PositionalSourcePool.SizeWeightVolume(opening, windSpeed, multiplier, 6f, 0.30f);
 
-            float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / 6f, 1f));
-            sizeWeight = Math.Max(sizeWeight, 0.30f);
-            return Math.Clamp(windSpeed * sizeWeight * multiplier, 0f, 1f);
-        }
-
-        /// <summary>
-        /// Hail positional volume: hailIntensity * sqrt(openingSize) * multiplier.
-        /// Hail is percussive — slightly louder per-source than rain.
-        /// Floor 0.40, same divisor as rain.
-        /// </summary>
         private static float CalculateHailVolume(TrackedOpening opening, float hailIntensity, float multiplier)
-        {
-            // Zero weight (structural shrink) = zero volume, don't apply floor
-            if (opening.SmoothedClusterWeight < 0.01f) return 0f;
-
-            float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / 8f, 1f));
-            sizeWeight = Math.Max(sizeWeight, 0.40f);
-            return Math.Clamp(hailIntensity * sizeWeight * multiplier, 0f, 1f);
-        }
+            => PositionalSourcePool.SizeWeightVolume(opening, hailIntensity, multiplier, 8f, 0.40f);
 
         // ════════════════════════════════════════════════════════════════
         // Debug

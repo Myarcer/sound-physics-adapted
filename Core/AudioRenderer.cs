@@ -21,7 +21,6 @@ namespace soundphysicsadapted
             public int SourceId;        // OpenAL source ID from LoadedSoundNative
             public float CurrentValue;  // Current filter GAINHF value (what's applied now)
             public float TargetValue;   // Target filter value (what we're smoothing toward)
-            public bool IsAttached;     // Have we attached filter to source?
             public WeakReference<ILoadedSound> SoundRef;  // Weak ref to detect disposal
             public Vec3d LastPosition;  // Last known sound position for recalculation
             public string SoundName;    // For debug logging
@@ -95,7 +94,20 @@ namespace soundphysicsadapted
         private static MethodInfo alSourceMethod;
         private static object efxDirectFilterValue;
 
-        // OPTIMIZATION: Cached PropertyInfo for IsDisposed check (avoids GetProperty per sound)
+        // ==== Compiled hot-path delegates (fallback: reflection Invoke) ====
+        // AttachFilter runs per sound per 25ms SmoothAll tick; SetALSourcePosition runs
+        // per repositioned sound per tick AND per VS SetPosition call (every frame for
+        // moving sounds). Compiled via EfxHelper's expression helpers — zero allocation.
+        private static Action<int, int, int> dAlSourceInt;              // AL.Source(src, ALSourcei, int)
+        private static Action<int, int, float> dAlSourceFloat;          // AL.Source(src, ALSourcef, float)
+        private static Action<int, int, float, float, float> dAlSource3f; // AL.Source(src, ALSource3f, f, f, f)
+        private static int efxDirectFilterInt;
+        private static int alSourcefPitchInt;
+        private static int alSource3fPositionInt;
+
+        // OPTIMIZATION: Compiled IsDisposed getter (no reflection Invoke + bool boxing
+        // per sound per 25ms SmoothAll tick). Falls back to PropertyInfo, then weak ref.
+        private static System.Func<ILoadedSound, bool> isDisposedGetter;
         private static PropertyInfo isDisposedProperty;
         private static bool isDisposedPropertyChecked = false;
 
@@ -119,10 +131,29 @@ namespace soundphysicsadapted
             {
                 if (!isDisposedPropertyChecked)
                 {
-                    isDisposedProperty = sound.GetType().GetProperty("IsDisposed");
                     isDisposedPropertyChecked = true;
+                    isDisposedProperty = sound.GetType().GetProperty("IsDisposed");
+                    if (isDisposedProperty != null)
+                    {
+                        try
+                        {
+                            // Compile: s => ((ConcreteType)s).IsDisposed
+                            // One-time cost; per-call is then a direct call, no boxing.
+                            var p = System.Linq.Expressions.Expression.Parameter(typeof(ILoadedSound), "s");
+                            var body = System.Linq.Expressions.Expression.Property(
+                                System.Linq.Expressions.Expression.Convert(p, sound.GetType()),
+                                isDisposedProperty);
+                            isDisposedGetter = System.Linq.Expressions.Expression
+                                .Lambda<System.Func<ILoadedSound, bool>>(body, p).Compile();
+                        }
+                        catch { /* keep PropertyInfo fallback */ }
+                    }
                 }
 
+                if (isDisposedGetter != null)
+                {
+                    return !isDisposedGetter(sound);
+                }
                 if (isDisposedProperty != null)
                 {
                     return !(bool)isDisposedProperty.GetValue(sound);
@@ -281,7 +312,11 @@ namespace soundphysicsadapted
                     return false;
                 }
 
-                api.Logger.Debug($"[SoundFilterManager] Found AL.Source: {alSourceMethod}");
+                // Compile zero-alloc delegate for the per-tick filter attach path
+                efxDirectFilterInt = Convert.ToInt32(efxDirectFilterValue);
+                dAlSourceInt = EfxHelper.CompileIntEnumInt(alSourceMethod, alSourceiType);
+
+                api.Logger.Debug($"[SoundFilterManager] Found AL.Source: {alSourceMethod} (compiled={dAlSourceInt != null})");
                 return true;
             }
             catch (Exception ex)
@@ -399,15 +434,25 @@ namespace soundphysicsadapted
                     SourceId = sourceId,
                     CurrentValue = 1.0f,
                     TargetValue = 1.0f,
-                    IsAttached = true,
                     SoundRef = new WeakReference<ILoadedSound>(sound)
                 };
 
-                activeFilters[sound] = entry;
+                if (!activeFilters.TryAdd(sound, entry))
+                {
+                    // Lost a race with another thread registering the same sound
+                    // (Start() can fire on the music thread). Theirs won — delete
+                    // our just-created filter so it doesn't leak.
+                    EfxHelper.DeleteFilter(filterId);
+                    return true;
+                }
+
+                // New sound<->sourceId pairing: VS just ran createSoundSource() with fresh
+                // vanilla distance params, so the distance-model dedupe for this id must reset.
+                // Must run AFTER the TryAdd win — a losing thread invalidating here would let
+                // the winner's already-applied multipliers get applied a second time (stacking).
+                LoadSoundPatch.InvalidateDistanceModel(sourceId);
                 sourceIdToSound[sourceId] = sound;
                 totalFiltersCreated++;
-
-
 
                 if (!loggedOnce)
                 {
@@ -463,7 +508,10 @@ namespace soundphysicsadapted
                 // Clear any pending errors before our call
                 EfxHelper.GetALError();
 
-                alSourceMethod.Invoke(null, new object[] { sourceId, efxDirectFilterValue, filterId });
+                if (dAlSourceInt != null)
+                    dAlSourceInt(sourceId, efxDirectFilterInt, filterId);
+                else
+                    alSourceMethod.Invoke(null, new object[] { sourceId, efxDirectFilterValue, filterId });
 
                 // Check if OpenAL reported an error
                 int error = EfxHelper.GetALError();
@@ -486,85 +534,6 @@ namespace soundphysicsadapted
             }
         }
 
-        /// <summary>
-        /// Experimental: Set source gain directly to test if we can affect the source at all
-        /// </summary>
-        public static void TestSetSourceGain(int sourceId, float gain)
-        {
-            if (alSourceFloatMethod == null)
-            {
-                // Try to get AL.Source(int, ALSourcef, float) method
-                try
-                {
-                    foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-                    {
-                        if (!asm.GetName().Name.Contains("OpenTK")) continue;
-                        foreach (var type in asm.GetTypes())
-                        {
-                            if (type.Name == "AL" && type.Namespace?.Contains("OpenAL") == true)
-                            {
-                                // Find ALSourcef enum
-                                Type alSourcefType = null;
-                                foreach (var t in asm.GetTypes())
-                                {
-                                    if (t.Name == "ALSourcef" && t.IsEnum)
-                                    {
-                                        alSourcefType = t;
-                                        break;
-                                    }
-                                }
-                                if (alSourcefType == null) continue;
-
-                                alSourcefGainValue = Enum.Parse(alSourcefType, "Gain");
-
-                                alSourceFloatMethod = type.GetMethod("Source",
-                                    BindingFlags.Public | BindingFlags.Static,
-                                    null,
-                                    new Type[] { typeof(int), alSourcefType, typeof(float) },
-                                    null);
-                                break;
-                            }
-                        }
-                        if (alSourceFloatMethod != null) break;
-                    }
-                }
-                catch { }
-            }
-
-            if (alSourceFloatMethod != null && alSourcefGainValue != null)
-            {
-                try
-                {
-                    // Set the gain
-                    alSourceFloatMethod.Invoke(null, new object[] { sourceId, alSourcefGainValue, gain });
-
-                    // Try to read it back to verify
-                    try
-                    {
-                        // Find AL.GetSource(int, ALSourcef, out float)
-                        var alType = alSourceFloatMethod.DeclaringType;
-                        var getSourceMethod = alType.GetMethod("GetSource",
-                            BindingFlags.Public | BindingFlags.Static,
-                            null,
-                            new Type[] { typeof(int), alSourcefGainValue.GetType(), typeof(float).MakeByRefType() },
-                            null);
-
-                        if (getSourceMethod != null)
-                        {
-                            object[] args = new object[] { sourceId, alSourcefGainValue, 0f };
-                            getSourceMethod.Invoke(null, args);
-                            float readBack = (float)args[2];
-                        }
-                    }
-                    catch { }
-                }
-                catch (Exception ex)
-                {
-                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
-                        SoundPhysicsAdaptedModSystem.DebugLog($"[TEST] Failed to set gain: {ex.Message}");
-                }
-            }
-        }
 
         /// <summary>
         /// Initialize AL.Source float method for pitch/gain manipulation.
@@ -607,8 +576,10 @@ namespace soundphysicsadapted
 
                     if (alSourceFloatMethod != null)
                     {
+                        alSourcefPitchInt = Convert.ToInt32(alSourcefPitchValue);
+                        dAlSourceFloat = EfxHelper.CompileIntEnumFloat(alSourceFloatMethod, alSourcefType);
                         if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
-                            SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Initialized AL.Source float method");
+                            SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] Initialized AL.Source float method (compiled={dAlSourceFloat != null})");
                         return true;
                     }
                 }
@@ -645,7 +616,10 @@ namespace soundphysicsadapted
                 float finalPitch = Math.Max(0.1f, Math.Min(3.0f, basePitch + pitchOffset));
 
                 // Apply via OpenAL
-                alSourceFloatMethod.Invoke(null, new object[] { sourceId, alSourcefPitchValue, finalPitch });
+                if (dAlSourceFloat != null)
+                    dAlSourceFloat(sourceId, alSourcefPitchInt, finalPitch);
+                else
+                    alSourceFloatMethod.Invoke(null, new object[] { sourceId, alSourcefPitchValue, finalPitch });
 
                 return true;
             }
@@ -655,14 +629,6 @@ namespace soundphysicsadapted
                     SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] ApplyPitchOffset error: {ex.Message}");
                 return false;
             }
-        }
-
-        /// <summary>
-        /// Reset pitch offset to 0 (restore base pitch) for a sound.
-        /// </summary>
-        public static bool ResetPitchOffset(ILoadedSound sound)
-        {
-            return ApplyPitchOffset(sound, 0f);
         }
 
         /// <summary>
@@ -717,8 +683,10 @@ namespace soundphysicsadapted
 
                     if (alSource3fMethod != null)
                     {
+                        alSource3fPositionInt = Convert.ToInt32(alSource3fPositionValue);
+                        dAlSource3f = EfxHelper.CompileIntEnum3Float(alSource3fMethod, alSource3fType);
                         if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
-                            SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] AL.Source3f init OK via {asm.GetName().Name}");
+                            SoundPhysicsAdaptedModSystem.DebugLog($"[PHASE4B] AL.Source3f init OK via {asm.GetName().Name} (compiled={dAlSource3f != null})");
                         return true;
                     }
                     else
@@ -754,6 +722,11 @@ namespace soundphysicsadapted
                 return;
             try
             {
+                if (dAlSource3f != null)
+                {
+                    dAlSource3f(sourceId, alSource3fPositionInt, (float)pos.X, (float)pos.Y, (float)pos.Z);
+                    return;
+                }
                 alSource3fMethod.Invoke(null, new object[]
                 {
                     sourceId,
@@ -937,19 +910,9 @@ namespace soundphysicsadapted
             // Skip if sound was disposed — prevents OpenAL InvalidName on stale sourceId
             if (!IsSoundAlive(sound, entry)) return;
 
-            try
-            {
-                Vec3d pos = entry.CurrentRepositionedPos;
-                alSource3fMethod.Invoke(null, new object[]
-                {
-                    entry.SourceId,
-                    alSource3fPositionValue,
-                    (float)pos.X,
-                    (float)pos.Y,
-                    (float)pos.Z
-                });
-            }
-            catch { }
+            // Runs on every VS SetPosition call (per frame for moving sounds) —
+            // SetALSourcePosition uses the compiled zero-alloc delegate.
+            SetALSourcePosition(entry.SourceId, entry.CurrentRepositionedPos);
         }
 
         /// <summary>
@@ -962,7 +925,10 @@ namespace soundphysicsadapted
 
             try
             {
-                alSourceMethod.Invoke(null, new object[] { sourceId, efxDirectFilterValue, 0 });
+                if (dAlSourceInt != null)
+                    dAlSourceInt(sourceId, efxDirectFilterInt, 0);
+                else
+                    alSourceMethod.Invoke(null, new object[] { sourceId, efxDirectFilterValue, 0 });
                 return true;
             }
             catch
@@ -1013,19 +979,6 @@ namespace soundphysicsadapted
             return null;
         }
 
-        /// <summary>
-        /// Get the filter ID associated with a sound, or 0 if not registered.
-        /// </summary>
-        public static int GetFilterId(ILoadedSound sound)
-        {
-            if (!IsInitialized || sound == null)
-                return 0;
-
-            if (activeFilters.TryGetValue(sound, out var entry))
-                return entry.FilterId;
-
-            return 0;
-        }
 
         /// <summary>
         /// Re-attach the filter for a sound that was already registered.
@@ -1232,13 +1185,16 @@ namespace soundphysicsadapted
                             double toOrig = entry.TargetRepositionedPos.DistanceTo(entry.OriginalSoundPos);
                             if (toOrig < 0.1)
                             {
-                                // Smoothly returned to original position — clear state
+                                // Smoothly returned to original position — clear state.
+                                // Capture the position BEFORE nulling the fields, otherwise
+                                // the final apply below is a null no-op.
+                                Vec3d finalPos = entry.OriginalSoundPos;
                                 entry.TargetRepositionedPos = null;
                                 entry.CurrentRepositionedPos = null;
                                 entry.OriginalSoundPos = null;
                                 entry.SmoothedTargetPos = null;
                                 // Apply original pos one last time
-                                SetALSourcePosition(entry.SourceId, entry.TargetRepositionedPos ?? entry.OriginalSoundPos);
+                                SetALSourcePosition(entry.SourceId, finalPos);
                                 continue;
                             }
                         }
@@ -1279,78 +1235,6 @@ namespace soundphysicsadapted
                 if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
                     SoundPhysicsAdaptedModSystem.DebugLog($"SMOOTH: {smoothed}/{activeFilters.Count} filters, {posSmoothed} positions (5s sample)");
                 smoothLogAccumulator = 0;
-            }
-        }
-
-        /// <summary>
-        /// Recalculate occlusion for all active sounds based on current player position.
-        /// Call this when player moves to update stationary sound occlusion.
-        /// </summary>
-        public static void RecalculateAll(Vec3d playerPos, IBlockAccessor blockAccessor)
-        {
-            if (!IsInitialized || blockAccessor == null || playerPos == null)
-                return;
-
-            int updated = 0;
-            var toRemove = new List<ILoadedSound>();
-
-            foreach (var kvp in activeFilters)
-            {
-                var sound = kvp.Key;
-                var entry = kvp.Value;
-
-                // Skip if no position stored
-                if (entry.LastPosition == null)
-                    continue;
-
-                // Check if sound is disposed
-                if (!entry.SoundRef.TryGetTarget(out _))
-                {
-                    toRemove.Add(sound);
-                    continue;
-                }
-
-                // CRITICAL: Verify sourceId hasn't changed (VS recycles source IDs)
-                int currentSourceId = GetSourceId(sound);
-                if (currentSourceId != entry.SourceId)
-                {
-                    SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"RECALC SKIP: {entry.SoundName} sourceId changed {entry.SourceId}->{currentSourceId}");
-                    toRemove.Add(sound);
-                    continue;
-                }
-
-                // Recalculate occlusion - set as new TARGET
-                // SmoothAll() on the 25ms tick handles interpolation
-                // For repositioned sounds: AudioPhysicsSystem sets the target from path data.
-                // We skip recalculation here because path-based LPF is set in the main tick.
-                // Only recalculate for NON-repositioned sounds using OcclusionCalculator.
-                if (entry.CurrentRepositionedPos != null)
-                {
-                    // Repositioned sound — LPF is managed by AudioPhysicsSystem path data.
-                    // Don't override with OcclusionCalculator (which would raycast from wrong pos).
-                    continue;
-                }
-                float occlusion = OcclusionCalculator.Calculate(entry.LastPosition, playerPos, blockAccessor);
-                float targetFilter = occlusion <= 0 ? 1.0f : OcclusionCalculator.OcclusionToFilter(occlusion);
-
-                entry.TargetValue = targetFilter;
-                updated++;
-            }
-
-            // Clean up stale entries found during recalculation
-            foreach (var sound in toRemove)
-            {
-                if (activeFilters.TryRemove(sound, out var staleEntry))
-                {
-                    CleanupEntry(staleEntry);
-                }
-            }
-
-            if (updated > 0 || toRemove.Count > 0)
-            {
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"[SoundFilterManager] Recalculated {updated} sounds, removed {toRemove.Count} stale");
             }
         }
 

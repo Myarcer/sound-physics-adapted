@@ -235,7 +235,6 @@ namespace soundphysicsadapted
         /// provide their BlockPos as the sound position without centering.
         /// Only triggers when all three axes are within CORNER_TOLERANCE of an integer.
         /// </summary>
-        private static readonly Vec3d _centeredPos = new Vec3d();
         private const double CORNER_TOLERANCE = 0.01;
 
         private static Vec3d CenterBlockCornerPosition(Vec3d pos, string blockCode)
@@ -250,7 +249,11 @@ namespace soundphysicsadapted
 
             if (xCorner && yCorner && zCorner)
             {
-                _centeredPos.Set(
+                // Must be a FRESH instance: callers store the returned position in
+                // per-sound candidate lists / caches. A shared static here aliased
+                // every corner-centered sound in the same tick to the LAST sound's
+                // center, making earlier candidates raycast from the wrong block.
+                Vec3d centeredPos = new Vec3d(
                     Math.Floor(pos.X) + 0.5,
                     Math.Floor(pos.Y) + 0.5,
                     Math.Floor(pos.Z) + 0.5
@@ -258,9 +261,9 @@ namespace soundphysicsadapted
 
                 SoundPhysicsAdaptedModSystem.DebugLog(
                     $"[SoundAdjust] Block-center fix: '{blockCode}' " +
-                    $"({pos.X:F2},{pos.Y:F2},{pos.Z:F2}) -> ({_centeredPos.X:F2},{_centeredPos.Y:F2},{_centeredPos.Z:F2})");
+                    $"({pos.X:F2},{pos.Y:F2},{pos.Z:F2}) -> ({centeredPos.X:F2},{centeredPos.Y:F2},{centeredPos.Z:F2})");
 
-                return _centeredPos;
+                return centeredPos;
             }
 
             return pos;

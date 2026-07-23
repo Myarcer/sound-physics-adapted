@@ -58,7 +58,6 @@ namespace soundphysicsadapted
         public bool IsOutdoors;
         public long CreatedTimeMs;
         public long LastUsedTimeMs;
-        public double PlayerPosX, PlayerPosY, PlayerPosZ;  // Player pos at creation
         public double CreatorPosX, CreatorPosY, CreatorPosZ; // Sound pos that created this entry
         public int UseCount;
 
@@ -66,11 +65,9 @@ namespace soundphysicsadapted
         public float DirectOcclusion;
         public bool HasDirectAirspace;
 
-        public ReverbCellEntry()
-        {
-            BouncePoints = new BouncePoint[256]; // 32 rays * 4 bounces max + some probe
-            Openings = new OpeningData[24];       // 12 probes * ~2 openings each
-        }
+        // Arrays are allocated right-sized by StoreCellIfEmpty (the only producer).
+        // A fixed 256-element BouncePoint array here cost ~14KB per store ATTEMPT,
+        // including TryAdd losers — significant GC churn while the player moves.
     }
 
     /// <summary>
@@ -232,6 +229,31 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Read-only cell lookup for the sound-start reverb approximation.
+        /// Same key/TTL/wall-check logic as TryGetCell but does NOT touch hit/miss
+        /// stats, UseCount, or LastUsedTimeMs — start-time peeks were inflating the
+        /// hit-rate stats used for tuning and skewing LRU recency.
+        /// </summary>
+        public ReverbCellEntry PeekCell(Vec3d soundPos, Vec3d playerPos,
+            long currentTimeMs, IBlockAccessor blockAccessor)
+        {
+            float distance = (float)soundPos.DistanceTo(playerPos);
+            long key = PackCompositeKey(soundPos, playerPos, distance);
+
+            if (!cells.TryGetValue(key, out var entry)) return null;
+
+            if (distance > FAR_DISTANCE && currentTimeMs - entry.CreatedTimeMs > FAR_TTL_MS)
+                return null; // Expired — leave eviction to the real read path
+
+            // Same acoustic-zone guard as TryGetCell (1 DDA)
+            Vec3d creatorPos = new Vec3d(entry.CreatorPosX, entry.CreatorPosY, entry.CreatorPosZ);
+            if (OcclusionCalculator.CalculatePathOcclusion(soundPos, creatorPos, blockAccessor) >= 1.0f)
+                return null;
+
+            return entry;
+        }
+
+        /// <summary>
         /// Store computed reverb data for a cell.
         /// Only stores if no existing entry for this composite key.
         /// </summary>
@@ -243,20 +265,21 @@ namespace soundphysicsadapted
             float distance = (float)soundPos.DistanceTo(playerPos);
             long key = PackCompositeKey(soundPos, playerPos, distance);
 
-            // Only store if no existing entry (don't overwrite valid entries)
+            // Only store if no existing entry (don't overwrite valid entries).
+            // Cheap pre-check avoids building the entry + array copies for the
+            // common "already stored" case; TryAdd below still guards the race.
+            if (cells.ContainsKey(key)) return;
 
             var entry = new ReverbCellEntry();
             entry.Reverb = reverb;
 
-            // Copy bounce data
-            if (bounceCount > entry.BouncePoints.Length)
-                entry.BouncePoints = new BouncePoint[bounceCount];
+            // Copy bounce data (right-sized — source arrays are shared statics)
+            entry.BouncePoints = new BouncePoint[bounceCount];
             Array.Copy(bounces, entry.BouncePoints, bounceCount);
             entry.BouncePointCount = bounceCount;
 
             // Copy opening data
-            if (openingCount > entry.Openings.Length)
-                entry.Openings = new OpeningData[openingCount];
+            entry.Openings = new OpeningData[openingCount];
             if (openingCount > 0)
                 Array.Copy(openings, entry.Openings, openingCount);
             entry.OpeningCount = openingCount;
@@ -264,9 +287,6 @@ namespace soundphysicsadapted
             entry.SharedAirspaceRatio = sharedAirspaceRatio;
             entry.CreatedTimeMs = currentTimeMs;
             entry.LastUsedTimeMs = currentTimeMs;
-            entry.PlayerPosX = playerPos.X;
-            entry.PlayerPosY = playerPos.Y;
-            entry.PlayerPosZ = playerPos.Z;
             entry.CreatorPosX = soundPos.X;
             entry.CreatorPosY = soundPos.Y;
             entry.CreatorPosZ = soundPos.Z;
@@ -288,7 +308,7 @@ namespace soundphysicsadapted
             // LRU check
             if (cells.Count > MAX_CELLS)
             {
-                Cleanup(currentTimeMs);
+                Cleanup(currentTimeMs, playerPos);
             }
         }
 
@@ -339,33 +359,6 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Invalidate all cells within range of player.
-        /// With composite keys, this is rarely needed — player movement
-        /// naturally creates new keys. Kept for explicit invalidation (e.g. teleport).
-        /// </summary>
-        public void InvalidateNearPlayer(Vec3d playerPos, float radius)
-        {
-            List<long> toRemove = null;
-            foreach (var kvp in cells)
-            {
-                var entry = kvp.Value;
-                double dx = entry.CreatorPosX - playerPos.X;
-                double dy = entry.CreatorPosY - playerPos.Y;
-                double dz = entry.CreatorPosZ - playerPos.Z;
-                if (dx * dx + dy * dy + dz * dz < radius * radius)
-                {
-                    if (toRemove == null) toRemove = new List<long>();
-                    toRemove.Add(kvp.Key);
-                }
-            }
-            if (toRemove != null)
-            {
-                foreach (var key in toRemove)
-                    cells.TryRemove(key, out _);
-            }
-        }
-
-        /// <summary>
         /// Full clear (config change, etc.)
         /// </summary>
         public void Clear()
@@ -378,8 +371,11 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// LRU cleanup - remove oldest/expired cells when over MAX_CELLS.
+        /// TTL distance is measured from the CURRENT player position — an entry
+        /// created nearby that the player has since walked away from must age out
+        /// as "far", not keep the long-lived TTL of its creation distance.
         /// </summary>
-        public void Cleanup(long currentTimeMs)
+        public void Cleanup(long currentTimeMs, Vec3d currentPlayerPos)
         {
             if (cells.Count <= MAX_CELLS / 2) return;
 
@@ -389,9 +385,9 @@ namespace soundphysicsadapted
             {
                 var entry = kvp.Value;
                 float dist = (float)Math.Sqrt(
-                    (entry.CreatorPosX - entry.PlayerPosX) * (entry.CreatorPosX - entry.PlayerPosX) +
-                    (entry.CreatorPosY - entry.PlayerPosY) * (entry.CreatorPosY - entry.PlayerPosY) +
-                    (entry.CreatorPosZ - entry.PlayerPosZ) * (entry.CreatorPosZ - entry.PlayerPosZ));
+                    (entry.CreatorPosX - currentPlayerPos.X) * (entry.CreatorPosX - currentPlayerPos.X) +
+                    (entry.CreatorPosY - currentPlayerPos.Y) * (entry.CreatorPosY - currentPlayerPos.Y) +
+                    (entry.CreatorPosZ - currentPlayerPos.Z) * (entry.CreatorPosZ - currentPlayerPos.Z));
 
                 // Far entries expire by TTL; close/medium entries only expire by LRU
                 if (dist > FAR_DISTANCE && currentTimeMs - entry.CreatedTimeMs > FAR_TTL_MS)

@@ -4,6 +4,57 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6] - Unreleased
+
+### Fixed
+- **Standing inside a solid block no longer muffles all sounds.** The occlusion ray now
+  skips the listener's own block when it is fully solid (mirrors the weather ray logic) —
+  ear positions clipped into snow layers, chiseled blocks, or walls previously counted
+  their own block as a wall in front of every sound.
+- **Mod-API queries are now main-thread-gated.** `SoundPhysicsAPI` (used by voice-chat
+  mods) calls into main-thread-only compute cores; off-thread calls previously risked
+  silently corrupting occlusion/reverb of unrelated sounds. They now return passthrough
+  values and log a one-time warning telling the caller to marshal to the game thread.
+- **Sounds behind a doorway are no longer near-silent.** When the system repositioned an occluded sound to a found opening (door, window, air gap), the muffle floor ignored that verified path — the sound appeared at the doorway but stayed almost inaudible. Probe-found openings now lift the muffle floor (conservatively, below the full open-air floor).
+- Opening or sealing a wall near you (door, block place/break) now triggers an immediate weather rescan instead of waiting out the scan interval — rain/wind entry reacts audibly faster.
+- A single blocked sky ray (tree branch, roof eave) no longer flips the fallback outdoor detection to "indoors".
+- Reverb cache entries now age out based on your current position, not where you were when they were created.
+- Downgrading the mod with a newer config file regenerates the config instead of silently mis-stamping its version.
+
+### Performance
+- **Block changes no longer wipe the reverb dedupe cache.** Mining/building cleared the
+  entire reverb cell cache on every (debounced) block change even though targeted
+  per-cell invalidation already covered the changed geometry — raycast load during
+  combat/mining drops accordingly.
+- Sound-start reverb approximation now uses a stats-free cache peek (hit-rate stats and
+  LRU recency are no longer skewed by start-time reads).
+- Removed the last per-visit allocation in the occlusion ray's door/gate check.
+- **Sealed-cavity pre-check:** heavily muffled sounds in fully sealed spaces (cave pockets, walled-off cellars) are detected with a cheap flood fill and skip the full raytrace entirely — they play dry and heavily muffled, as before, at a fraction of the cost.
+- Removed the remaining per-bounce allocations in the reverb raytracer and per-visit allocations in door/chisel checks.
+- Freeze-diagnostic logging (5s heartbeat) is now gated behind DebugMode.
+- No longer creates an unused reverb slot on audio devices reporting exactly 3 auxiliary sends.
+
+### Internal
+- Documented the EFX copy-on-attach dependency on the shared reverb send filters.
+
+## [0.2.5] - 2026-07-02
+
+### Fixed
+- **Indoor weather audio no longer cuts out.** Rain/wind heard through windows and doorways used to go silent the moment you walked deeper into a building (a structural check falsely marked the opening as sealed, then a timeout deleted it). Openings now stay tracked while quiet or occluded and their sources fade naturally — and swell back when you return. Louder openings still take over the limited source slots from quieter ones.
+- Fixed a create/destroy loop that recreated silenced weather sources every tick (audio churn, wasted CPU).
+- Walking indoors during rain: the ambient rain bed now hands over smoothly to positional window/door sources — no dropout while the positional sources spin up, no double volume.
+- Fixed audio glitches after leaving and rejoining a world (stale state reset).
+- Distance-model settings could fail to re-apply when the game recycled a sound source.
+- Multiple corner-placed block sounds in the same tick could play at each other's positions (shared-buffer aliasing).
+- Sounds started from the music engine thread no longer race the physics raycasts (deferred to the next tick) — fixes rare instability when music/resonator tracks start.
+- Volume fades no longer freeze mid-fade when a sound's update budget is throttled.
+
+### Changed
+- Building from source now requires the .NET 10 SDK (VS 1.22+).
+
+### Performance
+- No more raytrace on sound start, compiled OpenAL calls, zero-allocation weather processing — less stutter when many sounds start at once.
+
 ## [0.2.4] - 2026-04-27
 
 ### Added

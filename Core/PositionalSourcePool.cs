@@ -45,6 +45,7 @@ namespace soundphysicsadapted
             public float TargetVolume;       // What we're fading toward
             public float CurrentVolume;      // What's currently set (for smooth fading)
             public Vec3f LastAppliedPos;     // Last position sent to OpenAL (dead zone filter)
+            public long AssignedAtMs;        // Game time of last assignment (swap cooldown)
         }
 
         private readonly ICoreClientAPI capi;
@@ -76,11 +77,40 @@ namespace soundphysicsadapted
 
         // ── Tunable parameters (sensible defaults, overridable per type) ──
 
-        /// <summary>Fade-in rate per tick (exponential). Higher = faster fade-in.</summary>
-        public float FadeInRate { get; set; } = 0.12f;   // ~1.5s to 90%
+        /// <summary>
+        /// Fade-in rate per tick (exponential). Higher = faster fade-in.
+        /// Fast (~0.8s to 90%) because the Layer 1 bed-hold handover carries the
+        /// missing energy until this source delivers — a slow spawn ramp here only
+        /// prolongs the muffled hole, it no longer prevents any pop.
+        /// </summary>
+        public float FadeInRate { get; set; } = 0.25f;
 
         /// <summary>Fade-out rate per tick (exponential). Higher = faster fade-out.</summary>
         public float FadeOutRate { get; set; } = 0.10f;   // ~3s to silence
+
+        /// <summary>
+        /// Target-tracking rate for sources already established (above spawn threshold).
+        /// Their target changes come from enclosure smoothing (~1s) which is already
+        /// smooth — chasing it with the slow FadeInRate stacked a second lag on top,
+        /// so Layer 2 rose 1.5-2s AFTER Layer 1 fell during indoor transitions (audible
+        /// rain dropout in tunnel mouths). Fast tracking makes the enclosure smoother
+        /// the single governing time constant for both layers.
+        /// </summary>
+        public float TrackRate { get; set; } = 0.5f;    // ~0.3s to 90%
+
+        /// <summary>Below this volume a rising source uses FadeInRate (spawn ramp).</summary>
+        private const float SPAWN_RAMP_THRESHOLD = 0.05f;
+
+        /// <summary>
+        /// Distance at which near-field gain compensation ends (full volume beyond).
+        /// OpenAL barely attenuates within a few meters at Range=48, so a source at
+        /// the tunnel mouth 1-2m from the ear played FAR louder than the ambient bed
+        /// it replaced. Scale volume down linearly inside this radius instead.
+        /// </summary>
+        public float NearFieldRefDist { get; set; } = 6f;
+
+        /// <summary>Gain floor at zero distance for near-field compensation.</summary>
+        public float NearFieldMinGain { get; set; } = 0.4f;
 
         /// <summary>Volume below which a source is considered silent and can be stopped.</summary>
         public float MinVolume { get; set; } = 0.005f;
@@ -93,17 +123,19 @@ namespace soundphysicsadapted
         private const float EVICTION_VOLUME_THRESHOLD = 0.02f;
 
         /// <summary>
+        /// Minimum computed target volume for an opening to be granted a voice.
+        /// Below this the opening stays tracked but VIRTUAL — no OpenAL source is
+        /// created for silence. Without this gate, zero-weight openings churned
+        /// through create → fade-out → dispose every tick.
+        /// </summary>
+        private const float SPAWN_MIN_VOLUME = 0.02f;
+
+        /// <summary>
         /// Minimum squared distance an OpenAL source must move before SetPosition
         /// is called. Prevents panning jitter from sub-block centroid micro-shifts.
         /// 0.25 = 0.5 blocks minimum movement.
         /// </summary>
         private const float POSITION_UPDATE_MIN_DIST_SQ = 0.25f;
-
-        /// <summary>
-        /// Direct DDA occlusion above this = sound is inaudible.
-        /// At occ=5.0: filter = exp(-5) = 0.007 = nearly silent.
-        /// </summary>
-        public float AudibilityOccThreshold { get; set; } = 5.0f;
 
         /// <summary>Sound range for OpenAL 3D distance model.</summary>
         public float SoundRange { get; set; } = 48f;
@@ -134,6 +166,50 @@ namespace soundphysicsadapted
         /// Average volume of active sources (0-1). Used for Layer 1 ambient ducking.
         /// </summary>
         public float Contribution { get; private set; }
+
+        /// <summary>
+        /// Distance-weighted sum of CURRENT source volumes — what the pool is
+        /// actually delivering at the ear right now. Weight = 6/(6+dist) approximates
+        /// OpenAL distance attenuation so far sources count for little.
+        /// </summary>
+        public float EffectiveLoudness { get; private set; }
+
+        /// <summary>
+        /// Distance-weighted sum of TARGET source volumes — what the pool WILL
+        /// deliver once all fades complete. EffectiveLoudness/ExpectedLoudness is the
+        /// dimensionless "readiness" that gates the Layer 1 bed-hold release: unit
+        /// mismatch between bed volume and positional volume cancels out in the ratio.
+        /// </summary>
+        public float ExpectedLoudness { get; private set; }
+
+        /// <summary>Distance weight for loudness sums: 1.0 at 0m, 0.5 at 6m, 0.23 at 20m.</summary>
+        private const float LOUDNESS_DIST_HALF = 6f;
+
+        /// <summary>Last ear position from UpdateSources (for loudness distance weighting).</summary>
+        private Vec3d lastEarPos;
+
+        /// <summary>
+        /// Instant volume a newly assigned source starts at (clamped to its target).
+        /// The Layer 1 bed-hold still carries the mix while this ramps, but starting
+        /// from true silence wasted the first ~0.3s doing nothing audible.
+        /// </summary>
+        private const float SPAWN_HEAD_START = 0.15f;
+
+        /// <summary>Minimum age before an active slot can be evict-swapped (churn guard).</summary>
+        private const long SWAP_COOLDOWN_MS = 2500;
+
+        // ── Orphaned sounds: fading out detached from any slot ──
+        // When a better opening takes over a busy slot, the old sound must not be
+        // hard-cut, but waiting for it to fade inside the slot stalled new sources
+        // for many seconds (Pass 1 kept re-arming the target). Instead the old
+        // sound is moved here, fades out on its own, and the slot is free NOW.
+        private class OrphanSound
+        {
+            public ILoadedSound Sound;
+            public float Volume;
+        }
+        private readonly List<OrphanSound> orphans = new List<OrphanSound>(4);
+        private const float ORPHAN_FADE_RATE = 0.20f; // per tick — ~1s to silence
 
         /// <summary>Number of active source slots.</summary>
         public int ActiveCount
@@ -187,6 +263,9 @@ namespace soundphysicsadapted
         {
             if (!initialized || sources == null || mode != PoolMode.Looping) return;
 
+            lastEarPos = earPos;
+            TickOrphans();
+
             bool debug = SoundPhysicsAdaptedModSystem.Config?.DebugMode == true
                       && SoundPhysicsAdaptedModSystem.Config?.DebugPositionalWeather == true;
 
@@ -204,6 +283,8 @@ namespace soundphysicsadapted
             int maxSlots = sources.Length;
             int openingCount = trackedOpenings.Count;
             Span<bool> openingAssigned = stackalloc bool[openingCount];
+            // Per-slot opening score for eviction decisions (0 = unmatched/fading slot)
+            Span<float> slotScores = stackalloc float[maxSlots];
 
             // Pass 1: Update existing slot assignments (matched by TrackingId)
             for (int s = 0; s < maxSlots; s++)
@@ -221,7 +302,9 @@ namespace soundphysicsadapted
                         var pos = PositionSelector != null ? PositionSelector(opening) : opening.WorldPos;
                         slot.WorldPos = pos;
                         float baseVol = CalculateVolume(opening, intensity, volumeMultiplier);
-                        slot.TargetVolume = baseVol * ProximityFadeFactor(opening, earPos);
+                        slot.TargetVolume = baseVol * ProximityFadeFactor(opening, earPos)
+                                                    * NearFieldFactor(pos, earPos);
+                        slotScores[s] = OpeningScore(opening, earPos);
 
                         if (slot.Sound != null && slot.Sound.IsPlaying)
                         {
@@ -247,10 +330,46 @@ namespace soundphysicsadapted
                 }
             }
 
-            // Pass 2: Assign unmatched openings to empty/fading-out slots
+            // Pass 2: Assign unmatched openings to empty/fading-out slots.
+            // Openings are processed best-score-first (weight/distance, verified bonus)
+            // so nearby relevant openings win slots over distant persisted ones —
+            // previously tracker insertion order let old far sources monopolize slots.
+            Span<int> candidateOrder = stackalloc int[openingCount];
+            int candidateCount = 0;
             for (int o = 0; o < openingCount; o++)
             {
                 if (openingAssigned[o]) continue;
+                var cand = trackedOpenings[o];
+                if (cand.Suppressed) continue; // Never assign slots to redundant openings
+
+                // Virtualization gate: openings whose target volume is inaudible
+                // get no voice. They stay tracked and re-qualify here the moment
+                // their weight/volume returns.
+                var candPos = PositionSelector != null ? PositionSelector(cand) : cand.WorldPos;
+                float candVol = CalculateVolume(cand, intensity, volumeMultiplier)
+                              * ProximityFadeFactor(cand, earPos)
+                              * NearFieldFactor(candPos, earPos);
+                if (candVol < SPAWN_MIN_VOLUME) continue;
+
+                candidateOrder[candidateCount++] = o;
+            }
+            // Insertion sort by descending score (candidateCount is tiny)
+            for (int i = 1; i < candidateCount; i++)
+            {
+                int cur = candidateOrder[i];
+                float curScore = OpeningScore(trackedOpenings[cur], earPos);
+                int j = i - 1;
+                while (j >= 0 && OpeningScore(trackedOpenings[candidateOrder[j]], earPos) < curScore)
+                {
+                    candidateOrder[j + 1] = candidateOrder[j];
+                    j--;
+                }
+                candidateOrder[j + 1] = cur;
+            }
+
+            for (int c = 0; c < candidateCount; c++)
+            {
+                int o = candidateOrder[c];
 
                 int bestSlot = -1;
                 float lowestVolume = float.MaxValue;
@@ -274,7 +393,40 @@ namespace soundphysicsadapted
                     }
                 }
 
-                if (bestSlot < 0) break;
+                if (bestSlot < 0)
+                {
+                    // All slots busy: if this opening clearly outclasses the weakest
+                    // active source, take its slot NOW. The old sound is orphaned and
+                    // fades out detached — waiting for an in-slot fade stalled better
+                    // openings for many seconds (Pass 1 re-armed the target each tick).
+                    float candidateScore = OpeningScore(trackedOpenings[o], earPos);
+                    long nowMs = capi.World.ElapsedMilliseconds;
+                    int weakest = -1;
+                    float weakestScore = float.MaxValue;
+                    for (int s = 0; s < maxSlots; s++)
+                    {
+                        // Cooldown: freshly assigned sources are not evictable yet —
+                        // without this, borderline scores churned slots every ~3s.
+                        if (nowMs - sources[s].AssignedAtMs < SWAP_COOLDOWN_MS) continue;
+                        if (slotScores[s] < weakestScore)
+                        {
+                            weakestScore = slotScores[s];
+                            weakest = s;
+                        }
+                    }
+
+                    if (weakest < 0 || candidateScore <= weakestScore * 2f) continue;
+
+                    OrphanSlotSound(sources[weakest]);
+                    slotScores[weakest] = float.MaxValue; // Claimed — not weakest anymore
+                    bestSlot = weakest;
+                    if (debug)
+                    {
+                        WeatherAudioManager.WeatherDebugLog(
+                            $"[5B-{debugTag}] EVICT-SWAP slot={weakest} score={weakestScore:F2} " +
+                            $"-> trackId={trackedOpenings[o].TrackingId} score={candidateScore:F2}");
+                    }
+                }
 
                 var targetSlot = sources[bestSlot];
                 var newOpening = trackedOpenings[o];
@@ -288,9 +440,15 @@ namespace soundphysicsadapted
                 var newPos = PositionSelector != null ? PositionSelector(newOpening) : newOpening.WorldPos;
                 targetSlot.WorldPos = newPos;
                 targetSlot.Active = true;
-                targetSlot.CurrentVolume = 0f;
                 float baseVol2 = CalculateVolume(newOpening, intensity, volumeMultiplier);
-                targetSlot.TargetVolume = baseVol2 * ProximityFadeFactor(newOpening, earPos);
+                targetSlot.TargetVolume = baseVol2 * ProximityFadeFactor(newOpening, earPos)
+                                                   * NearFieldFactor(newPos, earPos);
+                // Head start: skip the silent bottom of the ramp — the bed-hold is
+                // still carrying the mix, so an instantly-audible (but modest) start
+                // is smoother than 0.3s of nothing followed by a swell.
+                targetSlot.CurrentVolume = Math.Min(SPAWN_HEAD_START, targetSlot.TargetVolume);
+                targetSlot.AssignedAtMs = capi.World.ElapsedMilliseconds;
+                slotScores[bestSlot] = OpeningScore(newOpening, earPos);
 
                 EnsureSourcePlaying(targetSlot);
 
@@ -316,7 +474,13 @@ namespace soundphysicsadapted
                 }
                 else if (diff > 0)
                 {
-                    slot.CurrentVolume += diff * FadeInRate;
+                    // Spawn ramp (FadeInRate) only while the source is still quiet.
+                    // Established sources track their target fast — the target is
+                    // already smoothed upstream (enclosure EMA, cluster weight EMA),
+                    // and stacking a second slow lag here made Layer 2 rise seconds
+                    // after Layer 1 fell on indoor transitions.
+                    float rate = slot.CurrentVolume < SPAWN_RAMP_THRESHOLD ? FadeInRate : TrackRate;
+                    slot.CurrentVolume += diff * rate;
                 }
                 else
                 {
@@ -350,32 +514,17 @@ namespace soundphysicsadapted
         /// <summary>
         /// Play a one-shot positional sound at a world position (oneshot mode).
         /// Grabs an available slot, plays the sound, slot auto-recycles when done.
-        /// Returns true if a slot was available and sound was started.
-        /// </summary>
-        /// <param name="worldPos">World position to play at</param>
-        /// <param name="volume">Initial volume (0-1)</param>
-        /// <param name="isLeafy">Whether current biome is leafy</param>
-        public bool PlayOneShot(Vec3d worldPos, float volume, bool isLeafy)
-        {
-            return PlayOneShot(worldPos, volume, isLeafy, 0);
-        }
-
-        public bool PlayOneShot(Vec3d worldPos, float volume, bool isLeafy, int preApplyFilterId)
-        {
-            return PlayOneShot(worldPos, volume, isLeafy, preApplyFilterId, 1.0f);
-        }
-
-        /// <summary>
-        /// Play a one-shot positional sound at a world position (oneshot mode) with optional
-        /// pre-applied LPF filter and pitch. The filter is attached BEFORE Start() to prevent transient
+        /// The optional LPF filter is attached BEFORE Start() to prevent transient
         /// bypass on sharp thunder cracks heard through walls.
+        /// Returns true if a slot was available and sound was started.
         /// </summary>
         /// <param name="worldPos">World position to play at</param>
         /// <param name="volume">Initial volume (0-1)</param>
         /// <param name="isLeafy">Whether current biome is leafy</param>
         /// <param name="preApplyFilterId">OpenAL EFX filter ID to attach before Start(), 0 = none</param>
         /// <param name="pitch">Pitch multiplier (1.0 = normal)</param>
-        public bool PlayOneShot(Vec3d worldPos, float volume, bool isLeafy, int preApplyFilterId, float pitch)
+        public bool PlayOneShot(Vec3d worldPos, float volume, bool isLeafy,
+            int preApplyFilterId = 0, float pitch = 1.0f)
         {
             if (!initialized || sources == null || mode != PoolMode.OneShot) return false;
             if (AssetResolver == null) return false;
@@ -467,75 +616,6 @@ namespace soundphysicsadapted
         }
 
         // ════════════════════════════════════════════════════════════════
-        // Audibility Check (for OpeningTracker persistence)
-        // ════════════════════════════════════════════════════════════════
-
-        /// <summary>
-        /// Check if a source at the given TrackingId is still audible to the player.
-        /// Queries AudioPhysicsSystem's cached occlusion for the sound.
-        /// </summary>
-        public bool IsSourceAudible(int trackingId)
-        {
-            if (sources == null) return false;
-
-            var audioPhysics = SoundPhysicsAdaptedModSystem.Acoustics;
-            if (audioPhysics == null) return false;
-
-            for (int i = 0; i < sources.Length; i++)
-            {
-                var slot = sources[i];
-                if (slot.Active && slot.TrackingId == trackingId && slot.Sound != null)
-                {
-                    if (slot.CurrentVolume <= MinVolume) return false;
-
-                    // Use EFFECTIVE occlusion (path-resolved when available),
-                    // not raw direct DDA. A sound heard around a corner via
-                    // bounce rays has low effective occlusion even when direct
-                    // DDA is very high (wall between player and source).
-                    float occ = audioPhysics.GetEffectiveOcclusion(slot.Sound);
-                    if (occ < 0) return false; // Sound not in cache — unregistered or stale, not audible
-                    bool audible = occ <= AudibilityOccThreshold;
-
-                    var cfg = SoundPhysicsAdaptedModSystem.Config;
-                    if (cfg?.DebugMode == true && cfg?.DebugPositionalWeather == true)
-                    {
-                        float directOcc = audioPhysics.GetSoundOcclusion(slot.Sound);
-                        WeatherAudioManager.WeatherDebugLog(
-                            $"[5B-{debugTag}-AUDIBLE] trackId={trackingId} slot={i} directOcc={directOcc:F2} " +
-                            $"effectiveOcc={occ:F2} vol={slot.CurrentVolume:F3} audible={audible}");
-                    }
-
-                    return audible;
-                }
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// Check if a source at the given TrackingId is currently being repositioned
-        /// by AudioPhysicsSystem (heard through indirect paths via bounce rays).
-        /// When true, the sound is occluded but a path around the obstacle was found.
-        /// When false, the sound either has clear LOS or no indirect path exists.
-        /// </summary>
-        public bool IsSourceRepositioned(int trackingId)
-        {
-            if (sources == null) return false;
-
-            var audioPhysics = SoundPhysicsAdaptedModSystem.Acoustics;
-            if (audioPhysics == null) return false;
-
-            for (int i = 0; i < sources.Length; i++)
-            {
-                var slot = sources[i];
-                if (slot.Active && slot.TrackingId == trackingId && slot.Sound != null)
-                {
-                    return audioPhysics.IsSoundRepositioned(slot.Sound);
-                }
-            }
-            return false;
-        }
-
-        // ════════════════════════════════════════════════════════════════
         // Source Lifecycle
         // ════════════════════════════════════════════════════════════════
 
@@ -553,16 +633,26 @@ namespace soundphysicsadapted
             if (VolumeCalculator != null)
                 return VolumeCalculator(opening, intensity, multiplier);
 
-            // Weight near zero (structural shrink zeroed it) → volume must reach 0
-            // so the source can fade out and be removed by audibility timeout.
-            // The 0.35 floor below only applies to real (non-zeroed) openings to
-            // prevent tiny 1-member clusters from being too quiet.
-            if (opening.SmoothedClusterWeight < 0.01f)
+            return SizeWeightVolume(opening, intensity, multiplier, 8f, 0.35f);
+        }
+
+        /// <summary>
+        /// Shared per-type volume formula: intensity * sqrt(clusterWeight/divisor) * multiplier.
+        /// The floor keeps tiny 1-member clusters audible; suppressed or structurally
+        /// zeroed openings return 0 so their source fades out and gets removed by the
+        /// audibility timeout. Weather types differ only in divisor and floor:
+        /// rain (8, 0.35), wind (6, 0.30 — fills openings more evenly), hail (8, 0.40 —
+        /// percussive, slightly louder per source).
+        /// </summary>
+        public static float SizeWeightVolume(
+            TrackedOpening opening, float intensity, float multiplier,
+            float sizeDivisor, float sizeFloor)
+        {
+            if (opening.Suppressed || opening.SmoothedClusterWeight < 0.01f)
                 return 0f;
 
-            // Default: same as original rain formula
-            float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / 8f, 1f));
-            sizeWeight = Math.Max(sizeWeight, 0.35f);
+            float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / sizeDivisor, 1f));
+            sizeWeight = Math.Max(sizeWeight, sizeFloor);
             return Math.Clamp(intensity * sizeWeight * multiplier, 0f, 1f);
         }
 
@@ -589,6 +679,34 @@ namespace soundphysicsadapted
 
             // Linear fade between end and start distances
             return (dist - ProximityFadeEndDist) / (ProximityFadeStartDist - ProximityFadeEndDist);
+        }
+
+        /// <summary>
+        /// Near-field gain compensation. OpenAL's distance model barely attenuates
+        /// within a few meters at Range=48, so a source right at the ear plays at
+        /// nearly full gain — far louder than the ambient bed it crossfades against.
+        /// Linear ramp from NearFieldMinGain at 0m to 1.0 at NearFieldRefDist.
+        /// </summary>
+        private float NearFieldFactor(Vec3d sourcePos, Vec3d earPos)
+        {
+            if (earPos == null || sourcePos == null) return 1f;
+            float dist = (float)sourcePos.DistanceTo(earPos);
+            if (dist >= NearFieldRefDist) return 1f;
+            return NearFieldMinGain + (1f - NearFieldMinGain) * (dist / NearFieldRefDist);
+        }
+
+        /// <summary>
+        /// Slot-priority score: bigger and closer openings matter more, currently
+        /// verified openings beat persisted ones, suppressed openings score zero.
+        /// Used to order slot assignment and decide fade-swap evictions.
+        /// </summary>
+        private static float OpeningScore(TrackedOpening opening, Vec3d earPos)
+        {
+            if (opening.Suppressed) return 0f;
+            float dist = earPos != null ? (float)opening.WorldPos.DistanceTo(earPos) : 0f;
+            float score = (opening.SmoothedClusterWeight + 0.5f) / (1f + dist);
+            if (opening.CurrentlyVerified) score *= 1.5f;
+            return score;
         }
 
         /// <summary>
@@ -669,6 +787,56 @@ namespace soundphysicsadapted
             }
         }
 
+        /// <summary>
+        /// Detach a slot's sound into the orphan list (fades out on its own) and
+        /// free the slot immediately for reassignment. No hard cut, no stall.
+        /// </summary>
+        private void OrphanSlotSound(PositionalSource slot)
+        {
+            if (slot.Sound != null)
+            {
+                orphans.Add(new OrphanSound { Sound = slot.Sound, Volume = slot.CurrentVolume });
+                slot.Sound = null;
+            }
+            slot.Active = false;
+            slot.CurrentVolume = 0f;
+            slot.TargetVolume = 0f;
+            slot.LastAppliedPos = null;
+        }
+
+        /// <summary>Fade out and dispose orphaned sounds. Called every update.</summary>
+        private void TickOrphans()
+        {
+            for (int i = orphans.Count - 1; i >= 0; i--)
+            {
+                var orphan = orphans[i];
+                orphan.Volume *= (1f - ORPHAN_FADE_RATE);
+
+                if (orphan.Sound == null || !orphan.Sound.IsPlaying || orphan.Volume <= MinVolume)
+                {
+                    DisposeOrphan(orphan);
+                    orphans.RemoveAt(i);
+                }
+                else
+                {
+                    orphan.Sound.SetVolume(orphan.Volume);
+                }
+            }
+        }
+
+        private static void DisposeOrphan(OrphanSound orphan)
+        {
+            if (orphan.Sound == null) return;
+            try
+            {
+                AudioRenderer.UnregisterSound(orphan.Sound);
+                orphan.Sound.Stop();
+                orphan.Sound.Dispose();
+            }
+            catch { }
+            orphan.Sound = null;
+        }
+
         private void StopSource(PositionalSource slot)
         {
             if (slot.Sound != null)
@@ -692,6 +860,8 @@ namespace soundphysicsadapted
         public void FadeOutAll()
         {
             if (sources == null) return;
+
+            TickOrphans();
 
             for (int i = 0; i < sources.Length; i++)
             {
@@ -729,7 +899,14 @@ namespace soundphysicsadapted
                     StopSource(sources[i]);
                 }
             }
+            for (int i = orphans.Count - 1; i >= 0; i--)
+            {
+                DisposeOrphan(orphans[i]);
+            }
+            orphans.Clear();
             Contribution = 0f;
+            EffectiveLoudness = 0f;
+            ExpectedLoudness = 0f;
         }
 
         private void UpdateContribution()
@@ -737,23 +914,42 @@ namespace soundphysicsadapted
             if (sources == null)
             {
                 Contribution = 0f;
+                EffectiveLoudness = 0f;
+                ExpectedLoudness = 0f;
                 return;
             }
 
             float totalContribution = 0f;
             int activeCount = 0;
+            float effective = 0f;
+            float expected = 0f;
 
             for (int i = 0; i < sources.Length; i++)
             {
                 var slot = sources[i];
-                if (slot.Active && slot.CurrentVolume > MinVolume)
+                if (!slot.Active) continue;
+
+                // Distance weight approximates OpenAL attenuation so a far source's
+                // numeric volume doesn't masquerade as delivered at-ear loudness
+                float distWeight = 1f;
+                if (lastEarPos != null && slot.WorldPos != null)
+                {
+                    float dist = (float)slot.WorldPos.DistanceTo(lastEarPos);
+                    distWeight = LOUDNESS_DIST_HALF / (LOUDNESS_DIST_HALF + dist);
+                }
+
+                if (slot.CurrentVolume > MinVolume)
                 {
                     totalContribution += slot.CurrentVolume;
                     activeCount++;
+                    effective += slot.CurrentVolume * distWeight;
                 }
+                expected += slot.TargetVolume * distWeight;
             }
 
             Contribution = activeCount > 0 ? Math.Min(totalContribution / activeCount, 1f) : 0f;
+            EffectiveLoudness = effective;
+            ExpectedLoudness = expected;
         }
 
         // ════════════════════════════════════════════════════════════════
@@ -777,7 +973,6 @@ namespace soundphysicsadapted
                 float directOcc = audioPhysics?.GetSoundOcclusion(slot.Sound) ?? -1f;
                 float effectiveOcc = audioPhysics?.GetEffectiveOcclusion(slot.Sound) ?? -1f;
                 bool registered = AudioRenderer.IsRegistered(slot.Sound);
-                bool audible = effectiveOcc >= 0 ? effectiveOcc <= AudibilityOccThreshold : false;
                 string directStr = directOcc >= 0 ? $"{directOcc:F2}" : "N/A";
                 string effectiveStr = effectiveOcc >= 0 ? $"{effectiveOcc:F2}" : "N/A";
 
@@ -785,7 +980,7 @@ namespace soundphysicsadapted
                     $"  [{debugTag}] Slot[{i}] id={slot.TrackingId} " +
                     $"pos=({slot.WorldPos?.X:F0},{slot.WorldPos?.Y:F0},{slot.WorldPos?.Z:F0}) " +
                     $"vol={slot.CurrentVolume:F3}/{slot.TargetVolume:F3} " +
-                    $"directOcc={directStr} effOcc={effectiveStr} audible={audible} reg={registered} " +
+                    $"directOcc={directStr} effOcc={effectiveStr} reg={registered} " +
                     $"playing={slot.Sound?.IsPlaying ?? false} " +
                     $"posMode={(PositionSelector != null ? "wind" : "default")}");
             }

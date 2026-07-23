@@ -77,18 +77,6 @@ namespace soundphysicsadapted
         private static Vec3d _reusableCacheDirNorm = new Vec3d();
 
         /// <summary>
-        /// Calculate reverb parameters for a sound at given position.
-        /// Backward-compatible wrapper - delegates to CalculateWithPathsCacheable, discards path results.
-        /// </summary>
-        public static ReverbResult Calculate(Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor)
-        {
-            var (reverb, _) = CalculateWithPathsCacheable(
-                soundPos, playerPos, blockAccessor, -1f, 32f,
-                out _, out _, out _, out _, out _, out _, out _);
-            return reverb;
-        }
-
-        /// <summary>
         /// Calculate reverb AND sound path for repositioning (Phase 4B).
         /// Wrapper that delegates to CalculateWithPathsCacheable, discarding cache capture data.
         /// </summary>

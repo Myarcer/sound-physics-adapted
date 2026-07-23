@@ -48,6 +48,24 @@ namespace soundphysicsadapted
         private static List<WeakReference<ILoadedSound>> preWarmupSoundQueue = new List<WeakReference<ILoadedSound>>();
         private static bool preWarmupQueueProcessed = false;
 
+        // The occlusion/reverb compute cores (OcclusionCalculator, AcousticRaytracer,
+        // SoundSourceAdjuster) use shared static scratch state and are only safe on the
+        // main thread. Start()/LoadSound can fire on the music-engine worker thread
+        // (verified in VS 1.21/1.22: MusicTrack.BeginPlay's onLoaded callback runs on the
+        // music thread and resonator/boombox tracks are POSITIONAL music). Off-thread we
+        // only register the sound (thread-safe: ConcurrentDictionary + OpenAL) and let
+        // the next 50ms physics tick do the raycasting.
+        private static int _mainThreadId = -1;
+        private static bool IsMainThread => Environment.CurrentManagedThreadId == _mainThreadId;
+
+        /// <summary>
+        /// Public main-thread check for external callers (SoundPhysicsAPI).
+        /// The occlusion/raytrace cores are main-thread-only (shared static scratch
+        /// state) — API queries from other threads must be rejected, not computed.
+        /// Returns false when patches haven't initialized yet (id -1).
+        /// </summary>
+        public static bool IsOnMainThread => _mainThreadId != -1 && IsMainThread;
+
         /// <summary>
         /// Manually apply patches using reflection
         /// Called from ModSystem.StartClientSide
@@ -55,7 +73,9 @@ namespace soundphysicsadapted
         public static void ApplyPatches(Harmony harmony, ICoreClientAPI api)
         {
             cachedApi = api;
-            
+            // StartClientSide runs on the main game thread — capture it for the gate.
+            _mainThreadId = Environment.CurrentManagedThreadId;
+
             try
             {
                 Assembly vsLib = null;
@@ -645,10 +665,13 @@ namespace soundphysicsadapted
         public static void MarkLocalPlayerSoundPosition(double x, double y, double z)
         {
             long key = PackBlockKey((int)Math.Floor(x), (int)Math.Floor(y), (int)Math.Floor(z));
-            // Trim oldest entries if the queue grows unexpectedly (e.g. rapid block spam).
-            while (_localPlayerOcclusionSkipQueue.Count >= OCCLUSION_SKIP_QUEUE_MAX)
-                _localPlayerOcclusionSkipQueue.RemoveAt(0);
-            _localPlayerOcclusionSkipQueue.Add(key);
+            lock (_localPlayerOcclusionSkipQueue)
+            {
+                // Trim oldest entries if the queue grows unexpectedly (e.g. rapid block spam).
+                while (_localPlayerOcclusionSkipQueue.Count >= OCCLUSION_SKIP_QUEUE_MAX)
+                    _localPlayerOcclusionSkipQueue.RemoveAt(0);
+                _localPlayerOcclusionSkipQueue.Add(key);
+            }
         }
 
         /// <summary>
@@ -662,7 +685,8 @@ namespace soundphysicsadapted
         {
             if (pos == null || _localPlayerOcclusionSkipQueue.Count == 0) return false;
             long key = PackBlockKey((int)Math.Floor(pos.X), (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
-            return _localPlayerOcclusionSkipQueue.Contains(key);
+            lock (_localPlayerOcclusionSkipQueue)
+                return _localPlayerOcclusionSkipQueue.Contains(key);
         }
 
         /// <summary>
@@ -675,11 +699,14 @@ namespace soundphysicsadapted
         {
             if (pos == null || _localPlayerOcclusionSkipQueue.Count == 0) return false;
             long key = PackBlockKey((int)Math.Floor(pos.X), (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
-            int idx = _localPlayerOcclusionSkipQueue.IndexOf(key);
-            if (idx >= 0)
+            lock (_localPlayerOcclusionSkipQueue)
             {
-                _localPlayerOcclusionSkipQueue.RemoveAt(idx);
-                return true;
+                int idx = _localPlayerOcclusionSkipQueue.IndexOf(key);
+                if (idx >= 0)
+                {
+                    _localPlayerOcclusionSkipQueue.RemoveAt(idx);
+                    return true;
+                }
             }
             return false;
         }
@@ -692,12 +719,15 @@ namespace soundphysicsadapted
         {
             long now = Environment.TickCount64;
 
-            // Expire old entries
-            _localPlayerSoundPositions.RemoveAll(e => now - e.tickMs > POSITION_EXPIRY_MS);
-            while (_localPlayerSoundPositions.Count >= MAX_POSITION_QUEUE)
-                _localPlayerSoundPositions.RemoveAt(0);
+            lock (_localPlayerSoundPositions)
+            {
+                // Expire old entries
+                _localPlayerSoundPositions.RemoveAll(e => now - e.tickMs > POSITION_EXPIRY_MS);
+                while (_localPlayerSoundPositions.Count >= MAX_POSITION_QUEUE)
+                    _localPlayerSoundPositions.RemoveAt(0);
 
-            _localPlayerSoundPositions.Add((x, y, z, now));
+                _localPlayerSoundPositions.Add((x, y, z, now));
+            }
 
             // Also tag for occlusion-skip — covers entity-position sounds the
             // local player emits (footsteps, swing, voice) at any distance from
@@ -1442,6 +1472,18 @@ namespace soundphysicsadapted
                         SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
                             $"INIT-SKIP (local player): {soundName} pos=({position.X:F1},{position.Y:F1},{position.Z:F1})");
                 }
+                else if (!IsMainThread)
+                {
+                    // OFF-THREAD START (music engine worker — e.g. resonator/boombox tracks):
+                    // the DDA/raytrace cores use shared static scratch state and must not run
+                    // concurrently with the main-thread physics tick. Register the sound with
+                    // a passthrough filter (thread-safe path) — the next 50ms tick sees it as
+                    // a new/overdue sound and computes real occlusion immediately.
+                    ApplyLowPassFilter(loadedSound, 1.0f, posd, soundName);
+                    if (SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"INIT-DEFER (off-thread): {soundName} registered, occlusion deferred to tick");
+                }
                 else
                 {
                     ApplyOcclusion(loadedSound, position, soundName);
@@ -1493,14 +1535,26 @@ namespace soundphysicsadapted
                 // Source must be in valid state — Postfix runs after AL.SourcePlay so it is.
                 ApplyDistanceModel(loadedSound, sourceId, soundName);
 
-                // Apply reverb only after world is fully loaded and warmed up.
-                // During loading, tick system will handle reverb with budget limits.
-                if (SoundPhysicsAdaptedModSystem.IsWorldReady && config.EnableCustomReverb)
+                // FAST START REVERB (no raytrace): the old path ran a full 32-ray x 4-bounce
+                // raytrace synchronously on EVERY sound start, bypassing the cell cache,
+                // throttle and tick time budget — a burst of one-shots (rain impacts, combat,
+                // group footsteps) spiked the frame exactly when audio density peaks.
+                // Instead, apply the best cheap approximation NOW so the attack is never dry:
+                //   1. Cell-cache hit — room-correct reverb from a nearby sound's recent
+                //      raytrace (cost: one DDA wall check), or
+                //   2. Player-room reverb (refreshed every 250ms) — correct room for the
+                //      near one-shots where reverb is most audible.
+                // The physics tick computes the exact value within <=50ms and EMA-blends it.
+                // OFF-THREAD: skip entirely — cell cache lookup DDAs use shared static
+                // scratch state; the tick handles reverb for those sounds.
+                if (SoundPhysicsAdaptedModSystem.IsWorldReady && config.EnableCustomReverb
+                    && IsMainThread && ReverbEffects.IsInitialized)
                 {
                     if (cachedBlockAccessor == null)
                         cachedBlockAccessor = cachedApi?.World?.BlockAccessor;
 
-                    if (cachedBlockAccessor != null && cachedApi?.World?.Player?.Entity != null)
+                    var acoustics = SoundPhysicsAdaptedModSystem.Acoustics;
+                    if (acoustics != null && cachedBlockAccessor != null && cachedApi?.World?.Player?.Entity != null)
                     {
                         var player = cachedApi.World.Player.Entity;
                         Vec3d playerPos = player.Pos.XYZ.Add(player.LocalEyePos);
@@ -1509,15 +1563,28 @@ namespace soundphysicsadapted
                         Vec3f pos = soundParams?.Position;
                         bool hasPosition = pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0);
 
+                        ReverbResult startReverb = acoustics.CachedPlayerReverb;
+                        bool isSourceUnderwater = false;
+
                         if (hasPosition)
                         {
                             Vec3d soundPosD = new Vec3d(pos.X, pos.Y, pos.Z);
-                            ApplyReverb(loadedSound, soundPosD, playerPos, cachedBlockAccessor);
+
+                            // PeekCell: stats-free read — this approximation path must not
+                            // inflate hit-rate stats or LRU recency (physics tick re-reads
+                            // the cell properly within 50ms).
+                            var cell = acoustics.CellCache?.PeekCell(
+                                soundPosD, playerPos, cachedApi.World.ElapsedMilliseconds,
+                                cachedBlockAccessor);
+                            if (cell != null) startReverb = cell.Reverb;
+
+                            // Underwater source reduces reverb (fluid layer covers waterlogged blocks)
+                            BlockPos soundBlockPos = new BlockPos((int)soundPosD.X, (int)soundPosD.Y, (int)soundPosD.Z);
+                            Block soundBlock = cachedBlockAccessor.GetBlock(soundBlockPos, BlockLayersAccess.Fluid);
+                            isSourceUnderwater = soundBlock != null && soundBlock.IsLiquid();
                         }
-                        else
-                        {
-                            ApplyReverb(loadedSound, playerPos, playerPos, cachedBlockAccessor);
-                        }
+
+                        ReverbEffects.ApplyToSource(sourceId, startReverb, isSourceUnderwater);
                     }
                 }
             }

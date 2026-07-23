@@ -72,38 +72,126 @@ namespace soundphysicsadapted
     /// Greedy clustering algorithm for grouping nearby verified rain openings
     /// into positional audio source groups.
     ///
-    /// Input: WeatherEnclosureCalculator.VerifiedOpenings (up to ~15 positions)
+    /// Input: WeatherEnclosureCalculator.VerifiedOpenings (up to ~50 positions)
     /// Output: Up to MaxClusters groups, each becoming one positional audio source.
     ///
-    /// Algorithm: Simple greedy — pick strongest unclustered point as seed,
-    /// absorb all points within CLUSTER_RADIUS. Repeat until max clusters reached
-    /// or no points remain.
+    /// Two phases:
+    /// 1. Anchored — previous cycle's verified tracked openings seed clusters,
+    ///    preserving cluster identity across cycles (stable centroids).
+    /// 2. Greedy — pick strongest unclustered point as seed, absorb neighbors.
     ///
-    /// Performance: O(n²) on ≤15 input points = trivial.
+    /// Performance: O(n²) on small n = trivial; runs every ~100ms weather tick.
     /// </summary>
     public static class OpeningClusterer
     {
         /// <summary>
         /// Maximum horizontal distance (blocks) to merge openings into same cluster.
-        /// 3 blocks ≈ typical door width or roof hole.
+        /// 3.5 blocks ≈ typical door width or roof hole.
         /// Openings further apart become separate sources (different directions).
         /// </summary>
         private const float CLUSTER_RADIUS = 3.5f;
         private const float CLUSTER_RADIUS_SQ = CLUSTER_RADIUS * CLUSTER_RADIUS;
 
-        // Reusable list to avoid GC pressure (called every 500ms)
+        // Reusable across calls to avoid GC pressure
         private static readonly List<OpeningCluster> resultClusters = new List<OpeningCluster>(8);
         private static bool[] consumed = new bool[32]; // Grows if needed
 
         /// <summary>
+        /// Accumulates members into one cluster: centroid weights, aggregate stats,
+        /// and the wind ceiling height — all in a single pass over the members.
+        /// </summary>
+        private struct ClusterBuilder
+        {
+            public List<Vec3d> MemberPositions;
+            public List<Vec3d> MemberEntryPositions;
+            public int MemberCount;
+            private double centX, centY, centZ, centWeightSum;
+            private float totalOcclusion, totalDistance, totalWeight;
+            private double maxSkyY;
+
+            public static ClusterBuilder Create()
+            {
+                return new ClusterBuilder
+                {
+                    MemberPositions = new List<Vec3d>(8),
+                    MemberEntryPositions = new List<Vec3d>(8),
+                    maxSkyY = double.NaN
+                };
+            }
+
+            public void Add(VerifiedRainPosition op)
+            {
+                MemberPositions.Add(op.WorldPos);
+                Vec3d entry = op.EntryPos ?? op.WorldPos;
+                MemberEntryPositions.Add(entry);
+
+                // Occlusion-weighted centroid: clarity² pulls toward least-occluded members
+                float clarity = Math.Max(1f - Math.Min(op.Occlusion, 1f), 0.01f);
+                float centW = clarity * clarity;
+                centX += entry.X * centW;
+                centY += entry.Y * centW;
+                centZ += entry.Z * centW;
+                centWeightSum += centW;
+                totalOcclusion += op.Occlusion;
+                totalDistance += op.Distance;
+                totalWeight += (1f - Math.Min(op.Occlusion, 1f)) / (1f + op.Distance * 0.15f);
+                MemberCount++;
+
+                // Wind Y: highest known ceiling among sky-opening members
+                // (edge columns know the roof height, interior columns inherit it)
+                if (op.EntryPos == null && !double.IsNaN(op.SkyOpeningY)
+                    && (double.IsNaN(maxSkyY) || op.SkyOpeningY > maxSkyY))
+                {
+                    maxSkyY = op.SkyOpeningY;
+                }
+            }
+
+            public OpeningCluster Build()
+            {
+                var centroid = new Vec3d(
+                    centX / centWeightSum, centY / centWeightSum, centZ / centWeightSum);
+                return new OpeningCluster
+                {
+                    Centroid = centroid,
+                    MemberCount = MemberCount,
+                    AverageOcclusion = totalOcclusion / MemberCount,
+                    AverageDistance = totalDistance / MemberCount,
+                    TotalWeight = totalWeight,
+                    MemberPositions = MemberPositions,
+                    MemberEntryPositions = MemberEntryPositions,
+                    WindCentroid = double.IsNaN(maxSkyY)
+                        ? new Vec3d(centroid.X, centroid.Y, centroid.Z)
+                        : new Vec3d(centroid.X, maxSkyY, centroid.Z)
+                };
+            }
+        }
+
+        /// <summary>
+        /// Absorb all unconsumed openings within CLUSTER_RADIUS (horizontal) of the
+        /// given center into a new ClusterBuilder, marking them consumed.
+        /// </summary>
+        private static ClusterBuilder AbsorbAround(
+            IReadOnlyList<VerifiedRainPosition> openings, int count, double cx, double cz)
+        {
+            var builder = ClusterBuilder.Create();
+            for (int i = 0; i < count; i++)
+            {
+                if (consumed[i]) continue;
+
+                var candidate = openings[i];
+                double dx = candidate.WorldPos.X - cx;
+                double dz = candidate.WorldPos.Z - cz;
+                if (dx * dx + dz * dz <= CLUSTER_RADIUS_SQ)
+                {
+                    builder.Add(candidate);
+                    consumed[i] = true;
+                }
+            }
+            return builder;
+        }
+
+        /// <summary>
         /// Cluster verified openings into positional source groups.
-        /// 
-        /// Greedy algorithm:
-        /// 1. Score each opening: clarity * inverse distance (best audible opening)
-        /// 2. Pick highest-scoring unconsumed opening as cluster seed
-        /// 3. Absorb all unconsumed openings within CLUSTER_RADIUS of seed
-        /// 4. Compute centroid and aggregate stats
-        /// 5. Repeat until maxClusters reached or no openings remain
         /// </summary>
         /// <param name="openings">Verified rain positions from WeatherEnclosureCalculator</param>
         /// <param name="maxClusters">Maximum clusters to produce (= max positional sources)</param>
@@ -122,7 +210,6 @@ namespace soundphysicsadapted
             int count = openings.Count;
             if (count == 0 || maxClusters <= 0) return resultClusters;
 
-            // Reset consumed flags (grow array if needed)
             if (count > consumed.Length)
             {
                 consumed = new bool[count];
@@ -133,9 +220,6 @@ namespace soundphysicsadapted
             int clusterIdx = 0;
 
             // ── Phase 1: Anchored clustering ──
-            // Use previous cycle's tracked opening positions as cluster seeds.
-            // This prevents centroid re-seeding instability: the same openings
-            // end up in the same cluster each tick, producing stable centroids.
             // Only tracked openings verified last cycle are used as anchors
             // (not persisted behind-corner ones, which would pull front openings).
             if (anchors != null && anchors.Count > 0)
@@ -143,71 +227,21 @@ namespace soundphysicsadapted
                 for (int a = 0; a < anchors.Count && clusterIdx < maxClusters; a++)
                 {
                     var anchor = anchors[a];
-                    // Only use anchors that were verified last cycle
                     if (!anchor.CurrentlyVerified) continue;
 
-                    var memberPositions = new List<Vec3d>(8);
-                    var memberEntryPositions = new List<Vec3d>(8);
-                    double centX = 0, centY = 0, centZ = 0;
-                    double centWeightSum = 0;
-                    float totalOcclusion = 0, totalDistance = 0, totalWeight = 0;
-                    int memberCount = 0;
-
-                    for (int i = 0; i < count; i++)
+                    var builder = AbsorbAround(openings, count, anchor.WorldPos.X, anchor.WorldPos.Z);
+                    if (builder.MemberCount > 0)
                     {
-                        if (consumed[i]) continue;
-
-                        var candidate = openings[i];
-                        // Distance from candidate to ANCHOR position (stable center)
-                        double dx = candidate.WorldPos.X - anchor.WorldPos.X;
-                        double dz = candidate.WorldPos.Z - anchor.WorldPos.Z;
-                        double distSq = dx * dx + dz * dz;
-
-                        if (distSq <= CLUSTER_RADIUS_SQ)
-                        {
-                            memberPositions.Add(candidate.WorldPos);
-                            Vec3d entry = candidate.EntryPos ?? candidate.WorldPos;
-                            memberEntryPositions.Add(entry);
-                            // Occlusion-weighted centroid: clarity² pulls toward least-occluded members
-                            float clarity = Math.Max(1f - Math.Min(candidate.Occlusion, 1f), 0.01f);
-                            float centW = clarity * clarity;
-                            centX += entry.X * centW;
-                            centY += entry.Y * centW;
-                            centZ += entry.Z * centW;
-                            centWeightSum += centW;
-                            totalOcclusion += candidate.Occlusion;
-                            totalDistance += candidate.Distance;
-                            totalWeight += (1f - Math.Min(candidate.Occlusion, 1f)) / (1f + candidate.Distance * 0.15f);
-                            memberCount++;
-                            consumed[i] = true;
-                        }
-                    }
-
-                    if (memberCount > 0)
-                    {
-                        var centroid = new Vec3d(centX / centWeightSum, centY / centWeightSum, centZ / centWeightSum);
-                        resultClusters.Add(new OpeningCluster
-                        {
-                            Centroid = centroid,
-                            MemberCount = memberCount,
-                            AverageOcclusion = totalOcclusion / memberCount,
-                            AverageDistance = totalDistance / memberCount,
-                            TotalWeight = totalWeight,
-                            MemberPositions = memberPositions,
-                            MemberEntryPositions = memberEntryPositions,
-                            WindCentroid = ComputeWindCentroid(centroid, openings, consumed, count, memberPositions)
-                        });
+                        resultClusters.Add(builder.Build());
                         clusterIdx++;
                     }
                 }
             }
 
             // ── Phase 2: Greedy clustering for remaining unassigned openings ──
-            // Handles openings too far from any anchor, and the first cycle
-            // when no anchors exist yet.
             for (; clusterIdx < maxClusters; clusterIdx++)
             {
-                // Find best unconsumed seed (highest weight = most audible)
+                // Find best unconsumed seed: clarity weighted by inverse distance
                 int bestSeed = -1;
                 float bestScore = -1f;
 
@@ -216,7 +250,6 @@ namespace soundphysicsadapted
                     if (consumed[i]) continue;
 
                     var op = openings[i];
-                    // Score: clarity (inverse occlusion) weighted by inverse distance
                     float clarity = 1f - Math.Min(op.Occlusion, 1f);
                     float distWeight = 1f / (1f + op.Distance * 0.1f);
                     float score = clarity * distWeight;
@@ -230,135 +263,16 @@ namespace soundphysicsadapted
 
                 if (bestSeed < 0) break; // All consumed
 
-                // Build cluster around seed
-                var seed = openings[bestSeed];
-                var memberPositions = new List<Vec3d>(8);
-                var memberEntryPositions = new List<Vec3d>(8);
-                memberPositions.Add(seed.WorldPos);
-                // Use entry point for centroid (source placement) — fall back to rain pos for sky openings
-                Vec3d seedEntry = seed.EntryPos ?? seed.WorldPos;
-                memberEntryPositions.Add(seedEntry);
-                // Occlusion-weighted centroid: clarity² pulls toward least-occluded members
-                float seedClarity = Math.Max(1f - Math.Min(seed.Occlusion, 1f), 0.01f);
-                float seedCentW = seedClarity * seedClarity;
-                double centX = seedEntry.X * seedCentW;
-                double centY = seedEntry.Y * seedCentW;
-                double centZ = seedEntry.Z * seedCentW;
-                double centWeightSum = seedCentW;
-                float totalOcclusion = seed.Occlusion;
-                float totalDistance = seed.Distance;
-                float totalWeight = (1f - Math.Min(seed.Occlusion, 1f)) / (1f + seed.Distance * 0.15f);
-                int memberCount = 1;
-                consumed[bestSeed] = true;
-
-                // Absorb nearby unconsumed openings
-                for (int i = 0; i < count; i++)
-                {
-                    if (consumed[i]) continue;
-
-                    var candidate = openings[i];
-
-                    // Horizontal distance check (ignore Y — rain at different heights can cluster)
-                    double dx = candidate.WorldPos.X - seed.WorldPos.X;
-                    double dz = candidate.WorldPos.Z - seed.WorldPos.Z;
-                    double distSq = dx * dx + dz * dz;
-
-                    if (distSq <= CLUSTER_RADIUS_SQ)
-                    {
-                        memberPositions.Add(candidate.WorldPos);
-                        Vec3d candEntry = candidate.EntryPos ?? candidate.WorldPos;
-                        memberEntryPositions.Add(candEntry);
-                        // Occlusion-weighted centroid contribution
-                        float candClarity = Math.Max(1f - Math.Min(candidate.Occlusion, 1f), 0.01f);
-                        float candCentW = candClarity * candClarity;
-                        centX += candEntry.X * candCentW;
-                        centY += candEntry.Y * candCentW;
-                        centZ += candEntry.Z * candCentW;
-                        centWeightSum += candCentW;
-                        totalOcclusion += candidate.Occlusion;
-                        totalDistance += candidate.Distance;
-                        totalWeight += (1f - Math.Min(candidate.Occlusion, 1f)) / (1f + candidate.Distance * 0.15f);
-                        memberCount++;
-                        consumed[i] = true;
-                    }
-                }
-
-                // Compute occlusion-weighted centroid
-                var centroid2 = new Vec3d(centX / centWeightSum, centY / centWeightSum, centZ / centWeightSum);
-                resultClusters.Add(new OpeningCluster
-                {
-                    Centroid = centroid2,
-                    MemberCount = memberCount,
-                    AverageOcclusion = totalOcclusion / memberCount,
-                    AverageDistance = totalDistance / memberCount,
-                    TotalWeight = totalWeight,
-                    MemberPositions = memberPositions,
-                    MemberEntryPositions = memberEntryPositions,
-                    WindCentroid = ComputeWindCentroid(centroid2, openings, consumed, count, memberPositions)
-                });
+                // AbsorbAround picks up the seed itself (distance 0) plus neighbors
+                var seedPos = openings[bestSeed].WorldPos;
+                var builder = AbsorbAround(openings, count, seedPos.X, seedPos.Z);
+                resultClusters.Add(builder.Build());
             }
 
             // Sort by TotalWeight descending — best clusters first
             resultClusters.Sort((a, b) => b.TotalWeight.CompareTo(a.TotalWeight));
 
             return resultClusters;
-        }
-
-        /// <summary>
-        /// Compute the wind centroid for a cluster: same X/Z as the regular centroid,
-        /// but Y is derived from SkyOpeningY (ceiling height) for sky openings.
-        /// Uses cluster-level propagation: if any member has a valid SkyOpeningY,
-        /// the max value is used for the entire cluster (edge columns know the roof height,
-        /// interior columns of large holes inherit it).
-        /// </summary>
-        private static Vec3d ComputeWindCentroid(
-            Vec3d centroid,
-            IReadOnlyList<VerifiedRainPosition> allOpenings,
-            bool[] consumed,
-            int totalCount,
-            List<Vec3d> memberPositions)
-        {
-            // Find the max valid SkyOpeningY among cluster members
-            double maxSkyY = double.NaN;
-
-            for (int i = 0; i < totalCount; i++)
-            {
-                // Only check members that were consumed into THIS cluster
-                // Match by checking if their WorldPos is in memberPositions
-                var op = allOpenings[i];
-                bool isMember = false;
-                for (int m = 0; m < memberPositions.Count; m++)
-                {
-                    if (memberPositions[m].X == op.WorldPos.X &&
-                        memberPositions[m].Y == op.WorldPos.Y &&
-                        memberPositions[m].Z == op.WorldPos.Z)
-                    {
-                        isMember = true;
-                        break;
-                    }
-                }
-                if (!isMember) continue;
-
-                // Only sky openings (EntryPos == null) contribute SkyOpeningY
-                if (op.EntryPos != null) continue;
-                if (double.IsNaN(op.SkyOpeningY)) continue;
-
-                if (double.IsNaN(maxSkyY) || op.SkyOpeningY > maxSkyY)
-                    maxSkyY = op.SkyOpeningY;
-            }
-
-            // If no valid SkyOpeningY found, wind uses same position as rain
-            if (double.IsNaN(maxSkyY))
-                return new Vec3d(centroid.X, centroid.Y, centroid.Z);
-
-            if (SoundPhysicsAdaptedModSystem.Config?.DebugMode == true
-                && SoundPhysicsAdaptedModSystem.Config?.DebugPositionalWeather == true)
-            {
-                WeatherAudioManager.WeatherDebugLog(
-                    $"[5A-WIND] WindCentroid: centroidY={centroid.Y:F1} -> windY={maxSkyY:F1} (ceiling)");
-            }
-
-            return new Vec3d(centroid.X, maxSkyY, centroid.Z);
         }
     }
 }
