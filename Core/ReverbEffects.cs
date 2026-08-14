@@ -29,6 +29,17 @@ namespace soundphysicsadapted
         private static int _reverb3;
 
         // Send filters (for per-source gain/cutoff control)
+        //
+        // TRAP — SHARED filter objects, correct ONLY via copy-on-attach:
+        // These 4 filter ids are shared across ALL sources. EFX copies a filter's
+        // parameters into the send at alSource3i(AL_AUXILIARY_SEND_FILTER) attach
+        // time, so the per-source pattern MUST always be:
+        //   SetFilterGains(filter, ...) THEN ConnectSourceToAuxSlot(source, ...)
+        // (as ApplyToSource does). Editing a send filter WITHOUT re-attaching does
+        // NOT update already-attached sends — and conversely never add a path that
+        // mutates these filters expecting it to affect connected sources. If a
+        // future feature needs live per-source send updates, it needs per-source
+        // filter objects instead.
         private static int _sendFilter0;
         private static int _sendFilter1;
         private static int _sendFilter2;
@@ -74,10 +85,12 @@ namespace soundphysicsadapted
                     return false;
                 }
 
-                // Create auxiliary effect slots (only as many as the device supports)
+                // Create auxiliary effect slots (only as many as we actually use:
+                // apply paths run in 4-send, 2-send or 1-send mode — at exactly
+                // 3 sends we run 2-send mode, so slot 2 would sit idle)
                 _auxSlot0 = CreateAuxSlot();
                 if (_maxAuxSends >= 2) _auxSlot1 = CreateAuxSlot();
-                if (_maxAuxSends >= 3) _auxSlot2 = CreateAuxSlot();
+                if (_maxAuxSends >= 4) _auxSlot2 = CreateAuxSlot();
                 if (_maxAuxSends >= 4) _auxSlot3 = CreateAuxSlot();
 
                 // Verify at least one slot was created
@@ -128,7 +141,7 @@ namespace soundphysicsadapted
                 // Create send filters (only for sends we actually use)
                 _sendFilter0 = EfxHelper.CreateLowpassFilter();
                 if (_maxAuxSends >= 2) _sendFilter1 = EfxHelper.CreateLowpassFilter();
-                if (_maxAuxSends >= 3) _sendFilter2 = EfxHelper.CreateLowpassFilter();
+                if (_maxAuxSends >= 4) _sendFilter2 = EfxHelper.CreateLowpassFilter();
                 if (_maxAuxSends >= 4) _sendFilter3 = EfxHelper.CreateLowpassFilter();
 
                 int effectsCreated = (_reverb0 > 0 ? 1 : 0) + (_reverb1 > 0 ? 1 : 0) +

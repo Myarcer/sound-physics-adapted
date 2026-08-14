@@ -99,18 +99,19 @@ namespace soundphysicsadapted
         /// </summary>
         public static AudioData EnsureMono(AudioData audiodata, SoundParams sparams)
         {
-            // Fast path: check explicit requests first
-            bool explicitRequest = false;
+            // Explicit requests are PEEKED, not consumed. Consuming up front threw the
+            // request away whenever the swap could not happen (data not an AudioMetaData,
+            // or a decode that never produced PCM), and the sound then played stereo with
+            // no log line to say so. The per-asset request is consumed on commit only.
+            bool explicitRequest = ForceMonoNextLoad;
 
-            if (ForceMonoNextLoad)
-            {
-                ForceMonoNextLoad = false;
-                explicitRequest = true;
-            }
+            // ForceMonoNextLoad is a one-shot for this load call by contract — clear it
+            // now so a failed downmix cannot leak the flag onto the next sound.
+            ForceMonoNextLoad = false;
 
             if (!explicitRequest && sparams?.Location != null)
             {
-                explicitRequest = CheckAndConsumeMonoRequest(sparams.Location);
+                explicitRequest = MatchMonoRequest(sparams.Location, consume: false);
             }
 
             // Auto-detection: positional + multi-channel → needs mono
@@ -121,13 +122,29 @@ namespace soundphysicsadapted
 
             // Get the multi-channel AudioMetaData
             var sourceMeta = audiodata as AudioMetaData;
-            if (sourceMeta == null) return audiodata;
+            if (sourceMeta == null)
+            {
+                SoundPhysicsAdaptedModSystem.DebugLog(
+                    $"[MonoDownmix] MISS: '{sparams?.Location}' is {audiodata?.GetType().Name ?? "null"}, " +
+                    "not AudioMetaData — sound stays stereo and will not be positional");
+                return audiodata;
+            }
 
-            // Already mono — no conversion needed
-            if (sourceMeta.Channels < 2) return audiodata;
+            var result = GetOrCreateMonoVersion(sourceMeta);
 
-            // Get or create mono version
-            return GetOrCreateMonoVersion(sourceMeta);
+            if (!ReferenceEquals(result, sourceMeta) || sourceMeta.Channels < 2)
+            {
+                // Downmixed, or the asset was mono to begin with — the request is served.
+                if (sparams?.Location != null) MatchMonoRequest(sparams.Location, consume: true);
+            }
+            else
+            {
+                SoundPhysicsAdaptedModSystem.DebugLog(
+                    $"[MonoDownmix] MISS: downmix of '{sparams?.Location}' failed " +
+                    $"(channels={sourceMeta.Channels}, loaded={sourceMeta.Loaded}) — sound stays stereo");
+            }
+
+            return result;
         }
 
         /// <summary>
@@ -253,6 +270,16 @@ namespace soundphysicsadapted
         /// </summary>
         public static bool CheckAndConsumeMonoRequest(AssetLocation location)
         {
+            return MatchMonoRequest(location, consume: true);
+        }
+
+        /// <summary>
+        /// Match an asset against the pending mono request set, optionally consuming it.
+        /// Peek (consume: false) lets a caller decide to downmix and only then remove the
+        /// request, so a failed swap does not silently discard it.
+        /// </summary>
+        public static bool MatchMonoRequest(AssetLocation location, bool consume)
+        {
             if (location == null) return false;
 
             lock (monoLock)
@@ -261,25 +288,30 @@ namespace soundphysicsadapted
 
                 // Try path directly
                 string path = location.Path?.ToLowerInvariant() ?? "";
-                if (pendingMonoAssets.Remove(path)) return true;
+                if (Match(path, consume)) return true;
 
                 // Try with .ogg
-                if (!path.EndsWith(".ogg"))
-                {
-                    if (pendingMonoAssets.Remove(path + ".ogg")) return true;
-                }
+                if (!path.EndsWith(".ogg") && Match(path + ".ogg", consume)) return true;
 
                 // Try with music/ prefix
                 if (!path.StartsWith("sounds", StringComparison.Ordinal) && !path.StartsWith("music/", StringComparison.Ordinal))
                 {
                     string musicPath = "music/" + path;
-                    if (pendingMonoAssets.Remove(musicPath)) return true;
-                    if (!musicPath.EndsWith(".ogg") && pendingMonoAssets.Remove(musicPath + ".ogg")) return true;
+                    if (Match(musicPath, consume)) return true;
+                    if (!musicPath.EndsWith(".ogg") && Match(musicPath + ".ogg", consume)) return true;
                 }
 
                 // Try full location string (domain:path)
-                return pendingMonoAssets.Remove(location.ToString());
+                return Match(location.ToString(), consume);
             }
+        }
+
+        /// <summary>Set lookup helper. Caller holds monoLock.</summary>
+        private static bool Match(string key, bool consume)
+        {
+            if (!pendingMonoAssets.Contains(key)) return false;
+            if (consume) pendingMonoAssets.Remove(key);
+            return true;
         }
 
         /// <summary>

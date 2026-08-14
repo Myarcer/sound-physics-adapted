@@ -55,6 +55,30 @@ namespace soundphysicsadapted
             }
         }
 
+        // ── Main-thread gate ──
+        // The compute cores (OcclusionCalculator, AcousticRaytracer, SoundPathResolver)
+        // run on SHARED STATIC scratch state and are only safe on the client game
+        // thread — the same reason LoadSoundPatch defers off-thread Start() to the
+        // tick. Voice mods (RPVoiceChat) process audio on their own threads; an
+        // off-thread query mid-tick would silently corrupt occlusion/reverb of
+        // unrelated sounds. Off-thread calls return passthrough values instead.
+        private static bool _offThreadWarned;
+
+        private static bool GuardMainThread(string caller)
+        {
+            if (soundphysicsadapted.LoadSoundPatch.IsOnMainThread) return true;
+
+            if (!_offThreadWarned)
+            {
+                _offThreadWarned = true;
+                SoundPhysicsAdaptedModSystem.ClientApi?.Logger.Warning(
+                    $"[SoundPhysicsAdapted] SoundPhysicsAPI.{caller} called off the main thread — " +
+                    "queries are main-thread-only (shared compute state). Returning passthrough values. " +
+                    "Marshal your query to the game thread (e.g. via EnqueueMainThreadTask).");
+            }
+            return false;
+        }
+
         /// <summary>
         /// Whether the reverb system is initialized and can provide reverb data.
         /// Reverb requires EFX auxiliary effect slots — some sound cards may not support them.
@@ -87,6 +111,7 @@ namespace soundphysicsadapted
         public static float GetOcclusionGainHF(Vec3d sourcePos, Vec3d listenerPos)
         {
             if (!IsAvailable) return 1f;
+            if (!GuardMainThread(nameof(GetOcclusionGainHF))) return 1f;
 
             try
             {
@@ -113,6 +138,7 @@ namespace soundphysicsadapted
         public static float GetRawOcclusion(Vec3d sourcePos, Vec3d listenerPos)
         {
             if (!IsAvailable) return 0f;
+            if (!GuardMainThread(nameof(GetRawOcclusion))) return 0f;
 
             try
             {
@@ -150,6 +176,8 @@ namespace soundphysicsadapted
         public static AcousticResult QueryAcoustics(Vec3d sourcePos, Vec3d listenerPos)
         {
             if (!IsAvailable)
+                return AcousticResult.Unavailable;
+            if (!GuardMainThread(nameof(QueryAcoustics)))
                 return AcousticResult.Unavailable;
 
             try

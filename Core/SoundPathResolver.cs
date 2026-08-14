@@ -79,10 +79,20 @@ namespace soundphysicsadapted
         /// </summary>
         public readonly float SharedAirspaceRatio;
 
+        /// <summary>
+        /// Total path occlusion (occToPlayer + diffraction penalty + occToSound) of the
+        /// BEST probe-found opening, or float.MaxValue when probes found none.
+        /// Probe openings are DDA-verified acoustic paths; they feed the muffle floor
+        /// so a sound repositioned to a doorway doesn't stay near-silent just because
+        /// the statistical fibonacci bounces missed the opening (Issue 19).
+        /// </summary>
+        public readonly float BestOpeningOcclusion;
+
         public SoundPathResult(Vec3d apparentPos, Vec3d originalPos, double avgOcclusion, double avgDist,
             int openPathCount, int totalPathCount,
             double permeatedOcclusion, double permeatedWeight, int permeatedPathCount,
-            double openAvgOcclusion, double blendedOcclusion, float sharedAirspaceRatio)
+            double openAvgOcclusion, double blendedOcclusion, float sharedAirspaceRatio,
+            float bestOpeningOcclusion)
         {
             ApparentPosition = apparentPos;
             AverageOcclusion = avgOcclusion;
@@ -96,6 +106,7 @@ namespace soundphysicsadapted
             OpenAverageOcclusion = openAvgOcclusion;
             BlendedOcclusion = blendedOcclusion;
             SharedAirspaceRatio = sharedAirspaceRatio;
+            BestOpeningOcclusion = bestOpeningOcclusion;
         }
     }
 
@@ -188,7 +199,8 @@ namespace soundphysicsadapted
         /// - No paths at all
         /// - Weighted directions cancel out
         /// </summary>
-        public SoundPathResult? Evaluate(Vec3d soundPos, Vec3d playerPos, SoundPhysicsConfig config, float sharedAirspaceRatio = 0f)
+        public SoundPathResult? Evaluate(Vec3d soundPos, Vec3d playerPos, SoundPhysicsConfig config, float sharedAirspaceRatio = 0f,
+            float bestOpeningOcclusion = float.MaxValue)
         {
             if (allPaths.Count == 0) return null;
 
@@ -297,7 +309,8 @@ namespace soundphysicsadapted
                 openCount, allPaths.Count,
                 permAvgOcc, permTotalWeight, permeatedCount,
                 openAvgOcc, blendedOcclusion, // ISSUE 5 FIX: Use percentile-based blended occlusion
-                sharedAirspaceRatio
+                sharedAirspaceRatio,
+                bestOpeningOcclusion
             );
         }
 

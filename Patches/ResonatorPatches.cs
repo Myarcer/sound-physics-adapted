@@ -608,6 +608,19 @@ namespace soundphysicsadapted.Patches
                     api.Logger.Notification("[SoundPhysicsAdapted] Resonator OnClientTick patch applied.");
                 }
 
+                // onTrackLoaded - position + register the sound before vanilla calls Start()
+                var trackLoadedMethod = AccessTools.Method(typeof(BlockEntityResonator), "onTrackLoaded");
+                if (trackLoadedMethod != null)
+                {
+                    var trackLoadedPostfix = typeof(ResonatorPatches).GetMethod("OnTrackLoadedPostfix");
+                    harmony.Patch(trackLoadedMethod, postfix: new HarmonyMethod(trackLoadedPostfix));
+                    api.Logger.Notification("[SoundPhysicsAdapted] Resonator onTrackLoaded patch applied (early positional registration).");
+                }
+                else
+                {
+                    api.Logger.Warning("[SoundPhysicsAdapted] Could not find BlockEntityResonator.onTrackLoaded — resonator stays unfiltered until first client tick");
+                }
+
                 // StartTrack sound type swap: Music slider → Ambient slider
                 PatchStartTrackSoundType(harmony, api);
 
@@ -755,6 +768,60 @@ namespace soundphysicsadapted.Patches
         #region Client Audio Logic
 
         /// <summary>
+        /// Give the resonator's music sound a world position and register it with the
+        /// occlusion/underwater pipeline. Returns the block-centre position.
+        ///
+        /// The resonator goes through MusicEngine.StartTrack(), which builds SoundParams
+        /// with no Position at all. SoundStartPrefix sees isNonPositional and returns
+        /// early, so without this the sound is invisible to occlusion and underwater
+        /// handling. Call it as early as possible — before Start(), from the
+        /// onTrackLoaded postfix — otherwise the track plays unfiltered until the first
+        /// OnClientTick, which was ~1 s of bright, unattenuated audio on world join.
+        /// SoundType is Ambient (patched from MusicGlitchunaffected), so the volume
+        /// follows the Ambient slider, not the Music slider.
+        /// </summary>
+        private static Vec3d MakePositional(BlockEntityResonator resonator, ILoadedSound sound, ICoreClientAPI capi)
+        {
+            var pos = resonator.Pos;
+            Vec3d soundPos = new Vec3d(pos.X + 0.5, pos.Y + 0.5, pos.Z + 0.5);
+
+            sound.SetPosition((float)soundPos.X, (float)soundPos.Y, (float)soundPos.Z);
+            AudioRenderer.UpdateStoredPosition(sound, soundPos);
+
+            if (!AudioRenderer.IsRegistered(sound))
+            {
+                AudioRenderer.SetOcclusion(sound, 1.0f, soundPos, "resonator-music");
+                // Mark as positional so RecalculateAllUnderwater uses non-music underwater filter
+                AudioRenderer.MarkAsPositional(sound);
+                capi.Logger.Debug($"[SoundPhysicsAdapted] [Resonator] Registered sound in activeFilters for occlusion/underwater at {pos}");
+            }
+
+            return soundPos;
+        }
+
+        /// <summary>
+        /// Postfix for BlockEntityResonator.onTrackLoaded — position and register the
+        /// track before vanilla's delayed callback calls Start(). SoundStartPrefix then
+        /// sees a positional sound and applies real occlusion before AL.SourcePlay(),
+        /// instead of the sound running wide open until the next client tick.
+        /// </summary>
+        public static void OnTrackLoadedPostfix(BlockEntityResonator __instance, ILoadedSound __0)
+        {
+            try
+            {
+                if (__0 == null || __0.IsDisposed) return;
+                ICoreClientAPI capi = __instance?.Api as ICoreClientAPI;
+                if (capi == null) return;
+
+                MakePositional(__instance, __0, capi);
+            }
+            catch
+            {
+                // Never break vanilla track loading
+            }
+        }
+
+        /// <summary>
         /// Prefix for OnClientTick - forces positional audio and physics-based attenuation.
         /// </summary>
         public static bool OnClientTickPrefix(object __instance, float dt)
@@ -771,28 +838,7 @@ namespace soundphysicsadapted.Patches
                 if (capi == null) return true;
 
                 var pos = resonator.Pos;
-                Vec3d soundPos = new Vec3d(pos.X + 0.5, pos.Y + 0.5, pos.Z + 0.5);
-
-                // 1. POSITION - Set to center of block
-                sound.SetPosition((float)soundPos.X, (float)soundPos.Y, (float)soundPos.Z);
-
-                // 1b. Update AudioRenderer position for occlusion tracking
-                AudioRenderer.UpdateStoredPosition(sound, soundPos);
-
-                // 1c. CRITICAL: Ensure resonator sound is registered in activeFilters
-                // The resonator goes through MusicEngine.StartTrack() which creates a non-positional
-                // sound. SoundStartPrefix sees isNonPositional and returns early without registering
-                // in activeFilters. This makes the sound invisible to the occlusion AND underwater pipeline.
-                // Fix: register it here on first tick, after we've set the position.
-                // Note: SoundType is Ambient (patched from MusicGlitchunaffected)
-                // so volume is controlled by the Ambient slider, not the Music slider.
-                if (!AudioRenderer.IsRegistered(sound))
-                {
-                    AudioRenderer.SetOcclusion(sound, 1.0f, soundPos, "resonator-music");
-                    // Mark as positional so RecalculateAllUnderwater uses non-music underwater filter
-                    AudioRenderer.MarkAsPositional(sound);
-                    capi.Logger.Debug($"[SoundPhysicsAdapted] [Resonator] Registered sound in activeFilters for occlusion/underwater at {pos}");
-                }
+                Vec3d soundPos = MakePositional(resonator, sound, capi);
 
                 // Disable OpenAL's own inverse-distance attenuation every tick so our
                 // CalculateResonatorDistanceAttenuation formula fully controls falloff.

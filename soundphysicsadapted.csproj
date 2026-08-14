@@ -23,9 +23,9 @@
     <CreateProperty Value="$([System.Text.RegularExpressions.Regex]::Match($(ModInfoContent), '&quot;version&quot;\s*:\s*&quot;([^&quot;]+)&quot;').Groups[1].Value)">
       <Output TaskParameter="Value" PropertyName="ModVersion" />
     </CreateProperty>
-    <!-- Strip pre-release suffix (e.g. -dev.2) for AssemblyVersion/FileVersion —
-         .NET requires purely numeric x.y.z[.w] format for these attributes. -->
-    <CreateProperty Value="$([System.Text.RegularExpressions.Regex]::Match($(ModVersion), '^\d+\.\d+(\.\d+)?(\.\d+)?').Value)">
+    <!-- Strip any SemVer pre-release suffix (e.g. -dev.1) for the numeric-only
+         AssemblyVersion/FileVersion attributes; NuGet <Version> keeps the full tag. -->
+    <CreateProperty Value="$([System.Text.RegularExpressions.Regex]::Match($(ModVersion), '^[0-9]+(\.[0-9]+){0,3}').Value)">
       <Output TaskParameter="Value" PropertyName="ModVersionNumeric" />
     </CreateProperty>
     <PropertyGroup>
@@ -33,7 +33,7 @@
       <AssemblyVersion>$(ModVersionNumeric)</AssemblyVersion>
       <FileVersion>$(ModVersionNumeric)</FileVersion>
     </PropertyGroup>
-    <Message Text="[ModVersion] Read version $(ModVersion) from modinfo.json" Importance="high" />
+    <Message Text="[ModVersion] Read version $(ModVersion) (numeric $(ModVersionNumeric)) from modinfo.json" Importance="high" />
   </Target>
 
 
@@ -82,7 +82,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Lib.Harmony" Version="2.3.3" />
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
   </ItemGroup>
 
   <ItemGroup>

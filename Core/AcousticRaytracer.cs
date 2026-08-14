@@ -309,8 +309,8 @@ namespace soundphysicsadapted
 
                     if (bounce < bounces - 1)
                     {
-                        Vec3d newRayDir = Reflect(lastRayDir, lastHitNormal);
-                        var nextHit = RaycastToSurface(lastHitPos, newRayDir, maxDistance, blockAccessor, lastHitBlock);
+                        ReflectInPlace(lastRayDir, lastHitNormal);
+                        var nextHit = RaycastToSurface(lastHitPos, lastRayDir, maxDistance, blockAccessor, lastHitBlock);
                         if (!nextHit.HasValue) { raysEscaped++; break; }
 
                         // Viz: capture bounce ray segment
@@ -325,7 +325,6 @@ namespace soundphysicsadapted
                         totalDistance += nextHit.Value.distance;
                         lastHitPos = nextHit.Value.position;
                         lastHitNormal = nextHit.Value.normal;
-                        lastRayDir = newRayDir;
                         lastHitBlock = nextHit.Value.blockPos;
                         hit = nextHit;
                     }
@@ -393,12 +392,13 @@ namespace soundphysicsadapted
                 }
 
                 bool skipProbes = soundDistance > 25f || directOcclusion < 1.0f;
+                float bestOpeningOcc = float.MaxValue;
                 if (!skipProbes)
                 {
-                    ProbeForOpenings(soundPos, playerPos, blockAccessor, config);
+                    bestOpeningOcc = ProbeForOpenings(soundPos, playerPos, blockAccessor, config);
                 }
 
-                pathResult = pathResolver.Evaluate(soundPos, playerPos, config, sharedAirspaceRatio);
+                pathResult = pathResolver.Evaluate(soundPos, playerPos, config, sharedAirspaceRatio, bestOpeningOcc);
 
                 // Log probe results for diagnostics (first 20 calculations only)
                 if (probeLogCount < 20 && config.DebugSoundPaths)
@@ -548,6 +548,7 @@ namespace soundphysicsadapted
             }
 
             // Add cached openings (shared, but weight includes per-sound distance)
+            float bestOpeningOcc = float.MaxValue;
             for (int i = 0; i < cell.OpeningCount; i++)
             {
                 var op = cell.Openings[i];
@@ -574,9 +575,10 @@ namespace soundphysicsadapted
 
                 float totalOcc = op.OccToPlayer + op.DiffractionPenalty + op.OccToCell;
                 pathResolver.AddPath(_reusableDirNorm, totalDist, weight, totalOcc, config.PermeationOcclusionThreshold);
+                if (totalOcc < bestOpeningOcc) bestOpeningOcc = totalOcc;
             }
 
-            return pathResolver.Evaluate(soundPos, playerPos, config, cell.SharedAirspaceRatio);
+            return pathResolver.Evaluate(soundPos, playerPos, config, cell.SharedAirspaceRatio, bestOpeningOcc);
         }
 
         /// <summary>
@@ -630,15 +632,16 @@ namespace soundphysicsadapted
         /// Clear paths through openings get high weight in the path resolver.
         /// Also captures OpeningData into _cacheableOpenings for cell cache storage.
         /// </summary>
-        private static void ProbeForOpenings(Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor, SoundPhysicsConfig config)
+        private static float ProbeForOpenings(Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor, SoundPhysicsConfig config)
         {
+            float bestOpeningOcc = float.MaxValue;
             _reusableToSound.Set(
                 soundPos.X - playerPos.X,
                 soundPos.Y - playerPos.Y,
                 soundPos.Z - playerPos.Z
             );
             double dist = _reusableToSound.Length();
-            if (dist < 1.0) return;
+            if (dist < 1.0) return bestOpeningOcc;
 
             Vec3d toSound = _reusableToSound;
             _reusableProbeDirNorm.Set(toSound.X / dist, toSound.Y / dist, toSound.Z / dist);
@@ -774,6 +777,7 @@ namespace soundphysicsadapted
                             float totalOcclusion = occToPlayer + diffractionPenalty + occToSound;
                             pathResolver.AddPath(_reusableNormalizedDir, totalPathDist, weight, totalOcclusion, config.PermeationOcclusionThreshold);
                             openingsFound++;
+                            if (totalOcclusion < bestOpeningOcc) bestOpeningOcc = totalOcclusion;
 
                             if (probeLogCount < 20 && config.DebugSoundPaths)
                             {
@@ -823,8 +827,10 @@ namespace soundphysicsadapted
             {
                 if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
                     SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[4B-Probe] {openingsFound} openings (12 probes, dedup={_openingDedup.Count})");
+                        $"[4B-Probe] {openingsFound} openings (12 probes, dedup={_openingDedup.Count}, bestOcc={bestOpeningOcc:F2})");
             }
+
+            return bestOpeningOcc;
         }
 
         /// <summary>
@@ -921,14 +927,13 @@ namespace soundphysicsadapted
 
                     if (bounce < bounces - 1)
                     {
-                        Vec3d newRayDir = Reflect(lastRayDir, lastHitNormal);
-                        var nextHit = RaycastToSurface(lastHitPos, newRayDir, maxDistance, blockAccessor, lastHitBlock);
+                        ReflectInPlace(lastRayDir, lastHitNormal);
+                        var nextHit = RaycastToSurface(lastHitPos, lastRayDir, maxDistance, blockAccessor, lastHitBlock);
                         if (!nextHit.HasValue) break;
 
                         rayDistance += nextHit.Value.distance;
                         lastHitPos = nextHit.Value.position;
                         lastHitNormal = nextHit.Value.normal;
-                        lastRayDir = newRayDir;
                         lastHitBlock = nextHit.Value.blockPos;
                         hit = nextHit;
                     }
@@ -1057,17 +1062,20 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// Reflect a ray direction off a surface normal.
+        /// Reflect a ray direction off a surface normal, in place (no allocation
+        /// per bounce). Components go through locals so dir is fully read before
+        /// being overwritten. Never mutates normal — normals can be shared statics.
         /// </summary>
-        private static Vec3d Reflect(Vec3d dir, Vec3d normal)
+        private static void ReflectInPlace(Vec3d dir, Vec3d normal)
         {
             // reflection = dir - 2 * dot(dir, normal) * normal
             double dot = dir.Dot(normal) * 2.0;
-            return new Vec3d(
-                dir.X - dot * normal.X,
-                dir.Y - dot * normal.Y,
-                dir.Z - dot * normal.Z
-            );
+            double x = dir.X - dot * normal.X;
+            double y = dir.Y - dot * normal.Y;
+            double z = dir.Z - dot * normal.Z;
+            dir.X = x;
+            dir.Y = y;
+            dir.Z = z;
         }
 
         /// <summary>
