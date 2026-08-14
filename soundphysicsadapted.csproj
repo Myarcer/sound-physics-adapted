@@ -19,16 +19,21 @@
     <CreateProperty Value="@(ModInfoLines, ' ')">
       <Output TaskParameter="Value" PropertyName="ModInfoContent" />
     </CreateProperty>
-    <!-- Extract version using regex: matches "version": "x.y.z.w" -->
+    <!-- Extract version using regex: matches "version": "x.y.z" or "x.y.z-dev.n" -->
     <CreateProperty Value="$([System.Text.RegularExpressions.Regex]::Match($(ModInfoContent), '&quot;version&quot;\s*:\s*&quot;([^&quot;]+)&quot;').Groups[1].Value)">
       <Output TaskParameter="Value" PropertyName="ModVersion" />
     </CreateProperty>
+    <!-- Strip the SemVer pre-release tag (-dev.n). Only digits and dots are legal in the
+         AssemblyVersion/FileVersion attributes; the NuGet <Version> keeps the full tag. -->
+    <CreateProperty Value="$([System.Text.RegularExpressions.Regex]::Match($(ModVersion), '^[0-9]+(\.[0-9]+){0,3}').Value)">
+      <Output TaskParameter="Value" PropertyName="ModVersionNumeric" />
+    </CreateProperty>
     <PropertyGroup>
       <Version>$(ModVersion)</Version>
-      <AssemblyVersion>$(ModVersion)</AssemblyVersion>
-      <FileVersion>$(ModVersion)</FileVersion>
+      <AssemblyVersion>$(ModVersionNumeric)</AssemblyVersion>
+      <FileVersion>$(ModVersionNumeric)</FileVersion>
     </PropertyGroup>
-    <Message Text="[ModVersion] Read version $(ModVersion) from modinfo.json" Importance="high" />
+    <Message Text="[ModVersion] Read version $(ModVersion) (numeric $(ModVersionNumeric)) from modinfo.json" Importance="high" />
   </Target>
 
 

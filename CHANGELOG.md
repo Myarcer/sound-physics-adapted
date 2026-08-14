@@ -4,6 +4,42 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2-dev.4] - 2026-04-19
+
+This is the last build for Vintage Story 1.21. It was first released as `0.2.2.4`.
+The version is now `0.2.2-dev.4`. The mod files did not change.
+
+### Changed
+- The version has three segments and a pre-release tag. A four-segment version is not
+  valid SemVer. The game logs `Failed parsing version string`, and the ModDB upload
+  refuses it.
+
+### Added
+- Outdoor thunder cracks get a progressive low-pass filter with distance.
+- The crack pitch curve is steeper (square root). Cracks at middle and long range are
+  much deeper.
+- The pitch variety scales with distance. Near cracks change more (±0.15), far cracks
+  change less (±0.06).
+- The Surround Sound mod is detected. The mod warns about double rain emitters and
+  applies an N-channel mono downmix.
+
+### Fixed
+- The positional crack at a wall opening now gets the distance pitch shift. It stayed
+  at 1.0 before.
+- Ambient sounds are no longer heard through walls at long range. The DDA ray step
+  limit (32) was too low for a diagonal path from a face to the player, so rays stopped
+  in open air before they touched the enclosing blocks. The limit is removed. The
+  inaudible threshold still stops an occluded path early.
+- A multi-bbox volume no longer flips its acoustic side. A distance tiebreaker selects
+  the nearest face when two faces are equally clear (for example, two beehives side by
+  side).
+- The face hysteresis distance is 0.3 blocks (was 1.5). The acoustic position moves
+  more smoothly.
+
+### Removed
+- The deprecated config properties `MaxDDASteps`, `MaxOcclusionRays` and
+  `MaxSoundDistance`. The config file is written again on update.
+
 ## [0.2.2.3] - 2026-04-03
 
 ### Added
