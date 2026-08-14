@@ -630,9 +630,13 @@ namespace soundphysicsadapted
         {
             try
             {
-                // STARTUP GATE: Skip mono downmix during loading — no audible difference
-                if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
-
+                // NO STARTUP GATE HERE. An OpenAL buffer keeps the channel count it was
+                // created with, so a sound that starts during the world-join warmup stays
+                // stereo for its whole life — OpenAL never positions a multi-channel source
+                // (no distance attenuation, no panning). Block entity ambient loops and
+                // resonator tracks start exactly in that window. The expensive work during
+                // loading is the DDA raycasting in SoundStartPrefix, which stays gated;
+                // a downmix is one PCM pass per asset and is cached forever.
                 var config = SoundPhysicsAdaptedModSystem.Config;
                 if (config == null || !config.Enabled) return;
 
@@ -1165,9 +1169,10 @@ namespace soundphysicsadapted
             monoSwapKey = null;
             monoSwapOriginal = null;
 
-            // STARTUP GATE: Skip mono swap during loading
-            if (!SoundPhysicsAdaptedModSystem.IsWorldReady) return;
-
+            // NO STARTUP GATE HERE — see StartPlayingAudioMonoPrefix. This prefix is the
+            // ONLY mono hook for music tracks: ClientMain.LoadSound reads
+            // ScreenManager.soundAudioData and calls Platform.CreateAudio directly, so it
+            // never reaches StartPlaying(AudioData, SoundParams, AssetLocation).
             if (soundAudioDataDict == null) return;
 
             // Check both mechanisms: thread-local flag (weather) and per-asset set (resonator)

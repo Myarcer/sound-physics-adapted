@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.2.6] - Unreleased
 
 ### Fixed
+- **A resonator that plays while you join a world is no longer loud, flat and everywhere.**
+  Sounds that start during the join warmup kept the stereo buffer they were created with,
+  and OpenAL never positions a stereo source: no distance attenuation and no direction.
+  A resonator 100+ blocks away played at full volume through walls and held back the
+  vanilla music. The stereo-to-mono downmix no longer waits for the warmup to end.
+  This also repairs block ambient loops (quern, forge, beehive) that start while chunks load.
+- **A resonator track no longer plays wide open for the first second.** The music engine
+  creates the sound without a position, so the occlusion system did not see it until the
+  next resonator tick. The sound now gets its position and its filter when the track loads,
+  before playback starts.
+- A mono-downmix request that cannot be served is no longer discarded without a trace.
+  The request stays pending and the debug log records why the sound stayed stereo.
 - **Standing inside a solid block no longer muffles all sounds.** The occlusion ray now
   skips the listener's own block when it is fully solid (mirrors the weather ray logic) —
   ear positions clipped into snow layers, chiseled blocks, or walls previously counted
