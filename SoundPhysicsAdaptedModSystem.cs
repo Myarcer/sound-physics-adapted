@@ -40,10 +40,12 @@ namespace soundphysicsadapted
         private static SoundPhysicsConfig config;
 
         /// <summary>
-        /// Bump this when adding new migration blocks in MigrateConfig().
-        /// Pre-migration configs (ConfigVersion == 0) are always wiped to fresh defaults.
+        /// Version of the main config file. A config file with a different version
+        /// is replaced by fresh defaults. Bump this when the defaults change.
+        /// Keep it equal to <see cref="MaterialSoundConfig.CurrentVersion"/> — both
+        /// config files use one version number.
         /// </summary>
-        private const int CurrentConfigVersion = 7;
+        private const int CurrentConfigVersion = 10;
         private static MaterialSoundConfig materialConfig;
         private static ICoreClientAPI clientApi;
         private static AudioPhysicsSystem acousticsManager;
@@ -174,8 +176,8 @@ namespace soundphysicsadapted
                 }
                 else if (materialConfig.Version < MaterialSoundConfig.CurrentVersion)
                 {
-                    // Any material config older than current version gets regenerated from fresh defaults.
-                    // All prior migration history (v1-v7) deleted at v8 — fresh defaults include everything.
+                    // A material config with an older version is replaced by fresh defaults.
+                    // There is no migration chain — the defaults contain everything.
                     api.Logger.Notification($"[SoundPhysicsAdapted] Material config v{materialConfig.Version} is outdated (current: v{MaterialSoundConfig.CurrentVersion}). Regenerating with fresh defaults.");
                     materialConfig = MaterialSoundConfig.CreateDefault();
                 }
@@ -1331,21 +1333,13 @@ namespace soundphysicsadapted
             : DEBUG_LOG_MAX_PER_SECOND;
 
         /// <summary>
-        /// Applies incremental migrations to a managed config (ConfigVersion >= 1).
-        /// Pre-migration configs (version == 0) are never passed here — they are wiped
-        /// to fresh defaults in the loading block above.
-        ///
-        /// HOW TO ADD A MIGRATION:
-        ///   1. Add an if block: if (cfg.ConfigVersion &lt; N) { ... cfg.ConfigVersion = N; }
-        ///   2. Bump CurrentConfigVersion constant to N.
-        ///   3. Inside the block, set any fields whose defaults changed between versions.
-        ///      Fields NOT touched here keep the user's existing value (correct behavior).
+        /// Sanity pass for a config file that has the current version.
+        /// A config file with a different version never gets here — the loading
+        /// block above replaces it with fresh defaults. There is no migration
+        /// chain: to change the defaults for all users, bump CurrentConfigVersion.
         /// </summary>
         private static void MigrateConfig(SoundPhysicsConfig cfg)
         {
-            // All prior migration history deleted at v4.
-            // Any config older than v4 gets regenerated from fresh defaults.
-            // This keeps the codebase clean — no legacy migration chains to maintain.
             cfg.ThunderLayer1Volume = GameMath.Clamp(cfg.ThunderLayer1Volume, 0f, 1f);
             cfg.ThunderLayer2Volume = GameMath.Clamp(cfg.ThunderLayer2Volume, 0f, 1f);
             cfg.ConfigVersion = CurrentConfigVersion;

@@ -4,6 +4,18 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6-dev.4] - 2026-08-14
+
+### Changed
+- Both config files use one version number, and it starts again at 10. The mod
+  replaces `soundphysicsadapted.json` and `soundphysicsadapted_materials.json`
+  with fresh defaults on the first start after the update. All version history
+  from before is removed from the code — there is no migration chain any more.
+  Write down your own values before you update if you changed the configuration.
+- Sound file overrides are on by default (`EnableSoundOverrides`). The improved
+  beehive sound plays without a configuration change. The louder lightning sound
+  stays off — set `OverrideLightningSound` to true if you want it.
+
 ## [0.2.6-dev.3] - 2026-08-14
 
 This build joins the two development lines. The audio fixes released as `0.2.6-dev.2`
