@@ -34,6 +34,7 @@ namespace soundphysicsadapted
         private static double _vNdy;
         private static double _vNdz;
         private static double _vLength;
+        private static int _vDestX, _vDestY, _vDestZ;
         private static Cuboidi[] _vExclusionBboxes;
         private static int _vExclusionBboxCount;
 
@@ -408,6 +409,16 @@ namespace soundphysicsadapted
             _vNdz = ndz;
             _vLength = length;
 
+            // Destination-block skip (mirrors RunWeatherOcclusion): when the ray
+            // endpoint (usually the listener's ear) sits inside a fully-solid block,
+            // that block must not occlude sound TO it — otherwise a player inside a
+            // snow layer / chiseled block / wall-embedded position hears everything
+            // falsely muffled. Partial-geometry destination blocks still fall through
+            // to the AABB test, which correctly decides if the ray hits the geometry.
+            _vDestX = (int)Math.Floor(to.X);
+            _vDestY = (int)Math.Floor(to.Y);
+            _vDestZ = (int)Math.Floor(to.Z);
+
             // maxSteps=0 uses the natural Manhattan distance bound from TraverseCore.
             // The inaudible threshold already provides early exit when enough occlusion
             // accumulates, so an artificial step cap only risks truncating rays in open
@@ -450,6 +461,12 @@ namespace soundphysicsadapted
 
             if (block == null || block.Id == 0 || block.BlockMaterial == EnumBlockMaterial.Air)
                 return false; // Continue
+
+            // Destination-block skip for fully-solid blocks only (see RunOcclusion).
+            // Partial geometry at the destination falls through to the AABB test.
+            if (ctx.X == _vDestX && ctx.Y == _vDestY && ctx.Z == _vDestZ
+                && BlockClassification.IsSolidForOcclusion(block))
+                return false; // Continue — endpoint's own block doesn't occlude it
 
             float blockOcclusion = 0f;
 
@@ -843,7 +860,7 @@ namespace soundphysicsadapted
 
             if (BlockClassification.IsChiseledBlock(block))
             {
-                var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0)) as BlockEntityMicroBlock;
+                var be = blockAccessor.GetBlockEntity(_beLookupPos.Set(x, y, z)) as BlockEntityMicroBlock;
                 if (be != null)
                 {
                     // If any face is almost solid, this is a wall/slab shape — full occlusion scale
@@ -890,7 +907,7 @@ namespace soundphysicsadapted
         /// </summary>
         private static bool IsDoorOpen(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
         {
-            var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0));
+            var be = blockAccessor.GetBlockEntity(_beLookupPos.Set(x, y, z));
             if (be != null)
             {
                 var doorBeh = be.GetBehavior<BEBehaviorDoor>();
@@ -910,6 +927,10 @@ namespace soundphysicsadapted
 
         // Pooled BlockPos for multiblock controller lookup in DDA (avoid alloc per call)
         private static readonly BlockPos _mbControllerPos = new BlockPos(0, 0, 0, 0);
+
+        // Pooled BlockPos for block-entity lookups (door state, chiseled volume) in the
+        // DDA visitor — GetBlockEntity doesn't retain the pos, so reuse is safe.
+        private static readonly BlockPos _beLookupPos = new BlockPos(0, 0, 0, 0);
 
         /// <summary>
         /// Check if a block should be treated as air because it's an open door/gate.
@@ -971,7 +992,9 @@ namespace soundphysicsadapted
         private static bool HasDoorLikeBehavior(Block block, IBlockAccessor blockAccessor, int x, int y, int z)
         {
             // Check block entity behaviors (vanilla doors/trapdoors)
-            var be = blockAccessor.GetBlockEntity(new BlockPos(x, y, z, 0));
+            // Pooled pos: GetBlockEntity doesn't retain it, and this runs inside the
+            // DDA visitor hot path — was the last remaining per-visit allocation.
+            var be = blockAccessor.GetBlockEntity(_beLookupPos.Set(x, y, z));
             if (be != null)
             {
                 if (be.GetBehavior<BEBehaviorDoor>() != null) return true;

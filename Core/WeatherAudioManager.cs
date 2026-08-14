@@ -169,6 +169,19 @@ namespace soundphysicsadapted
         {
             openingTracker?.OnBlockChanged(pos);
             enclosureCalculator?.InvalidateNearbyColumns(pos);
+
+            // ISSUE 13: a change within the scan diamond (radius 12, +2 margin)
+            // can open or seal a weather path — rescan on the next tick instead
+            // of waiting out the enclosure rate limiter.
+            var plr = capi?.World?.Player?.Entity;
+            if (plr != null)
+            {
+                double dx = Math.Abs(pos.X + 0.5 - plr.Pos.X);
+                double dy = Math.Abs(pos.Y + 0.5 - plr.Pos.Y);
+                double dz = Math.Abs(pos.Z + 0.5 - plr.Pos.Z);
+                if (dx <= 14 && dy <= 14 && dz <= 14)
+                    enclosureCalculator?.ForceUpdate();
+            }
         }
 
         /// <summary>

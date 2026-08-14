@@ -184,6 +184,17 @@ namespace soundphysicsadapted
         /// preventing stale cache from re-creating tracked openings that
         /// were just removed by ForceReverify.
         /// </summary>
+        /// <summary>
+        /// ISSUE 13: force the next Update() call to bypass the rate limiter.
+        /// Used when a block change near the player may have opened/sealed a
+        /// weather path (door, wall breach) — waiting out the 100ms window plus
+        /// smoothing makes the transition audibly late.
+        /// </summary>
+        public void ForceUpdate()
+        {
+            lastUpdateMs = 0;
+        }
+
         public void InvalidateNearbyColumns(BlockPos changedPos)
         {
             var keysToRemove = new List<(int, int)>();

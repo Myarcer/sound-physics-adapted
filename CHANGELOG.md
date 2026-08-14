@@ -4,6 +4,22 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6-dev.3] - 2026-08-14
+
+This build joins the two development lines. The audio fixes released as `0.2.6-dev.2`
+and the join-time work done after it now live in one branch. Nothing is dropped.
+
+### Fixed
+- **A sound is no longer treated as sealed off when your ear sits inside a block.**
+  The sealed-cavity check stopped its search at the listener's own block when that
+  block counted as solid (snow layer, wall-embedded position, bed clamp). The sound
+  then played dry and heavily muffled although you stood next to it.
+
+### Changed
+- The distance-model duplicate guard uses one design again. The generation counter
+  added on the join-time line never advanced, so it did the same work as the simple
+  source-id set. The set stays.
+
 ## [0.2.6] - Unreleased
 
 ### Fixed

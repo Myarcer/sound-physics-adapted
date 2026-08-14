@@ -841,15 +841,6 @@ namespace soundphysicsadapted
             ALSourcef(source, _alSourcefAirAbsorption, factor);
         }
 
-        /// <summary>Copy distance attenuation model from one source to another.</summary>
-        public static void CopyDistanceModel(int fromSource, int toSource)
-        {
-            if (fromSource <= 0 || toSource <= 0) return;
-            ALSetSourceRefDistance(toSource, ALGetSourceRefDistance(fromSource));
-            ALSetSourceMaxDistance(toSource, ALGetSourceMaxDistance(fromSource));
-            ALSetSourceRolloff(toSource, ALGetSourceRolloff(fromSource));
-        }
-
         /// <summary>
         /// Check if EFX extension is supported.
         /// </summary>

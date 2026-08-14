@@ -27,6 +27,7 @@ namespace soundphysicsadapted
         private static Type loadedSoundNativeType;
         private static MethodInfo loadSoundMethod;
         private static PropertyInfo soundParamsProperty;
+        private static PropertyInfo clientMainWorldProperty;  // ClientMain.World (cached, used per LoadSound)
 
         // Cached for SetPosition patch
         private static ICoreClientAPI cachedApi;
@@ -45,9 +46,12 @@ namespace soundphysicsadapted
         // ambient sounds before IsWorldReady, causing them to be permanently invisible to the
         // occlusion tick system. After warmup completes, ProcessPreWarmupQueue() retroactively
         // registers and applies initial occlusion to these sounds.
-        private static List<WeakReference<ILoadedSound>> preWarmupSoundQueue = new List<WeakReference<ILoadedSound>>();
+        // Locked: Start() can fire on the music-engine worker thread (IMusicEngine.LoadTrack
+        // callback), so the queue is written off-thread while the smoothing tick drains it.
+        private static readonly List<WeakReference<ILoadedSound>> preWarmupSoundQueue = new List<WeakReference<ILoadedSound>>();
         private static bool preWarmupQueueProcessed = false;
 
+        // === MAIN THREAD GATE ===
         // The occlusion/reverb compute cores (OcclusionCalculator, AcousticRaytracer,
         // SoundSourceAdjuster) use shared static scratch state and are only safe on the
         // main thread. Start()/LoadSound can fire on the music-engine worker thread
@@ -84,7 +88,6 @@ namespace soundphysicsadapted
             lock (_localPlayerSoundPositions) _localPlayerSoundPositions.Clear();
             lock (_localPlayerOcclusionSkipQueue) _localPlayerOcclusionSkipQueue.Clear();
             lock (_distanceModelApplied) _distanceModelApplied.Clear();
-            _distanceModelGen = 0;
             _mainThreadId = -1;
         }
 
@@ -179,6 +182,9 @@ namespace soundphysicsadapted
 
                 // Get Params property from LoadedSoundNative
                 soundParamsProperty = loadedSoundNativeType.GetProperty("Params");
+
+                // Cache ClientMain.World property (used per LoadSound call)
+                clientMainWorldProperty = clientMainType.GetProperty("World");
 
                 // Phase 5B: Resolve ScreenManager.soundAudioData for mono cache swap
                 try
@@ -460,53 +466,22 @@ namespace soundphysicsadapted
             }
         }
 
-        /// <summary>
-        /// Apply reverb to a sound using SPR-style calculation.
-        /// Phase 3: Multi-slot EAX reverb based on ray bouncing.
-        /// </summary>
-        private static void ApplyReverb(ILoadedSound sound, Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor)
-        {
-            var config = SoundPhysicsAdaptedModSystem.Config;
-            if (config == null || !config.EnableCustomReverb) return;
-            if (!ReverbEffects.IsInitialized) return;
-
-            try
-            {
-                // Get OpenAL source ID
-                int sourceId = AudioRenderer.GetSourceId(sound);
-                if (sourceId <= 0) return;
-
-                // Check if sound source is underwater (fluid layer handles waterlogged blocks)
-                BlockPos soundBlockPos = new BlockPos((int)soundPos.X, (int)soundPos.Y, (int)soundPos.Z);
-                Block soundBlock = blockAccessor.GetBlock(soundBlockPos, BlockLayersAccess.Fluid);
-                bool isSourceUnderwater = soundBlock != null && soundBlock.IsLiquid();
-
-                // Calculate reverb parameters
-                var (reverbResult, _) = AcousticRaytracer.CalculateWithPaths(soundPos, playerPos, blockAccessor);
-
-                // Apply to source (with underwater state for both player and source)
-                ReverbEffects.ApplyToSource(sourceId, reverbResult, isSourceUnderwater);
-            }
-            catch (Exception ex)
-            {
-                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
-                    SoundPhysicsAdaptedModSystem.DebugLog($"ApplyReverb error: {ex.Message}");
-            }
-        }
-
-        // Track which sourceIds we've already applied the distance model to,
-        // so re-attaches (e.g., after underwater state change) don't double-multiply.
-        // OpenAL recycles source IDs, so the entry is overwritten naturally on reuse.
-        private static readonly Dictionary<int, int> _distanceModelApplied = new Dictionary<int, int>();
-        private static int _distanceModelGen = 0;
+        // Track which sourceIds have had the distance model applied for their CURRENT sound.
+        // VS sets rolloff/max-distance in createSoundSource() (once per AL source, never in
+        // Start()), so: repeated Start() on the same sound must NOT re-multiply (values would
+        // stack), but a NEW sound taking a recycled sourceId gets fresh vanilla values and
+        // MUST be re-applied. AudioRenderer.RegisterSound calls InvalidateDistanceModel()
+        // whenever a new sound<->sourceId pairing is created.
+        private static readonly HashSet<int> _distanceModelApplied = new HashSet<int>();
 
         /// <summary>
-        /// Clear the distance-model dedupe flag for a specific source so it gets
-        /// re-applied on the next sound start (called when VS recycles a source ID
-        /// with a fresh vanilla distance model via createSoundSource).
+        /// Reset the distance-model dedupe for a sourceId. Called by AudioRenderer.RegisterSound
+        /// when a new sound takes this sourceId (VS just re-ran createSoundSource with vanilla
+        /// distance params, so our multipliers must be applied again).
         /// </summary>
         public static void InvalidateDistanceModel(int sourceId)
         {
+            if (sourceId <= 0) return;
             lock (_distanceModelApplied) _distanceModelApplied.Remove(sourceId);
         }
 
@@ -547,16 +522,16 @@ namespace soundphysicsadapted
                         return;
                 }
 
-                // De-dup against re-attachments / our own SoundStartPostfix double-fire.
-                // Generation counter rolls every ~1B starts to avoid pathological stale state.
-                // Lock because InvalidateDistanceModel can be called from the AudioRenderer
-                // registration path which may run off the main thread.
-                int gen = _distanceModelGen;
+                // De-dup against repeated Start() on the same sound and our own
+                // SoundStartPostfix double-fire (VS restarts looping / paused sounds
+                // without re-running createSoundSource, so multiplying again would
+                // stack). Cleared per-sourceId by InvalidateDistanceModel when a new
+                // sound registers on the id. Lock: Start() can fire on the music thread,
+                // and InvalidateDistanceModel runs from the AudioRenderer registration path.
                 lock (_distanceModelApplied)
                 {
-                    if (_distanceModelApplied.TryGetValue(sourceId, out int prevGen) && prevGen == gen)
+                    if (!_distanceModelApplied.Add(sourceId))
                         return;
-                    _distanceModelApplied[sourceId] = gen;
                 }
 
                 if (!EfxHelper.IsAvailable) return;
@@ -789,22 +764,25 @@ namespace soundphysicsadapted
 
             long now = Environment.TickCount64;
 
-            for (int i = _localPlayerSoundPositions.Count - 1; i >= 0; i--)
+            lock (_localPlayerSoundPositions)
             {
-                var e = _localPlayerSoundPositions[i];
-
-                // Expire stale
-                if (now - e.tickMs > POSITION_EXPIRY_MS)
+                for (int i = _localPlayerSoundPositions.Count - 1; i >= 0; i--)
                 {
-                    _localPlayerSoundPositions.RemoveAt(i);
-                    continue;
-                }
+                    var e = _localPlayerSoundPositions[i];
 
-                // Exact float match — both computed from same entity.Pos doubles
-                if (position.X == e.x && position.Y == e.y && position.Z == e.z)
-                {
-                    _localPlayerSoundPositions.RemoveAt(i);
-                    return true;
+                    // Expire stale
+                    if (now - e.tickMs > POSITION_EXPIRY_MS)
+                    {
+                        _localPlayerSoundPositions.RemoveAt(i);
+                        continue;
+                    }
+
+                    // Exact float match — both computed from same entity.Pos doubles
+                    if (position.X == e.x && position.Y == e.y && position.Z == e.z)
+                    {
+                        _localPlayerSoundPositions.RemoveAt(i);
+                        return true;
+                    }
                 }
             }
             return false;
@@ -1312,15 +1290,22 @@ namespace soundphysicsadapted
                     return;
                 }
 
-                // Get World via reflection from ClientMain
-                var worldProp = clientMainType.GetProperty("World");
-                if (worldProp == null) return;
-                
-                var world = worldProp.GetValue(__instance) as IClientWorldAccessor;
+                // Get World via cached reflection from ClientMain
+                if (clientMainWorldProperty == null) return;
+
+                var world = clientMainWorldProperty.GetValue(__instance) as IClientWorldAccessor;
                 if (world == null) return;
 
                 // Cache block accessor for SetPosition patches
                 cachedBlockAccessor = world.BlockAccessor;
+
+                // OFF-THREAD (music engine worker): register only, no raycast — the
+                // compute cores use shared static scratch state. Tick picks it up.
+                if (!IsMainThread)
+                {
+                    ApplyLowPassFilter(__result, 1.0f, soundPos, soundName);
+                    return;
+                }
 
                 // Convert Vec3d to Vec3f for ApplyOcclusion
                 var soundPosF = new Vec3f((float)soundPos.X, (float)soundPos.Y, (float)soundPos.Z);
@@ -1426,7 +1411,8 @@ namespace soundphysicsadapted
                             bool hasPosition = pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0);
                             if (hasPosition)
                             {
-                                preWarmupSoundQueue.Add(new WeakReference<ILoadedSound>(queueSound));
+                                lock (preWarmupSoundQueue)
+                                    preWarmupSoundQueue.Add(new WeakReference<ILoadedSound>(queueSound));
                             }
                         }
                     }
@@ -1900,7 +1886,12 @@ namespace soundphysicsadapted
             int processed = 0;
             int disposed = 0;
 
-            foreach (var weakRef in preWarmupSoundQueue)
+            // Snapshot under lock — Start() prefixes append from the music thread.
+            WeakReference<ILoadedSound>[] queueSnapshot;
+            lock (preWarmupSoundQueue)
+                queueSnapshot = preWarmupSoundQueue.ToArray();
+
+            foreach (var weakRef in queueSnapshot)
             {
                 if (!weakRef.TryGetTarget(out var sound)) { disposed++; continue; }
 
@@ -1931,15 +1922,20 @@ namespace soundphysicsadapted
                         AudioRenderer.ReattachFilter(sound);
                     }
 
-                    // Apply reverb if enabled
+                    // Cheap start reverb (player-room approximation) — the physics tick
+                    // computes the exact per-sound value within 50ms. Running a full
+                    // raytrace here for EVERY queued sound caused a burst spike right
+                    // as warmup completed.
                     var config = SoundPhysicsAdaptedModSystem.Config;
-                    if (config != null && config.EnableCustomReverb && cachedBlockAccessor != null
-                        && cachedApi?.World?.Player?.Entity != null)
+                    if (config != null && config.EnableCustomReverb && ReverbEffects.IsInitialized)
                     {
-                        var player = cachedApi.World.Player.Entity;
-                        Vec3d playerPos = player.Pos.XYZ.Add(player.LocalEyePos);
-                        Vec3d soundPosD = new Vec3d(position.X, position.Y, position.Z);
-                        ApplyReverb(sound, soundPosD, playerPos, cachedBlockAccessor);
+                        int srcId = AudioRenderer.GetSourceId(sound);
+                        if (srcId > 0)
+                        {
+                            var startReverb = SoundPhysicsAdaptedModSystem.Acoustics?.CachedPlayerReverb
+                                ?? ReverbResult.None;
+                            ReverbEffects.ApplyToSource(srcId, startReverb);
+                        }
                     }
 
                     processed++;
@@ -1957,23 +1953,14 @@ namespace soundphysicsadapted
                     $"[SoundPhysicsAdapted] Pre-warmup queue: {processed} sounds registered, {disposed} already disposed");
             }
 
-            preWarmupSoundQueue.Clear();
+            lock (preWarmupSoundQueue) preWarmupSoundQueue.Clear();
         }
 
         #region AL.SourcePlay Diagnostic Hook
 
-        // Track which sourceIds we've seen played vs which we've registered
-        private static HashSet<int> playedSourceIds = new HashSet<int>();
-        private static HashSet<int> registeredSourceIds = new HashSet<int>();
-        private static object sourceTrackLock = new object();
-
         // FREEZE DIAGNOSTIC: Track HandleSourcePlay call frequency
         private static int _diagHookCallCount = 0;
         private static int _diagHookUntrackedCount = 0;
-
-        // Cached reflection for attaching filter in hook
-        private static MethodInfo alSourceMethod_Hook;
-        private static object efxDirectFilterValue_Hook;
 
         /// <summary>
         /// Patch OpenTK's AL.SourcePlay to intercept all sound play calls.
@@ -2012,24 +1999,8 @@ namespace soundphysicsadapted
                     return false;
                 }
 
-                // Cache AL.Source method for attaching filter in the hook
-                if (alSourceiType != null)
-                {
-                    try
-                    {
-                        efxDirectFilterValue_Hook = Enum.Parse(alSourceiType, "EfxDirectFilter");
-                    }
-                    catch
-                    {
-                        efxDirectFilterValue_Hook = Enum.ToObject(alSourceiType, 0x20005);
-                    }
-
-                    alSourceMethod_Hook = alType.GetMethod("Source",
-                        BindingFlags.Public | BindingFlags.Static,
-                        null,
-                        new Type[] { typeof(int), alSourceiType, typeof(int) },
-                        null);
-                }
+                // Filter attachment in the hook goes through AudioRenderer.AttachFilter
+                // (compiled delegate) — no separate reflection copy needed here.
 
                 // Log ALL SourcePlay variants available
                 api.Logger.Debug("[SoundPhysicsAdapted] Available AL.SourcePlay methods:");
@@ -2153,23 +2124,18 @@ namespace soundphysicsadapted
                 // FREEZE DIAGNOSTIC: Count every call
                 System.Threading.Interlocked.Increment(ref _diagHookCallCount);
 
-                // Track this sourceId as "actually played"
-                lock (sourceTrackLock)
-                {
-                    playedSourceIds.Add(sid);
-                }
-
                 // Check if this sourceId is one we've registered a filter for
                 bool isTracked = AudioRenderer.IsSourceTracked(sid);
 
                 if (isTracked)
                 {
-                    // Good - we know about this source, get its filter and reattach right now
+                    // Good - we know about this source, get its filter and reattach right now.
+                    // AttachFilter uses the compiled zero-alloc delegate.
                     int filterId = AudioRenderer.GetFilterForSource(sid);
-                    if (filterId > 0 && alSourceMethod_Hook != null && efxDirectFilterValue_Hook != null)
+                    if (filterId > 0)
                     {
                         // Attach filter RIGHT before play - most reliable timing possible
-                        alSourceMethod_Hook.Invoke(null, new object[] { sid, efxDirectFilterValue_Hook, filterId });
+                        AudioRenderer.AttachFilter(sid, filterId);
                     }
                 }
                 else
@@ -2233,57 +2199,6 @@ namespace soundphysicsadapted
             for (int i = 0; i < sources.Length; i++)
             {
                 HandleSourcePlay(sources[i], "span");
-            }
-        }
-
-        // Keep old method name for compatibility
-        public static void ALSourcePlayPrefix(int sid)
-        {
-            HandleSourcePlay(sid, "legacy");
-        }
-
-        /// <summary>
-        /// Register a sourceId as tracked by our system.
-        /// Called from SoundFilterManager when we register a sound.
-        /// </summary>
-        public static void TrackSourceId(int sourceId)
-        {
-            lock (sourceTrackLock)
-            {
-                registeredSourceIds.Add(sourceId);
-            }
-        }
-
-        /// <summary>
-        /// Unregister a sourceId when sound is disposed.
-        /// </summary>
-        public static void UntrackSourceId(int sourceId)
-        {
-            lock (sourceTrackLock)
-            {
-                registeredSourceIds.Remove(sourceId);
-                playedSourceIds.Remove(sourceId);
-            }
-        }
-
-        /// <summary>
-        /// Get diagnostic stats about tracked vs played sources.
-        /// </summary>
-        public static string GetSourceTrackingStats()
-        {
-            lock (sourceTrackLock)
-            {
-                int tracked = registeredSourceIds.Count;
-                int played = playedSourceIds.Count;
-                int untracked = 0;
-
-                foreach (var id in playedSourceIds)
-                {
-                    if (!registeredSourceIds.Contains(id))
-                        untracked++;
-                }
-
-                return $"Registered={tracked}, Played={played}, UntrackedPlays={untracked}";
             }
         }
 
