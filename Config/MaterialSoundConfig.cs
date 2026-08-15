@@ -12,8 +12,10 @@ namespace soundphysicsadapted
     public class MaterialSoundConfig
     {
         /// <summary>
-        /// Current material config version. Any saved config below this is regenerated from defaults.
-        /// Bump this when changing defaults that should apply to all users.
+        /// Current material config version. A saved config below this version is
+        /// replaced by fresh defaults. Bump this when the defaults change.
+        /// Keep it equal to CurrentConfigVersion in SoundPhysicsAdaptedModSystem —
+        /// both config files use one version number.
         /// </summary>
         public const int CurrentVersion = 10;
 
