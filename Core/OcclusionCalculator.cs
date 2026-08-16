@@ -1169,5 +1169,20 @@ namespace soundphysicsadapted
             // Clamp to minimum to prevent completely silent sounds
             return Math.Max(filterValue, config.MinLowPassFilter);
         }
+
+        /// <summary>
+        /// The reverse of <see cref="OcclusionToFilter"/>: how many occlusion units a
+        /// filter gain stands for. Used to read an applied gain back into the unit the
+        /// smoothing bands and the mod API speak in.
+        /// </summary>
+        public static float FilterToOcclusion(float filterValue)
+        {
+            var config = SoundPhysicsAdaptedModSystem.Config;
+            if (config == null || filterValue >= 1f) return 0f;
+
+            float scale = Math.Max(1e-4f, config.BlockAbsorption * 2.0f);
+            float gain = Math.Max(filterValue, 1e-6f);
+            return (float)(-Math.Log(gain) / scale);
+        }
     }
 }

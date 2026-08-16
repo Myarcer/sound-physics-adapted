@@ -25,6 +25,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A sound that was already mixed down to mono stays mono until the game loads that asset
   again. New sounds load in stereo as vanilla does.
 
+## [0.2.6-dev.5] - 2026-08-16
+
+### Changed
+- **One smoothing stage for each thing you hear.** The filter, the reverb and the position
+  of a sound are now moved toward their new value in one place only, on a tick of 25 ms.
+  The measurement step writes the raw value and does no smoothing at all. Before this,
+  the measurement step and the audio step each smoothed the same value, at rates that
+  changed with the distance to the sound, so the real speed matched no written number.
+- A sound that is far away now reacts as fast as a sound next to you. Its reverb converges
+  in the same time; only the measurement is less frequent.
+- The filter moves through the loudness in equal steps (log domain). A transition no longer
+  runs fast at the loud end and slow at the quiet end.
+
+### Performance
+- The reverb of a sound is written to the audio system only while it moves. A sound in a
+  room that does not change costs no reverb work. Before, all four sends were written on
+  every measurement.
+- A throttled sound is not measured any more. Its fade continues in the audio step.
+
+### Internal
+- `AudioPhysicsSystem.ProcessSoundRaycast` (900 lines) is replaced by `UpdateSoundAcoustics`
+  plus `ResolveAcousticPaths` and `ResolveRepositioning`. New files:
+  `Core/SmoothingCurves.cs` (all temporal constants), `Core/ThrottleFadeState.cs`,
+  `Core/AmbientVolumeResolver.cs`, `Core/FilterPipeline.cs`.
+- `SoundPhysicsAPI` and the weather system read the effective occlusion from the applied
+  filter gain (new `OcclusionCalculator.FilterToOcclusion`), so the value includes the
+  airspace, opening and diffraction floors.
+
 ## [0.2.6-dev.4] - 2026-08-14
 
 ### Changed

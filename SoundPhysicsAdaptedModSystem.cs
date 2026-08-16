@@ -920,7 +920,7 @@ namespace soundphysicsadapted
 
             // FREEZE DIAGNOSTIC: Time SmoothAll
             _diagStopwatch.Restart();
-            AudioRenderer.SmoothAll();
+            AudioRenderer.SmoothAll(clientApi?.World?.ElapsedMilliseconds ?? 0L);
             _diagStopwatch.Stop();
             double smoothMs = _diagStopwatch.Elapsed.TotalMilliseconds;
             _diagSmoothTickCount++;

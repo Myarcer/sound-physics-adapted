@@ -19,8 +19,19 @@ namespace soundphysicsadapted
         {
             public int FilterId;        // Our custom OpenAL filter
             public int SourceId;        // OpenAL source ID from LoadedSoundNative
-            public float CurrentValue;  // Current filter GAINHF value (what's applied now)
+            public float CurrentValue;  // Smoothed filter GAINHF, before the throttle envelope
+            public float AppliedValue;  // What OpenAL holds now (CurrentValue x envelope)
             public float TargetValue;   // Target filter value (what we're smoothing toward)
+
+            // Throttle envelope. Created on first use — most sounds never throttle.
+            public ThrottleFadeState Fade;
+
+            // Reverb sends. The physics tick writes TargetReverb, SmoothAll converges
+            // CurrentReverb toward it and writes it to OpenAL only while it moves.
+            public ReverbResult TargetReverb;
+            public ReverbResult CurrentReverb;
+            public bool HasReverbTarget;
+            public bool ReverbConverged;
             public WeakReference<ILoadedSound> SoundRef;  // Weak ref to detect disposal
             public Vec3d LastPosition;  // Last known sound position for recalculation
             public string SoundName;    // For debug logging
@@ -38,43 +49,30 @@ namespace soundphysicsadapted
             public bool TreatAsPositional;          // false by default
         }
 
-        // === Smoothing runs on its own 25ms tick, decoupled from raycast intervals ===
-        // Convergence = time to reach 95% of target
-        // Math: factor = 1 - 0.05^(1 / (convergenceTime / tickInterval))
-        private const float SMOOTH_TICK_MS = 25f;
+        // === The one temporal stage ===
+        // Every constant lives in SmoothingCurves. The physics tick writes raw targets;
+        // this 25ms tick is the only place an audible value moves toward one (audit A4).
+        private const float SMOOTH_TICK_MS = SmoothingCurves.TickMs;
 
-        // Muffling (sound disappearing behind wall): moderately fast
-        // Not instant - diffraction causes gradual fade in reality
-        // 0.25s convergence at 25ms tick = 10 ticks: factor = 1 - 0.05^(1/10) = 0.259
-        private const float SMOOTH_FACTOR_DOWN = 0.259f;
-
-        // Un-muffling (coming around corner): slower to avoid jarring pop-in
-        // Humans notice sound appearing more than disappearing
-        // 0.4s convergence at 25ms tick = 16 ticks: factor = 1 - 0.05^(1/16) = 0.172
-        private const float SMOOTH_FACTOR_UP = 0.172f;
-
-        // Snap threshold: if difference > this, apply instantly (no smoothing)
-        // Handles cases like teleporting or large geometry changes
-        private const float SNAP_THRESHOLD = 0.6f;
-
-        // Convergence threshold: stop smoothing when close enough
+        // Filter convergence threshold: stop smoothing when close enough
         private const float CONVERGE_EPSILON = 0.002f;
 
-        // PHASE 4B: Position smoothing constants
-        // Speed of sound cap: 343 m/s; at 25ms tick = ~8.6m per tick max
-        // SPP uses 17.15 m/tick at 50ms MC tick (same effective speed)
-        private const float POS_MAX_SPEED_PER_TICK = 8.6f;
-        // Position convergence: exponential factor per 25ms tick
-        // 0.3 gives ~0.25s convergence (fast but smooth, matches occlusion feel)
-        private const float POS_SMOOTH_FACTOR = 0.3f;
-        // Position snap: if target jumps more than this, snap instantly (teleport/new sound)
-        private const float POS_SNAP_THRESHOLD = 15.0f;
-        // Position converge epsilon: stop updating when within this distance (meters)
-        private const float POS_CONVERGE_EPSILON = 0.02f;
-        // Target EMA factor: smooths the TARGET position itself to damp oscillation
-        // when two diffraction paths alternate dominance each raycast tick.
-        // 0.15 per raycast interval → ~5 ticks to converge, damps 7m flips to ~1m drift.
-        private const float TARGET_EMA_FACTOR = 0.15f;
+        // Below this gain the filter is at its floor — clamp before the log conversion.
+        private const float MIN_LOG_GAIN = 1e-5f;
+
+        private static float POS_MAX_SPEED_PER_TICK => SmoothingCurves.PositionMaxSpeedPerTick;
+        private static float POS_SMOOTH_FACTOR => SmoothingCurves.PositionFactor;
+        private static float POS_SNAP_THRESHOLD => SmoothingCurves.PositionSnapThreshold;
+        private static float POS_CONVERGE_EPSILON => SmoothingCurves.PositionConvergeEpsilon;
+        private static float TARGET_EMA_FACTOR => SmoothingCurves.PositionTargetStabilizer;
+
+        // Reverb depends on submersion state, which ApplyToSource reads for itself. When
+        // it changes, converged entries must write their sends once more.
+        private static float lastSubmersionReverbMult = float.NaN;
+        private static bool forceReverbApply = false;
+
+        // Game time of the previous smoothing tick, for the throttle ramp.
+        private static long lastSmoothTickMs = 0;
 
         // Track filters by sound instance
         private static ConcurrentDictionary<ILoadedSound, FilterEntry> activeFilters
@@ -433,6 +431,7 @@ namespace soundphysicsadapted
                     FilterId = filterId,
                     SourceId = sourceId,
                     CurrentValue = 1.0f,
+                    AppliedValue = 1.0f,
                     TargetValue = 1.0f,
                     SoundRef = new WeakReference<ILoadedSound>(sound)
                 };
@@ -1085,6 +1084,7 @@ namespace soundphysicsadapted
                 // Prevents the race where sound plays with gainHF=1.0
                 EfxHelper.ConfigureLowpass(entry.FilterId, finalValue);
                 entry.CurrentValue = finalValue;
+                entry.AppliedValue = finalValue;
                 AttachFilter(entry.SourceId, entry.FilterId);
 
                 return true;
@@ -1103,19 +1103,127 @@ namespace soundphysicsadapted
         public static float SmoothTickIntervalMs => SMOOTH_TICK_MS;
 
         /// <summary>
-        /// Run on a fast 25ms tick. Smooths ALL sound filters toward their targets.
-        /// Decoupled from raycast intervals so convergence time is consistent
-        /// regardless of whether a sound is 5m or 50m away.
+        /// Sets the reverb a sound must reach. The physics tick calls this with the raw
+        /// raytrace result; <see cref="SmoothAll"/> converges the sends and writes them to
+        /// OpenAL only while they move.
         ///
-        /// Separate rates for muffling vs un-muffling:
-        /// - Muffling (going behind wall): fast (~0.15s) - snappy response
-        /// - Un-muffling (coming around corner): slower (~0.4s) - avoids jarring pop-in
+        /// The first target of a sound is applied at once — a one-shot (a hit, a splash)
+        /// ends before any ramp could finish, and it must not start dry.
         /// </summary>
-        public static void SmoothAll()
+        public static void SetReverbTarget(ILoadedSound sound, ReverbResult target)
+        {
+            if (!IsInitialized || sound == null) return;
+            if (!activeFilters.TryGetValue(sound, out var entry)) return;
+            if (entry.SourceId <= 0 || !ReverbEffects.IsInitialized) return;
+
+            entry.TargetReverb = target;
+
+            if (!entry.HasReverbTarget)
+            {
+                entry.HasReverbTarget = true;
+                entry.CurrentReverb = target;
+                entry.ReverbConverged = true;
+                ReverbEffects.ApplyToSource(entry.SourceId, target);
+                return;
+            }
+
+            entry.ReverbConverged = false;
+        }
+
+        /// <summary>
+        /// The filter gain of this sound as the geometry produced it: what OpenAL holds
+        /// now, with the submersion multiplier taken back out. A caller asking how well a
+        /// sound is heard wants the acoustic value, not "the player has their head under
+        /// water". Returns -1 when the sound is not tracked.
+        /// </summary>
+        public static float GetCurrentFilterGain(ILoadedSound sound)
+        {
+            if (!IsInitialized || sound == null) return -1f;
+            if (!activeFilters.TryGetValue(sound, out var entry)) return -1f;
+
+            float underwaterMult = SoundPhysicsAdaptedModSystem.GetUnderwaterMultiplier();
+            if (underwaterMult <= 0.001f) return entry.CurrentValue;
+            return Math.Min(1f, entry.CurrentValue / underwaterMult);
+        }
+
+        /// <summary>
+        /// Moves the four reverb sends toward their target and writes them only while they
+        /// move. A converged sound costs nothing until its room changes.
+        /// </summary>
+        private static void SmoothReverb(FilterEntry entry)
+        {
+            if (entry.ReverbConverged && !forceReverbApply) return;
+
+            var cur = entry.CurrentReverb;
+            var tgt = entry.TargetReverb;
+
+            float maxDelta = Math.Abs(tgt.SendGain0 - cur.SendGain0);
+            maxDelta = Math.Max(maxDelta, Math.Abs(tgt.SendGain1 - cur.SendGain1));
+            maxDelta = Math.Max(maxDelta, Math.Abs(tgt.SendGain2 - cur.SendGain2));
+            maxDelta = Math.Max(maxDelta, Math.Abs(tgt.SendGain3 - cur.SendGain3));
+
+            if (maxDelta < SmoothingCurves.ReverbConvergeEpsilon)
+            {
+                entry.CurrentReverb = tgt;
+                entry.ReverbConverged = true;
+                if (!forceReverbApply) return;
+            }
+            else
+            {
+                float alpha = SmoothingCurves.ReverbAlpha(maxDelta);
+                // Cutoffs follow the target directly — they shape the send, they are not
+                // a level, so a ramp adds nothing audible.
+                entry.CurrentReverb = new ReverbResult(
+                    cur.SendGain0 + (tgt.SendGain0 - cur.SendGain0) * alpha,
+                    cur.SendGain1 + (tgt.SendGain1 - cur.SendGain1) * alpha,
+                    cur.SendGain2 + (tgt.SendGain2 - cur.SendGain2) * alpha,
+                    cur.SendGain3 + (tgt.SendGain3 - cur.SendGain3) * alpha,
+                    tgt.SendCutoff0, tgt.SendCutoff1, tgt.SendCutoff2, tgt.SendCutoff3);
+            }
+
+            ReverbEffects.ApplyToSource(entry.SourceId, entry.CurrentReverb);
+        }
+
+        /// <summary>
+        /// Runs on the fixed 25 ms tick and is the ONLY place an audible value moves
+        /// toward its target: filter gain, reverb sends, source position, and the throttle
+        /// envelope. Everything upstream writes raw targets (audit item A4).
+        ///
+        /// Because the rate is fixed, convergence takes the same wall-clock time whether a
+        /// sound is raycast every 50 ms at 5 m or every 500 ms at 50 m.
+        ///
+        /// Rates and their reasons: <see cref="SmoothingCurves"/>.
+        /// </summary>
+        /// <param name="nowMs">Game time, for the throttle envelope.</param>
+        public static void SmoothAll(long nowMs)
         {
             if (!IsInitialized) return;
 
+            var config = SoundPhysicsAdaptedModSystem.Config;
             float underwaterMult = SoundPhysicsAdaptedModSystem.GetUnderwaterMultiplier();
+            float minFilter = config?.MinLowPassFilter ?? 0.001f;
+            // filter = exp(-occlusion * BlockAbsorption * 2) — the divisor that turns a
+            // log-gain difference back into occlusion units.
+            float absorptionScale = Math.Max(1e-4f, (config?.BlockAbsorption ?? 0.5f) * 2f);
+            float fadeDurationMs = (config?.ThrottleFadeSeconds ?? 5.0f) * 1000f;
+            var throttle = SoundPhysicsAdaptedModSystem.Throttle;
+
+            // Real elapsed time for the throttle ramp, so a frame hitch does not stretch a
+            // 5 s fade. Clamped: the first tick and a long freeze must not jump the ramp.
+            float fadeElapsedMs = SMOOTH_TICK_MS;
+            if (lastSmoothTickMs > 0 && nowMs > lastSmoothTickMs)
+                fadeElapsedMs = Math.Min(250f, nowMs - lastSmoothTickMs);
+            lastSmoothTickMs = nowMs;
+
+            // Diving or surfacing changes the reverb send gains inside ApplyToSource.
+            // Converged entries must write their sends once more when that happens.
+            float submersionMult = SoundPhysicsAdaptedModSystem.GetSubmersionReverbMultiplier();
+            if (float.IsNaN(lastSubmersionReverbMult) || Math.Abs(submersionMult - lastSubmersionReverbMult) > 0.001f)
+            {
+                lastSubmersionReverbMult = submersionMult;
+                forceReverbApply = true;
+            }
+
             int smoothed = 0;
             int posSmoothed = 0;
 
@@ -1129,30 +1237,67 @@ namespace soundphysicsadapted
                 if (!IsSoundAlive(sound, entry))
                     continue;
 
-                // === FILTER SMOOTHING (existing) ===
-                // Calculate target with underwater multiplier
+                // === FILTER: the one temporal stage ===
+                // The target is raw — the physics tick never smooths it. Convergence runs
+                // in the log domain, so equal steps are equal steps in dB and in occlusion
+                // units. A linear-gain EMA would race through the loud part of a transition
+                // and crawl through the quiet part.
                 float effectiveTarget = entry.TargetValue * underwaterMult;
+                if (effectiveTarget < MIN_LOG_GAIN) effectiveTarget = MIN_LOG_GAIN;
+                if (effectiveTarget > 1f) effectiveTarget = 1f;
 
-                // Already converged?
-                float diff = effectiveTarget - entry.CurrentValue;
-                if (Math.Abs(diff) >= CONVERGE_EPSILON)
+                float current = entry.CurrentValue < MIN_LOG_GAIN ? MIN_LOG_GAIN : entry.CurrentValue;
+
+                if (Math.Abs(effectiveTarget - current) >= CONVERGE_EPSILON)
                 {
-                    // Always interpolate — no snap threshold.
-                    // The old snap (>0.6 = instant) fired on every wall-edge transition
-                    // because filter oscillated between 0.169 and 1.000 (diff=0.831).
-                    // Smooth interpolation is always correct; teleport-like jumps
-                    // converge in ~10 ticks (0.25s) which is fast enough.
-                    float factor = diff < 0 ? SMOOTH_FACTOR_DOWN : SMOOTH_FACTOR_UP;
-                    float newValue = entry.CurrentValue + diff * factor;
+                    float logCurrent = MathF.Log(current);
+                    float logDiff = MathF.Log(effectiveTarget) - logCurrent;
 
-                    // Apply to OpenAL filter
-                    if (EfxHelper.SetLowpassGainHF(entry.FilterId, newValue))
+                    // Occlusion units, so the bands in SmoothingCurves mean what they say:
+                    // filter = exp(-occlusion * BlockAbsorption * 2).
+                    float occDelta = Math.Abs(logDiff) / absorptionScale;
+                    float alpha = SmoothingCurves.GainAlpha(occDelta, muffling: logDiff < 0f);
+                    current = MathF.Exp(logCurrent + logDiff * alpha);
+                    entry.CurrentValue = current;
+                    smoothed++;
+                }
+                else
+                {
+                    entry.CurrentValue = effectiveTarget;
+                    current = effectiveTarget;
+                }
+
+                // === THROTTLE ENVELOPE ===
+                // Multiplies the smoothed filter; it never feeds back into it. A throttled
+                // sound is not raycast at all, so this ramp is what keeps it moving.
+                float envelope = 1f;
+                bool throttled = throttle != null && throttle.IsThrottled(sound);
+                if (entry.Fade != null || throttled)
+                {
+                    entry.Fade ??= new ThrottleFadeState();
+                    envelope = entry.Fade.Step(throttled, nowMs, fadeElapsedMs, fadeDurationMs,
+                        entry.SoundName ?? "?");
+
+                    // Back at full level and no longer throttled — drop the state object.
+                    if (entry.Fade.IsIdle) entry.Fade = null;
+                }
+
+                float applied = envelope >= 1f ? current : minFilter + (current - minFilter) * envelope;
+
+                if (Math.Abs(applied - entry.AppliedValue) >= CONVERGE_EPSILON * 0.5f)
+                {
+                    if (EfxHelper.SetLowpassGainHF(entry.FilterId, applied))
                     {
-                        entry.CurrentValue = newValue;
-                        // Reattach - VS may have overwritten our filter
+                        entry.AppliedValue = applied;
+                        // Reattach — VS may have overwritten our filter
                         AttachFilter(entry.SourceId, entry.FilterId);
-                        smoothed++;
                     }
+                }
+
+                // === REVERB: same rule, one stage ===
+                if (entry.HasReverbTarget && ReverbEffects.IsInitialized && entry.SourceId > 0)
+                {
+                    SmoothReverb(entry);
                 }
 
                 // === PHASE 4B: POSITION SMOOTHING ===
@@ -1227,6 +1372,8 @@ namespace soundphysicsadapted
                 }
 
             }
+
+            forceReverbApply = false;
 
             // Only log smooth stats every ~5s (200 ticks at 25ms) to avoid per-tick noise
             smoothLogAccumulator++;
@@ -1311,6 +1458,7 @@ namespace soundphysicsadapted
                     if (EfxHelper.SetLowpassGainHF(entry.FilterId, newValue))
                     {
                         entry.CurrentValue = newValue;
+                        entry.AppliedValue = newValue;
                         AttachFilter(entry.SourceId, entry.FilterId);
                         updated++;
                     }
@@ -1470,7 +1618,11 @@ namespace soundphysicsadapted
                     entry.CurrentRepositionedPos = null;
                     entry.SmoothedTargetPos = null;
                     entry.CurrentValue = 1.0f;
+                    entry.AppliedValue = 1.0f;
                     entry.TargetValue = 1.0f;
+                    entry.HasReverbTarget = false;
+                    entry.ReverbConverged = false;
+                    entry.Fade = null;
 
                     restored++;
                 }
