@@ -1425,6 +1425,93 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Hand every live source back to vanilla: no occlusion filter, no reverb send,
+        /// no pitch offset, original position. Called by the master toggle.
+        ///
+        /// The registry itself is KEPT. The sounds are still playing and VS still owns
+        /// them, so a re-enable must find them again. Only the OpenAL state we wrote is
+        /// undone, and each entry is reset to "no muffle" so re-enable starts from dry.
+        ///
+        /// Unlike CleanupEntry, detaching the filter here IS correct: we verify the
+        /// sound is alive and that its sourceId still matches, so the source cannot
+        /// have been recycled to a different sound.
+        /// </summary>
+        public static int RestoreAllToVanilla()
+        {
+            if (!IsInitialized) return 0;
+
+            int restored = 0;
+            bool canSetPosition = InitializeALSource3f();
+
+            foreach (var kvp in activeFilters)
+            {
+                var sound = kvp.Key;
+                var entry = kvp.Value;
+
+                try
+                {
+                    if (entry.SourceId <= 0) continue;
+                    if (!IsSoundAlive(sound, entry)) continue;
+                    if (GetSourceId(sound) != entry.SourceId) continue;
+
+                    DetachFilter(entry.SourceId);
+                    ReverbEffects.DetachFromSource(entry.SourceId);
+                    ApplyPitchOffset(sound, 0f);
+
+                    // Put a repositioned sound back where VS thinks it is. VS only rewrites
+                    // the OpenAL position when it calls SetPosition, which a static looping
+                    // sound never does — so an unwritten source would stay repositioned.
+                    if (canSetPosition && entry.CurrentRepositionedPos != null && entry.OriginalSoundPos != null)
+                    {
+                        SetALSourcePosition(entry.SourceId, entry.OriginalSoundPos);
+                    }
+
+                    entry.TargetRepositionedPos = null;
+                    entry.CurrentRepositionedPos = null;
+                    entry.SmoothedTargetPos = null;
+                    entry.CurrentValue = 1.0f;
+                    entry.TargetValue = 1.0f;
+
+                    restored++;
+                }
+                catch (Exception ex)
+                {
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog($"[SoundFilterManager] RestoreAllToVanilla failed on {entry.SoundName}: {ex.Message}");
+                }
+            }
+
+            return restored;
+        }
+
+        /// <summary>
+        /// Re-attach our filter to every live source after the master toggle turns back on.
+        /// The occlusion tick sets real values within one raycast interval; this only
+        /// puts our filter object back in the send chain so nothing plays unfiltered
+        /// through a stale vanilla filter in the meantime.
+        /// </summary>
+        public static int ReattachAllFilters()
+        {
+            if (!IsInitialized) return 0;
+
+            int reattached = 0;
+            foreach (var kvp in activeFilters)
+            {
+                try
+                {
+                    if (!IsSoundAlive(kvp.Key, kvp.Value)) continue;
+                    if (ReattachFilter(kvp.Key)) reattached++;
+                }
+                catch
+                {
+                    // Sound died mid-iteration — CleanupDisposed will collect it.
+                }
+            }
+
+            return reattached;
+        }
+
+        /// <summary>
         /// Dispose all filters. Call on mod unload.
         /// </summary>
         public static void Dispose()

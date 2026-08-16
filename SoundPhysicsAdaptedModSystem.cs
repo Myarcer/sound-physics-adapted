@@ -763,7 +763,7 @@ namespace soundphysicsadapted
             }
 
             // Phase 5A: Initialize weather audio manager
-            if (config.EnableWeatherEnhancement && WeatherSoundPatches.IsActive)
+            if (config.EnableWeatherEnhancement && WeatherSoundPatches.PatchesApplied)
             {
                 weatherManager = new WeatherAudioManager(api);
                 if (weatherManager.Initialize())
@@ -790,6 +790,86 @@ namespace soundphysicsadapted
             api.Logger.Notification($"[SoundPhysicsAdapted] Initialized - Occlusion enabled, {reverbStatus}");
         }
 
+        // === Master toggle lifecycle ===
+        // Last state of config.Enabled that we actually acted on. null = nothing applied
+        // yet (startup), so the first observation only records the state.
+        private static bool? appliedEnabledState = null;
+
+        /// <summary>
+        /// Detect a change of the master toggle and run the matching transition once.
+        ///
+        /// The per-tick guards elsewhere only stop NEW work. They cannot undo the OpenAL
+        /// state already written to sounds that are playing right now, so the OFF edge
+        /// needs an explicit restore.
+        /// </summary>
+        private void SyncEnabledState()
+        {
+            if (config == null) return;
+
+            bool nowEnabled = config.Enabled;
+            if (appliedEnabledState == nowEnabled) return;
+
+            bool firstObservation = appliedEnabledState == null;
+            appliedEnabledState = nowEnabled;
+
+            // Startup: nothing of ours is applied yet, so there is nothing to undo.
+            if (firstObservation) return;
+
+            if (nowEnabled) ReArmAfterToggle();
+            else RestoreVanillaState();
+        }
+
+        /// <summary>
+        /// Give the game back to vanilla audio. Undoes every per-source change we made
+        /// to sounds that are playing now; the suppression patches stand down on their
+        /// own because they all read config.Enabled.
+        /// </summary>
+        private void RestoreVanillaState()
+        {
+            int sources = AudioRenderer.RestoreAllToVanilla();
+            int distanceOverrides = LoadSoundPatch.RestoreVanillaDistanceModel();
+
+            // Our replacement weather/thunder sounds must stop, and the patches that
+            // zero the vanilla loops now let VS control its own volumes again.
+            weatherManager?.StopAllReplacements();
+
+            // New sounds load as vanilla stereo again. Buffers already downmixed to
+            // mono stay mono until the game reloads that asset.
+            MonoDownmixManager.ClearCache();
+
+            acousticsManager?.CellCache?.Clear();
+            OcclusionCalculator.ClearCache();
+            soundThrottle?.Clear();
+
+            clientApi?.Logger.Notification(
+                $"[SoundPhysicsAdapted] Master toggle OFF — vanilla audio restored " +
+                $"({sources} live sources cleared, {distanceOverrides} distance overrides reverted). " +
+                $"Sound-file overrides and injected block ambients are applied at asset load and stay until restart.");
+        }
+
+        /// <summary>
+        /// Resume our processing. The ticks compute real values again within one raycast
+        /// interval; this only puts our filter objects back and drops stale geometry
+        /// caches so the first result reflects the world as it is now.
+        /// </summary>
+        private void ReArmAfterToggle()
+        {
+            OcclusionCalculator.ClearCache();
+            acousticsManager?.CellCache?.Clear();
+
+            int reattached = AudioRenderer.ReattachAllFilters();
+
+            // The weather system is skipped at startup when the master toggle is off.
+            // Initialize is guarded against a second run, so this is safe either way.
+            if (weatherManager != null && config.EnableWeatherEnhancement)
+            {
+                weatherManager.Initialize();
+            }
+
+            clientApi?.Logger.Notification(
+                $"[SoundPhysicsAdapted] Master toggle ON — occlusion, reverb and weather resume ({reattached} sources re-armed).");
+        }
+
         /// <summary>
         /// Periodic cleanup of disposed sound filters
         /// </summary>
@@ -805,6 +885,10 @@ namespace soundphysicsadapted
         /// </summary>
         private void OnSmoothingTick(float dt)
         {
+            // Runs BEFORE the enabled guard: a toggle from any source (chat command,
+            // ConfigLib GUI, config reload) must trigger the transition exactly once.
+            SyncEnabledState();
+
             if (!config.Enabled || !AudioRenderer.IsInitialized)
                 return;
 
@@ -940,12 +1024,19 @@ namespace soundphysicsadapted
                     })
                 .EndSubCommand()
                 .BeginSubCommand("toggle")
-                    .WithDescription("Enable/disable sound physics")
+                    .WithDescription("Enable/disable sound physics (disabled = vanilla audio)")
                     .HandleWith((args) =>
                     {
                         config.Enabled = !config.Enabled;
                         api.StoreModConfig(config, "soundphysicsadapted.json");
-                        return TextCommandResult.Success($"[SoundPhysicsAdapted] Sound physics: {(config.Enabled ? "ENABLED" : "DISABLED")}");
+
+                        // Apply the transition now instead of waiting for the next tick,
+                        // so the reply below is already true when the player reads it.
+                        SyncEnabledState();
+
+                        return TextCommandResult.Success(config.Enabled
+                            ? "[SoundPhysicsAdapted] Sound physics: ENABLED"
+                            : "[SoundPhysicsAdapted] Sound physics: DISABLED — vanilla audio restored");
                     })
                 .EndSubCommand()
                 .BeginSubCommand("set")

@@ -124,7 +124,7 @@ namespace soundphysicsadapted
                 return false;
             }
 
-            if (!WeatherSoundPatches.IsActive)
+            if (!WeatherSoundPatches.PatchesApplied)
             {
                 SoundPhysicsAdaptedModSystem.Log("WeatherAudioManager: patches not active, cannot initialize");
                 return false;
@@ -193,12 +193,10 @@ namespace soundphysicsadapted
             if (!initialized || disposed) return;
 
             var config = SoundPhysicsAdaptedModSystem.Config;
-            if (config == null || !config.EnableWeatherEnhancement)
+            if (config == null || !config.Enabled || !config.EnableWeatherEnhancement)
             {
                 // Feature disabled at runtime — stop all replacement sounds
-                rainHandler?.StopAll();
-                positionalHandler?.StopAll();
-                openingTracker?.Clear();
+                StopAllReplacements();
                 return;
             }
 
@@ -563,6 +561,22 @@ namespace soundphysicsadapted
                    $"  {positionalDebug}\n" +
                    $"  Layer 1: {rainHandler?.GetDebugStatus() ?? "No handler"}\n" +
                    $"  Thunder: {thunderStr} — {thunderDebug}";
+        }
+
+        /// <summary>
+        /// Stop every replacement weather sound we own — the Layer 1 bed, the positional
+        /// opening sources and thunder — and drop the tracked openings. The handlers stay
+        /// constructed, so the next enabled tick resumes without a re-initialize.
+        ///
+        /// The vanilla weather loops are silent only while WeatherSoundPatches keeps
+        /// zeroing them, so the caller must let those patches stand down as well.
+        /// </summary>
+        public void StopAllReplacements()
+        {
+            rainHandler?.StopAll();
+            positionalHandler?.StopAll();
+            thunderHandler?.StopAll();
+            openingTracker?.Clear();
         }
 
         public void Dispose()

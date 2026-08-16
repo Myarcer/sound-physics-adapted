@@ -4,6 +4,27 @@ All notable changes to Sound Physics Adapted will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+- **`.sp toggle` now gives the game back to vanilla audio.** The toggle only stopped new
+  work before. Sounds that already played kept our filter, our reverb send, our pitch
+  offset and our moved position, because nothing put them back. Rain was the worst case.
+  The patch that silences the vanilla weather loops read the wrong flag, so it kept the
+  loops at volume 0 while our own weather tick had stopped. Rain then played at its last
+  level and no longer got quieter when you walked inside. The toggle now restores every
+  live sound, stops our weather and thunder sounds, and lets vanilla control its own
+  reverb, weather, underwater filter and distance attenuation again.
+- The toggle also reacts to a change made in the ConfigLib window or in the config file,
+  not only to the chat command.
+
+### Known limits of the toggle
+- Replaced sound files and the ambient sounds added to blocks are applied when the game
+  loads assets. The mod silences the added block ambients when you turn it off, but the
+  replaced sound files stay until you restart the game.
+- A sound that was already mixed down to mono stays mono until the game loads that asset
+  again. New sounds load in stereo as vanilla does.
+
 ## [0.2.6-dev.4] - 2026-08-14
 
 ### Changed

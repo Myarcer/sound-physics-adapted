@@ -1652,6 +1652,32 @@ namespace soundphysicsadapted
             SoundPhysicsAdaptedModSystem.DebugLog($"[Thunder] {message}");
         }
 
+        /// <summary>
+        /// Stop every thunder sound and drop the queued rolls, but keep the EFX filters
+        /// and the one-shot pool alive. Used by the master toggle so vanilla thunder can
+        /// take over immediately and a later re-enable needs no re-initialize.
+        /// </summary>
+        public void StopAll()
+        {
+            foreach (var managed in activeLayer1Sounds)
+            {
+                try
+                {
+                    managed.Sound?.Stop();
+                    managed.Sound?.Dispose();
+                }
+                catch { }
+            }
+            activeLayer1Sounds.Clear();
+
+            pendingCracks.Clear();
+            pendingBolts.Clear();
+            outdoorBoltExpiry.Clear();
+            outdoorCrackExpiry.Clear();
+
+            oneShotPool?.StopAll();
+        }
+
         public void Dispose()
         {
             if (disposed) return;

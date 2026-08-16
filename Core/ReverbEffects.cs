@@ -242,6 +242,29 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// Disconnect a source from every auxiliary send we use.
+        /// The source keeps its last send gains until something reconnects it, so the
+        /// master toggle must call this to give the source back to vanilla dry.
+        /// </summary>
+        public static void DetachFromSource(int sourceId)
+        {
+            if (!_initialized || sourceId <= 0) return;
+
+            int sends = _maxAuxSends >= 4 ? 4 : (_maxAuxSends >= 2 ? 2 : 1);
+            try
+            {
+                for (int send = 0; send < sends; send++)
+                {
+                    EfxHelper.DisconnectSourceFromAuxSlot(sourceId, send);
+                }
+            }
+            catch (Exception ex)
+            {
+                SoundPhysicsAdaptedModSystem.DebugLog($"Failed to detach reverb from source {sourceId}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Get the auxiliary effect slot IDs for external mod use (API).
         /// Returns array of 4 slot IDs (0 = slot not created).
         /// </summary>

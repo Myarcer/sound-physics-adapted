@@ -59,7 +59,16 @@ namespace soundphysicsadapted.Patches
         private static float _latchedLeaviness = 0f;
 
         /// <summary>Whether VS weather sounds are currently being suppressed.</summary>
-        public static bool IsActive => _patchApplied && SoundPhysicsAdaptedModSystem.Config?.EnableWeatherEnhancement == true;
+        public static bool IsActive => _patchApplied
+            && SoundPhysicsAdaptedModSystem.Config?.Enabled == true
+            && SoundPhysicsAdaptedModSystem.Config?.EnableWeatherEnhancement == true;
+
+        /// <summary>
+        /// Whether the weather patches are installed, regardless of the master toggle.
+        /// Construction of the weather system depends on this, not on IsActive — the mod
+        /// can start with the master toggle off and still be toggled on later.
+        /// </summary>
+        public static bool PatchesApplied => _patchApplied;
 
         // Phase 5C: Thunder handler reference for routing lightning events
         private static ThunderAudioHandler _thunderHandler;
@@ -290,7 +299,7 @@ namespace soundphysicsadapted.Patches
             _ambientDiagTick++;
 
             var config = SoundPhysicsAdaptedModSystem.Config;
-            if (config == null || !config.EnableThunderPositioning || _thunderHandler == null || _weatherManager == null)
+            if (config == null || !config.Enabled || !config.EnableThunderPositioning || _thunderHandler == null || _weatherManager == null)
             {
                 if (_ambientDiagTick % _ambientDiagLogInterval == 1)
                     if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
@@ -528,7 +537,7 @@ namespace soundphysicsadapted.Patches
         private static void BoltClientInitPostfix(object __instance)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
-            if (config == null || !config.EnableThunderPositioning || _thunderHandler == null || _weatherManager == null)
+            if (config == null || !config.Enabled || !config.EnableThunderPositioning || _thunderHandler == null || _weatherManager == null)
                 return;
 
             try
@@ -621,7 +630,9 @@ namespace soundphysicsadapted.Patches
         private static void UpdateSoundsPrefix(object __instance)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
-            if (config == null || !config.EnableWeatherEnhancement)
+            // config.Enabled is the master toggle: when it is off we must stop zeroing
+            // the vanilla loops, or VS keeps computing its volumes into silence.
+            if (config == null || !config.Enabled || !config.EnableWeatherEnhancement)
                 return;
 
             // Capture instance ASAP — allows our weather tick to read intensities
@@ -659,7 +670,7 @@ namespace soundphysicsadapted.Patches
         private static void UpdateSoundsPostfix(object __instance)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
-            if (config == null || !config.EnableWeatherEnhancement)
+            if (config == null || !config.Enabled || !config.EnableWeatherEnhancement)
                 return; // Let vanilla play normally
 
             try

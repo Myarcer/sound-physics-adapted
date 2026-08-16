@@ -132,6 +132,16 @@ namespace soundphysicsadapted
 
         public int ThrottledCount => _throttledSounds.Count;
 
+        /// <summary>
+        /// Drop the throttle decisions without disposing. The master toggle calls this
+        /// so a re-enable re-evaluates from the current scene instead of stale distances.
+        /// </summary>
+        public void Clear()
+        {
+            _throttledSounds.Clear();
+            _allSounds.Clear();
+        }
+
         public string GetStats()
         {
             return $"Throttled={_throttledSounds.Count}, MutedThisTick={_throttledCount}, UnmutedThisTick={_unthrottledCount}";

@@ -472,7 +472,21 @@ namespace soundphysicsadapted
         // stack), but a NEW sound taking a recycled sourceId gets fresh vanilla values and
         // MUST be re-applied. AudioRenderer.RegisterSound calls InvalidateDistanceModel()
         // whenever a new sound<->sourceId pairing is created.
-        private static readonly HashSet<int> _distanceModelApplied = new HashSet<int>();
+        private static readonly Dictionary<int, VanillaDistanceParams> _distanceModelApplied
+            = new Dictionary<int, VanillaDistanceParams>();
+
+        /// <summary>
+        /// The source's distance parameters as VS left them, captured before our
+        /// multipliers overwrite them. The master toggle writes these back so a
+        /// disabled mod gives the source to vanilla with vanilla attenuation.
+        /// NaN in a field means we never touched that parameter.
+        /// </summary>
+        private struct VanillaDistanceParams
+        {
+            public float MaxDistance;
+            public float Rolloff;
+            public bool AirAbsorptionApplied;
+        }
 
         /// <summary>
         /// Reset the distance-model dedupe for a sourceId. Called by AudioRenderer.RegisterSound
@@ -483,6 +497,48 @@ namespace soundphysicsadapted
         {
             if (sourceId <= 0) return;
             lock (_distanceModelApplied) _distanceModelApplied.Remove(sourceId);
+        }
+
+        /// <summary>
+        /// Write the captured vanilla distance parameters back to every source we
+        /// overrode, then forget them so a later re-enable applies fresh multipliers.
+        /// Called by the master toggle, not on the hot path.
+        /// </summary>
+        public static int RestoreVanillaDistanceModel()
+        {
+            var entries = new List<KeyValuePair<int, VanillaDistanceParams>>();
+            lock (_distanceModelApplied)
+            {
+                foreach (var kvp in _distanceModelApplied) entries.Add(kvp);
+                _distanceModelApplied.Clear();
+            }
+
+            int restored = 0;
+            foreach (var kvp in entries)
+            {
+                int sourceId = kvp.Key;
+                if (sourceId <= 0) continue;
+
+                try
+                {
+                    if (!float.IsNaN(kvp.Value.MaxDistance))
+                        EfxHelper.ALSetSourceMaxDistance(sourceId, kvp.Value.MaxDistance);
+
+                    if (!float.IsNaN(kvp.Value.Rolloff))
+                        EfxHelper.ALSetSourceRolloff(sourceId, kvp.Value.Rolloff);
+
+                    if (kvp.Value.AirAbsorptionApplied && EfxHelper.IsAirAbsorptionSupported)
+                        EfxHelper.ALSetSourceAirAbsorption(sourceId, 0f);
+
+                    restored++;
+                }
+                catch
+                {
+                    // Source may already be gone — nothing to restore on it.
+                }
+            }
+
+            return restored;
         }
 
         /// <summary>
@@ -528,10 +584,21 @@ namespace soundphysicsadapted
                 // stack). Cleared per-sourceId by InvalidateDistanceModel when a new
                 // sound registers on the id. Lock: Start() can fire on the music thread,
                 // and InvalidateDistanceModel runs from the AudioRenderer registration path.
+                // Claim the sourceId inside the lock before doing any work, exactly as the
+                // old HashSet.Add did — two threads must never both multiply the same source.
+                // The captured vanilla values are written back into the claim at the end.
+                var vanillaParams = new VanillaDistanceParams
+                {
+                    MaxDistance = float.NaN,
+                    Rolloff = float.NaN,
+                    AirAbsorptionApplied = false
+                };
+
                 lock (_distanceModelApplied)
                 {
-                    if (!_distanceModelApplied.Add(sourceId))
+                    if (_distanceModelApplied.ContainsKey(sourceId))
                         return;
+                    _distanceModelApplied[sourceId] = vanillaParams;
                 }
 
                 if (!EfxHelper.IsAvailable) return;
@@ -549,6 +616,7 @@ namespace soundphysicsadapted
                         // they cause voice contention and stress the mixer.
                         if (newMax > 4096f) newMax = 4096f;
                         EfxHelper.ALSetSourceMaxDistance(sourceId, newMax);
+                        vanillaParams.MaxDistance = curMax;
                     }
                 }
 
@@ -563,6 +631,7 @@ namespace soundphysicsadapted
                         if (newRoll < 0f) newRoll = 0f;
                         if (newRoll > 10f) newRoll = 10f;
                         EfxHelper.ALSetSourceRolloff(sourceId, newRoll);
+                        vanillaParams.Rolloff = curRoll;
                     }
                 }
 
@@ -571,6 +640,15 @@ namespace soundphysicsadapted
                 if (config.AirAbsorptionFactor > 0.001f && EfxHelper.IsAirAbsorptionSupported)
                 {
                     EfxHelper.ALSetSourceAirAbsorption(sourceId, config.AirAbsorptionFactor);
+                    vanillaParams.AirAbsorptionApplied = true;
+                }
+
+                lock (_distanceModelApplied)
+                {
+                    // Skip if InvalidateDistanceModel released the id while we worked —
+                    // a new sound owns the source now and must capture its own values.
+                    if (_distanceModelApplied.ContainsKey(sourceId))
+                        _distanceModelApplied[sourceId] = vanillaParams;
                 }
 
                 if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)

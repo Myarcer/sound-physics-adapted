@@ -102,8 +102,10 @@ namespace soundphysicsadapted.Patches
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
 
-            // If our reverb system is disabled, let vanilla work
-            if (config == null || !config.EnableCustomReverb || !config.DisableVanillaReverb)
+            // If our reverb system is disabled, let vanilla work.
+            // config.Enabled is the master toggle — without it here, a disabled mod
+            // leaves the game with no reverb at all instead of vanilla reverb.
+            if (config == null || !config.Enabled || !config.EnableCustomReverb || !config.DisableVanillaReverb)
                 return true; // Run original
 
             // Skip vanilla reverb - our system handles it

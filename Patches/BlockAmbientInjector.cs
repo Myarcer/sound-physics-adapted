@@ -212,6 +212,16 @@ namespace soundphysicsadapted.Patches
         {
             if (!patchApplied) return;
 
+            // Master toggle off: the injected Ambient asset is attached to the block at
+            // asset load and cannot be removed at runtime, so silence it instead. Vanilla
+            // gives these blocks no ambient sound at all, which is what strength 0 means.
+            if (SoundPhysicsAdaptedModSystem.Config?.Enabled == false)
+            {
+                if (rainSurfaceBlockIds.Contains(__instance.Id) || torchBlockIds.Contains(__instance.Id))
+                    __result = 0f;
+                return;
+            }
+
             // Multi-block placeholders (e.g. upper half of 2-block-tall doors) carry their own
             // block ID that is NOT in our injected HashSets, but VS's ambient scan calls
             // GetSounds() on them which forwards to the controller block (returning the door's

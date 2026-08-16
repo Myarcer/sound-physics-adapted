@@ -438,7 +438,11 @@ namespace soundphysicsadapted.Patches
                 object musicEngine = clientMain != null ? musicEngineField.GetValue(clientMain) : null;
                 if (musicEngine == null) return;
 
-                float perceivedVolume = loudestResonatorVolumeThisFrame;
+                // Master toggle off: report silence so the release branch below hands
+                // currentTrack back to vanilla instead of holding it forever.
+                float perceivedVolume = SoundPhysicsAdaptedModSystem.Config?.Enabled == false
+                    ? 0f
+                    : loudestResonatorVolumeThisFrame;
 
                 if (perceivedVolume >= MUSIC_SUPPRESS_THRESHOLD)
                 {
