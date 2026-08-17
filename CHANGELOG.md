@@ -19,9 +19,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `trapdoor-bars`.
 
 ### Configuration
-- Both config files move to version 11. The mod replaces `soundphysicsadapted.json` and
-  `soundphysicsadapted_materials.json` with fresh defaults at the first start. Write down
-  your own values before you update.
+- **A config file from the version before is now upgraded, not replaced.** Both config
+  files move to version 11. The mod keeps every value you set and changes only what this
+  release changed: it replaces the `trapdoor` pattern with `trapdoor-plate` and
+  `trapdoor-bars`, and it raises the torch volume to 0.42 if you still had the old default
+  of 0.35. A value you edited yourself stays as it is. A config file that is older than
+  version 10, or newer than the mod, still falls back to fresh defaults.
 - **`.sp toggle` now gives the game back to vanilla audio.** The toggle only stopped new
   work before. Sounds that already played kept our filter, our reverb send, our pitch
   offset and our moved position, because nothing put them back. Rain was the worst case.

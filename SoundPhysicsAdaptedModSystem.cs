@@ -141,14 +141,27 @@ namespace soundphysicsadapted
                     config.ConfigVersion = CurrentConfigVersion;
                     api.Logger.Notification("[SoundPhysicsAdapted] No config found, generating defaults.");
                 }
-                else if (config.ConfigVersion != CurrentConfigVersion)
+                else if (config.ConfigVersion > CurrentConfigVersion)
                 {
-                    // Older OR newer (mod downgrade) config gets regenerated from fresh
-                    // defaults — a newer config may carry values this version can't
-                    // interpret, so silently re-stamping its version would be wrong.
-                    api.Logger.Notification($"[SoundPhysicsAdapted] Config v{config.ConfigVersion} doesn't match mod's v{CurrentConfigVersion}. Regenerating with fresh defaults.");
+                    // Newer config (mod downgrade) gets regenerated from fresh defaults —
+                    // it may carry values this version can't interpret, so silently
+                    // re-stamping its version would be wrong.
+                    api.Logger.Notification($"[SoundPhysicsAdapted] Config v{config.ConfigVersion} is newer than mod's v{CurrentConfigVersion}. Regenerating with fresh defaults.");
                     config = new SoundPhysicsConfig();
                     config.ConfigVersion = CurrentConfigVersion;
+                }
+                else if (config.ConfigVersion < CurrentConfigVersion)
+                {
+                    if (UpgradeConfig(config, api.Logger))
+                    {
+                        MigrateConfig(config);
+                    }
+                    else
+                    {
+                        api.Logger.Notification($"[SoundPhysicsAdapted] Config v{config.ConfigVersion} has no upgrade step to v{CurrentConfigVersion}. Regenerating with fresh defaults.");
+                        config = new SoundPhysicsConfig();
+                        config.ConfigVersion = CurrentConfigVersion;
+                    }
                 }
                 else
                 {
@@ -174,12 +187,22 @@ namespace soundphysicsadapted
                 {
                     materialConfig = MaterialSoundConfig.CreateDefault();
                 }
+                else if (materialConfig.Version > MaterialSoundConfig.CurrentVersion)
+                {
+                    // Newer material config (mod downgrade) — regenerate, same reason as
+                    // the main config above.
+                    api.Logger.Notification($"[SoundPhysicsAdapted] Material config v{materialConfig.Version} is newer than mod's v{MaterialSoundConfig.CurrentVersion}. Regenerating with fresh defaults.");
+                    materialConfig = MaterialSoundConfig.CreateDefault();
+                }
                 else if (materialConfig.Version < MaterialSoundConfig.CurrentVersion)
                 {
-                    // A material config with an older version is replaced by fresh defaults.
-                    // There is no migration chain — the defaults contain everything.
-                    api.Logger.Notification($"[SoundPhysicsAdapted] Material config v{materialConfig.Version} is outdated (current: v{MaterialSoundConfig.CurrentVersion}). Regenerating with fresh defaults.");
-                    materialConfig = MaterialSoundConfig.CreateDefault();
+                    // Upgrade the file the user has. Only entries whose default changed
+                    // are touched. A version with no upgrade step falls back to defaults.
+                    if (!materialConfig.Upgrade(api.Logger))
+                    {
+                        api.Logger.Notification($"[SoundPhysicsAdapted] Material config v{materialConfig.Version} has no upgrade step to v{MaterialSoundConfig.CurrentVersion}. Regenerating with fresh defaults.");
+                        materialConfig = MaterialSoundConfig.CreateDefault();
+                    }
                 }
                 // Always re-save to add any new properties from updates
                 api.StoreModConfig(materialConfig, "soundphysicsadapted_materials.json");
@@ -1424,10 +1447,40 @@ namespace soundphysicsadapted
             : DEBUG_LOG_MAX_PER_SECOND;
 
         /// <summary>
+        /// Upgrade an older config file in place, one version step at a time.
+        /// Every value the user set stays. A field whose default changed is only
+        /// written when it still holds the old default — an edited value is kept.
+        /// Returns false when a version has no upgrade step; the caller then
+        /// regenerates the file from fresh defaults.
+        /// </summary>
+        private static bool UpgradeConfig(SoundPhysicsConfig cfg, ILogger logger)
+        {
+            while (cfg.ConfigVersion < CurrentConfigVersion)
+            {
+                switch (cfg.ConfigVersion)
+                {
+                    case 10:
+                        // v11: torch ambient default went from 0.35 to 0.42 (20% louder).
+                        if (Math.Abs(cfg.TorchAmbientVolume - 0.35f) < 0.0001f)
+                            cfg.TorchAmbientVolume = 0.42f;
+                        cfg.ConfigVersion = 11;
+                        break;
+
+                    default:
+                        return false;
+                }
+
+                logger?.Notification($"[SoundPhysicsAdapted] Config upgraded to v{cfg.ConfigVersion}.");
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// Sanity pass for a config file that has the current version.
-        /// A config file with a different version never gets here — the loading
-        /// block above replaces it with fresh defaults. There is no migration
-        /// chain: to change the defaults for all users, bump CurrentConfigVersion.
+        /// A config file with an older version goes through <see cref="UpgradeConfig"/>
+        /// first. To change a default for all users: bump CurrentConfigVersion and add
+        /// the upgrade step for the new version.
         /// </summary>
         private static void MigrateConfig(SoundPhysicsConfig cfg)
         {

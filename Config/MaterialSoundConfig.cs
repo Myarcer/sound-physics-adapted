@@ -12,8 +12,9 @@ namespace soundphysicsadapted
     public class MaterialSoundConfig
     {
         /// <summary>
-        /// Current material config version. A saved config below this version is
-        /// replaced by fresh defaults. Bump this when the defaults change.
+        /// Current material config version. A saved config below this version goes
+        /// through <see cref="Upgrade"/>. Bump this when the defaults change and add
+        /// the upgrade step for the new version.
         /// Keep it equal to CurrentConfigVersion in SoundPhysicsAdaptedModSystem —
         /// both config files use one version number.
         /// </summary>
@@ -419,6 +420,66 @@ namespace soundphysicsadapted
             };
             _compiledPenetrationOverrides = null; // Force recompile
             _penetrationResultCache.Clear();
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // Version upgrade
+        // ════════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Upgrade an older material config in place, one version step at a time.
+        /// Only the entries whose default changed are touched — every material value,
+        /// block override and pattern the user added stays as it is.
+        /// Returns false when a version has no upgrade step; the caller then
+        /// regenerates the file from fresh defaults.
+        /// </summary>
+        public bool Upgrade(ILogger logger)
+        {
+            while (Version < CurrentVersion)
+            {
+                switch (Version)
+                {
+                    case 10:
+                        // v11: the pattern "trapdoor" is a prefix, so it also matched the
+                        // wooden trapdoors (trapdoor-solid-*, trapdoor-window-*) and the
+                        // legacy ones (trapdoor-closed-*, trapdoor-opened-*). Replace it
+                        // with the two metal styles.
+                        ReplaceRainSurfacePattern("trapdoor", new[] { "trapdoor-plate", "trapdoor-bars" });
+                        Version = 11;
+                        break;
+
+                    default:
+                        return false;
+                }
+
+                logger?.Notification($"[SoundPhysicsAdapted] Material config upgraded to v{Version}.");
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Replace one rain surface pattern with a set of narrower ones, at the same
+        /// position in the list. Does nothing when the old pattern is not present —
+        /// the user removed it or already has the new ones.
+        /// </summary>
+        private void ReplaceRainSurfacePattern(string oldPattern, string[] newPatterns)
+        {
+            if (RainSurfaceBlockPatterns == null) return;
+
+            var patterns = new List<string>(RainSurfaceBlockPatterns);
+            int index = patterns.IndexOf(oldPattern);
+            if (index < 0) return;
+
+            patterns.RemoveAt(index);
+            foreach (var pattern in newPatterns)
+            {
+                if (patterns.Contains(pattern)) continue;
+                patterns.Insert(index, pattern);
+                index++;
+            }
+
+            RainSurfaceBlockPatterns = patterns.ToArray();
         }
 
         /// <summary>
