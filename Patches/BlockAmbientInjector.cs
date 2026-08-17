@@ -263,7 +263,7 @@ namespace soundphysicsadapted.Patches
                     loggedFirstTorchCall = true;
                     capi.Logger.Notification($"[SoundPhysicsAdapted] BlockAmbientInjector: POSTFIX CALLED for torch block {effectiveBlock.Code} at {effectivePos} (instance={__instance.GetType().Name})");
                 }
-                __result = SoundPhysicsAdaptedModSystem.Config?.TorchAmbientVolume ?? 0.35f;
+                __result = SoundPhysicsAdaptedModSystem.Config?.TorchAmbientVolume ?? 0.42f;
                 return;
             }
 

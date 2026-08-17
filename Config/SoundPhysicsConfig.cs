@@ -735,7 +735,7 @@ namespace soundphysicsadapted
         /// Base volume for torch ambient sounds (returned by GetAmbientSoundStrength).
         /// Lower than held torch to avoid overwhelming nearby areas.
         /// </summary>
-        public float TorchAmbientVolume { get; set; } = 0.35f;
+        public float TorchAmbientVolume { get; set; } = 0.42f;
 
         /// <summary>
         /// Sound asset path for torch ambient. Uses the same idle crackling

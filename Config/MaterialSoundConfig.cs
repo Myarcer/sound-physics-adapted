@@ -17,7 +17,7 @@ namespace soundphysicsadapted
         /// Keep it equal to CurrentConfigVersion in SoundPhysicsAdaptedModSystem —
         /// both config files use one version number.
         /// </summary>
-        public const int CurrentVersion = 10;
+        public const int CurrentVersion = 11;
 
         /// <summary>Config version for migration</summary>
         public int Version { get; set; } = 1;
@@ -596,7 +596,11 @@ namespace soundphysicsadapted
                     "chandelier",       // game:chandelier-{metal}
                     "lantern",          // game:lantern-{metal}-{facing}   (TODO: own sound?)
                     "metaldoor",        // game:metaldoor-{metal}-{config}
-                    "trapdoor",         // game:trapdoor-{metal}-{config}
+                    // Only the two metal trapdoor styles. game:trapdoor-solid-*,
+                    // game:trapdoor-window-* and the legacy game:trapdoor-{closed|opened}-*
+                    // are wood and must not get a metal rain sound.
+                    "trapdoor-plate",   // game:trapdoor-plate-{rusted|iron}-{age}
+                    "trapdoor-bars",    // game:trapdoor-bars-{rusted|iron}-{age}
                     "plaque",           // game:plaque-{metal}-{facing}
                     "shingleblock",     // game:shingleblock-{metal}-{facing}  (metal roof shingles)
                     "lightningrod",     // game:lightningrod-{metal}

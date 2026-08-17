@@ -45,7 +45,7 @@ namespace soundphysicsadapted
         /// Keep it equal to <see cref="MaterialSoundConfig.CurrentVersion"/> — both
         /// config files use one version number.
         /// </summary>
-        private const int CurrentConfigVersion = 10;
+        private const int CurrentConfigVersion = 11;
         private static MaterialSoundConfig materialConfig;
         private static ICoreClientAPI clientApi;
         private static AudioPhysicsSystem acousticsManager;

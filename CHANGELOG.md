@@ -6,7 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Torch holders sound 20% louder.** The default volume of the torch crackle changed from
+  0.35 to 0.42.
+
 ### Fixed
+- **Rain no longer hits metal on a wooden trapdoor.** The block list for rain impact sounds
+  contained the pattern `trapdoor`. That pattern is a prefix, so it also matched the wooden
+  trapdoors (`trapdoor-solid-*`, `trapdoor-window-*`) and the legacy trapdoors
+  (`trapdoor-closed-*`, `trapdoor-opened-*`). A wooden trapdoor in the rain played the
+  metal impact loop. The list now contains only the two metal styles, `trapdoor-plate` and
+  `trapdoor-bars`.
+
+### Configuration
+- Both config files move to version 11. The mod replaces `soundphysicsadapted.json` and
+  `soundphysicsadapted_materials.json` with fresh defaults at the first start. Write down
+  your own values before you update.
 - **`.sp toggle` now gives the game back to vanilla audio.** The toggle only stopped new
   work before. Sounds that already played kept our filter, our reverb send, our pitch
   offset and our moved position, because nothing put them back. Rain was the worst case.
