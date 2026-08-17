@@ -1,449 +1,435 @@
 # Changelog
 
-All notable changes to Sound Physics Adapted will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-
-## [Unreleased]
-
-### Changed
-- **Torch holders sound 20% louder.** The default volume of the torch crackle changed from
-  0.35 to 0.42.
-
-### Fixed
-- **Rain no longer hits metal on a wooden trapdoor.** The block list for rain impact sounds
-  contained the pattern `trapdoor`. That pattern is a prefix, so it also matched the wooden
-  trapdoors (`trapdoor-solid-*`, `trapdoor-window-*`) and the legacy trapdoors
-  (`trapdoor-closed-*`, `trapdoor-opened-*`). A wooden trapdoor in the rain played the
-  metal impact loop. The list now contains only the two metal styles, `trapdoor-plate` and
-  `trapdoor-bars`.
-
-### Configuration
-- **A config file from the version before is now upgraded, not replaced.** Both config
-  files move to version 11. The mod keeps every value you set and changes only what this
-  release changed: it replaces the `trapdoor` pattern with `trapdoor-plate` and
-  `trapdoor-bars`, and it raises the torch volume to 0.42 if you still had the old default
-  of 0.35. A value you edited yourself stays as it is. A config file that is older than
-  version 10, or newer than the mod, still falls back to fresh defaults.
-- **`.sp toggle` now gives the game back to vanilla audio.** The toggle only stopped new
-  work before. Sounds that already played kept our filter, our reverb send, our pitch
-  offset and our moved position, because nothing put them back. Rain was the worst case.
-  The patch that silences the vanilla weather loops read the wrong flag, so it kept the
-  loops at volume 0 while our own weather tick had stopped. Rain then played at its last
-  level and no longer got quieter when you walked inside. The toggle now restores every
-  live sound, stops our weather and thunder sounds, and lets vanilla control its own
-  reverb, weather, underwater filter and distance attenuation again.
-- The toggle also reacts to a change made in the ConfigLib window or in the config file,
-  not only to the chat command.
-
-### Known limits of the toggle
-- Replaced sound files and the ambient sounds added to blocks are applied when the game
-  loads assets. The mod silences the added block ambients when you turn it off, but the
-  replaced sound files stay until you restart the game.
-- A sound that was already mixed down to mono stays mono until the game loads that asset
-  again. New sounds load in stereo as vanilla does.
+This file lists the changes to Sound Physics Adapted.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.2.6-dev.5] - 2026-08-16
 
+### Fixed
+- **Rain no longer sounds like metal on a wooden trapdoor.** The rain impact list held the
+  pattern `trapdoor`. The mod matches a pattern as a prefix, so the pattern also caught the
+  wooden trapdoors and the legacy trapdoors. The list now holds the two metal styles only,
+  `trapdoor-plate` and `trapdoor-bars`.
+- **`.sp toggle` gives the game back to vanilla audio.** The toggle stopped new work only.
+  A sound that already played kept the filter, the reverb, the pitch and the moved position
+  of the mod. Rain was the worst case. It stayed at its last level and no longer got quieter
+  when you walked inside. The toggle now restores every live sound. It stops the weather and
+  thunder sounds of the mod, and it gives the reverb, the weather, the underwater filter and
+  the distance attenuation back to the game.
+- The toggle also reacts to a change in the ConfigLib window or in the config file. Before,
+  it reacted to the chat command only.
+
 ### Changed
-- **One smoothing stage for each thing you hear.** The filter, the reverb and the position
-  of a sound are now moved toward their new value in one place only, on a tick of 25 ms.
-  The measurement step writes the raw value and does no smoothing at all. Before this,
-  the measurement step and the audio step each smoothed the same value, at rates that
-  changed with the distance to the sound, so the real speed matched no written number.
-- A sound that is far away now reacts as fast as a sound next to you. Its reverb converges
-  in the same time; only the measurement is less frequent.
-- The filter moves through the loudness in equal steps (log domain). A transition no longer
-  runs fast at the loud end and slow at the quiet end.
+- **A torch on a torch holder is 20 percent louder.** The default volume of the crackle goes
+  from 0.35 to 0.42.
+- **One smoothing stage for each thing you hear.** The filter, the reverb and the position of
+  a sound move toward their new value in one place, every 25 ms. Before, two steps smoothed
+  the same value at rates that changed with the distance, so the real speed matched no
+  written number.
+- A far sound reacts as fast as a near sound. Its reverb needs the same time. Only the
+  measurement is less frequent.
+- The filter moves through the loudness in equal steps. A transition no longer runs fast at
+  the loud end and slow at the quiet end.
 
 ### Performance
-- The reverb of a sound is written to the audio system only while it moves. A sound in a
-  room that does not change costs no reverb work. Before, all four sends were written on
-  every measurement.
-- A throttled sound is not measured any more. Its fade continues in the audio step.
+- The mod writes the reverb of a sound only while the reverb moves. A sound in a room that
+  does not change costs no reverb work.
+- The mod does not measure a throttled sound. Its fade continues in the audio step.
+
+### Configuration
+- **The mod upgrades an old config file. It does not replace it.** Both config files go to
+  version 11. The mod keeps every value you set and changes only what this release changed.
+  It replaces the `trapdoor` pattern, and it raises the torch volume to 0.42 if your file
+  still holds the old default of 0.35. A value that you edited stays. A file older than
+  version 10, or newer than the mod, still falls back to fresh defaults.
+
+### Known limits of the toggle
+- The game applies a replaced sound file and an added block ambient sound when it loads the
+  assets. The mod silences the added block ambient sounds when you turn it off. A replaced
+  sound file stays until you restart the game.
+- A sound that the mod mixed down to mono stays mono until the game loads that asset again.
+  A new sound loads in stereo, as vanilla does.
 
 ### Internal
-- `AudioPhysicsSystem.ProcessSoundRaycast` (900 lines) is replaced by `UpdateSoundAcoustics`
-  plus `ResolveAcousticPaths` and `ResolveRepositioning`. New files:
-  `Core/SmoothingCurves.cs` (all temporal constants), `Core/ThrottleFadeState.cs`,
-  `Core/AmbientVolumeResolver.cs`, `Core/FilterPipeline.cs`.
-- `SoundPhysicsAPI` and the weather system read the effective occlusion from the applied
-  filter gain (new `OcclusionCalculator.FilterToOcclusion`), so the value includes the
-  airspace, opening and diffraction floors.
+- `AudioPhysicsSystem.ProcessSoundRaycast` is now `UpdateSoundAcoustics` with
+  `ResolveAcousticPaths` and `ResolveRepositioning`. New files: `Core/SmoothingCurves.cs`,
+  `Core/ThrottleFadeState.cs`, `Core/AmbientVolumeResolver.cs`, `Core/FilterPipeline.cs`.
+- `SoundPhysicsAPI` and the weather system read the occlusion from the applied filter gain,
+  so the value includes the airspace, opening and diffraction floors.
 
 ## [0.2.6-dev.4] - 2026-08-14
 
 ### Changed
-- Both config files use one version number, and it starts again at 10. The mod
-  replaces `soundphysicsadapted.json` and `soundphysicsadapted_materials.json`
-  with fresh defaults on the first start after the update. All version history
-  from before is removed from the code — there is no migration chain any more.
-  Write down your own values before you update if you changed the configuration.
-- Sound file overrides are on by default (`EnableSoundOverrides`). The improved
-  beehive sound plays without a configuration change. The louder lightning sound
-  stays off — set `OverrideLightningSound` to true if you want it.
+- Both config files use one version number, and the number starts again at 10. The mod
+  replaces both files with fresh defaults at the first start after the update. Write your own
+  values down before you update.
+- Sound file overrides are on by default. The better beehive sound plays without a change to
+  the configuration. The louder lightning sound stays off. Set `OverrideLightningSound` to
+  true if you want it.
 
 ## [0.2.6-dev.3] - 2026-08-14
 
-This build joins the two development lines. The audio fixes released as `0.2.6-dev.2`
-and the join-time work done after it now live in one branch. Nothing is dropped.
+This build joins the two development lines. Both lines keep all their work.
 
 ### Fixed
-- **A sound is no longer treated as sealed off when your ear sits inside a block.**
-  The sealed-cavity check stopped its search at the listener's own block when that
-  block counted as solid (snow layer, wall-embedded position, bed clamp). The sound
-  then played dry and heavily muffled although you stood next to it.
+- **A sound is no longer sealed off when your ear sits inside a block.** The check stopped at
+  your own block when that block counted as solid, for example a snow layer or a bed. A sound
+  next to you then played dry and heavily muffled.
 
 ### Changed
-- The distance-model duplicate guard uses one design again. The generation counter
-  added on the join-time line never advanced, so it did the same work as the simple
-  source-id set. The set stays.
+- The guard against duplicate distance model work uses one design again.
 
 ## [0.2.6] - Unreleased
 
 ### Fixed
-- **A resonator that plays while you join a world is no longer loud, flat and everywhere.**
-  Sounds that start during the join warmup kept the stereo buffer they were created with,
-  and OpenAL never positions a stereo source: no distance attenuation and no direction.
-  A resonator 100+ blocks away played at full volume through walls and held back the
-  vanilla music. The stereo-to-mono downmix no longer waits for the warmup to end.
-  This also repairs block ambient loops (quern, forge, beehive) that start while chunks load.
-- **A resonator track no longer plays wide open for the first second.** The music engine
-  creates the sound without a position, so the occlusion system did not see it until the
-  next resonator tick. The sound now gets its position and its filter when the track loads,
-  before playback starts.
-- A mono-downmix request that cannot be served is no longer discarded without a trace.
-  The request stays pending and the debug log records why the sound stayed stereo.
-- **Standing inside a solid block no longer muffles all sounds.** The occlusion ray now
-  skips the listener's own block when it is fully solid (mirrors the weather ray logic) —
-  ear positions clipped into snow layers, chiseled blocks, or walls previously counted
-  their own block as a wall in front of every sound.
-- **Mod-API queries are now main-thread-gated.** `SoundPhysicsAPI` (used by voice-chat
-  mods) calls into main-thread-only compute cores; off-thread calls previously risked
-  silently corrupting occlusion/reverb of unrelated sounds. They now return passthrough
-  values and log a one-time warning telling the caller to marshal to the game thread.
-- **Sounds behind a doorway are no longer near-silent.** When the system repositioned an occluded sound to a found opening (door, window, air gap), the muffle floor ignored that verified path — the sound appeared at the doorway but stayed almost inaudible. Probe-found openings now lift the muffle floor (conservatively, below the full open-air floor).
-- Opening or sealing a wall near you (door, block place/break) now triggers an immediate weather rescan instead of waiting out the scan interval — rain/wind entry reacts audibly faster.
-- A single blocked sky ray (tree branch, roof eave) no longer flips the fallback outdoor detection to "indoors".
-- Reverb cache entries now age out based on your current position, not where you were when they were created.
-- Downgrading the mod with a newer config file regenerates the config instead of silently mis-stamping its version.
+- **A resonator that starts while you join a world is no longer loud and flat.** A sound that
+  starts in the join warmup kept its stereo buffer, and OpenAL does not position a stereo
+  source. A resonator 100 blocks away played at full volume through walls and held the vanilla
+  music back. The downmix to mono no longer waits for the end of the warmup. This also repairs
+  block sounds that start while chunks load, such as the quern, the forge and the beehive.
+- **A resonator track no longer plays wide open for the first second.** The mod gives the
+  sound its position and its filter when the track loads, before playback starts.
+- A downmix request that the mod cannot serve is no longer discarded without a trace. The
+  request stays open and the debug log records the reason.
+- **A solid block at your ear no longer muffles all sounds.** The occlusion ray skips your own
+  block when it is fully solid. Snow layers, chiseled blocks and walls counted as a wall in
+  front of every sound.
+- **A mod that asks the API from another thread gets a safe answer.** `SoundPhysicsAPI` calls
+  code that runs on the main thread only. A call from another thread now returns passthrough
+  values and writes one warning.
+- **A sound behind a doorway is no longer almost silent.** The mod moved the sound to the
+  opening, but the muffle floor ignored that path.
+- A door or a block change near you starts a weather rescan at once. Rain and wind at an
+  opening react faster.
+- One blocked ray to the sky, from a branch or a roof edge, no longer reads as indoors.
+- Reverb cache entries age out from your current position, not from the position where the mod
+  created them.
+- A downgrade with a newer config file regenerates the config file.
 
 ### Performance
-- **Block changes no longer wipe the reverb dedupe cache.** Mining/building cleared the
-  entire reverb cell cache on every (debounced) block change even though targeted
-  per-cell invalidation already covered the changed geometry — raycast load during
-  combat/mining drops accordingly.
-- Sound-start reverb approximation now uses a stats-free cache peek (hit-rate stats and
-  LRU recency are no longer skewed by start-time reads).
-- Removed the last per-visit allocation in the occlusion ray's door/gate check.
-- **Sealed-cavity pre-check:** heavily muffled sounds in fully sealed spaces (cave pockets, walled-off cellars) are detected with a cheap flood fill and skip the full raytrace entirely — they play dry and heavily muffled, as before, at a fraction of the cost.
-- Removed the remaining per-bounce allocations in the reverb raytracer and per-visit allocations in door/chisel checks.
-- Freeze-diagnostic logging (5s heartbeat) is now gated behind DebugMode.
-- No longer creates an unused reverb slot on audio devices reporting exactly 3 auxiliary sends.
-
-### Internal
-- Documented the EFX copy-on-attach dependency on the shared reverb send filters.
+- **A block change no longer clears the whole reverb cache.** The mod invalidates the changed
+  cells only. Mining and building cost much less raycast work.
+- **The mod finds a fully sealed space with a cheap flood fill** and skips the full raytrace.
+  The sound plays dry and heavily muffled, as before, at a fraction of the cost.
+- The reverb estimate at sound start reads the cache without a change to the statistics.
+- The occlusion ray and the reverb raytracer no longer allocate memory per step or per bounce.
+- The freeze heartbeat log runs in DebugMode only.
+- The mod no longer creates an unused reverb slot on a device with exactly three auxiliary
+  sends.
 
 ## [0.2.5] - 2026-07-02
 
 ### Fixed
-- **Indoor weather audio no longer cuts out.** Rain/wind heard through windows and doorways used to go silent the moment you walked deeper into a building (a structural check falsely marked the opening as sealed, then a timeout deleted it). Openings now stay tracked while quiet or occluded and their sources fade naturally — and swell back when you return. Louder openings still take over the limited source slots from quieter ones.
-- Fixed a create/destroy loop that recreated silenced weather sources every tick (audio churn, wasted CPU).
-- Walking indoors during rain: the ambient rain bed now hands over smoothly to positional window/door sources — no dropout while the positional sources spin up, no double volume.
-- Fixed audio glitches after leaving and rejoining a world (stale state reset).
-- Distance-model settings could fail to re-apply when the game recycled a sound source.
-- Multiple corner-placed block sounds in the same tick could play at each other's positions (shared-buffer aliasing).
-- Sounds started from the music engine thread no longer race the physics raycasts (deferred to the next tick) — fixes rare instability when music/resonator tracks start.
-- Volume fades no longer freeze mid-fade when a sound's update budget is throttled.
+- **Indoor weather audio no longer cuts out.** Rain and wind through a window or a doorway
+  went silent when you walked deeper into a building. An opening now stays tracked while it is
+  quiet or occluded, and its sound fades. The sound swells again when you return. A louder
+  opening still takes the limited source slots from a quieter one.
+- The mod no longer recreates a silenced weather source every tick.
+- When you walk indoors in rain, the ambient rain hands over to the window and door sources.
+  There is no dropout and no double volume.
+- Audio faults after you leave a world and join it again are gone. The mod resets its state.
+- The distance model settings apply again after the game recycles a sound source.
+- Two block sounds in the same tick no longer play at the position of the other sound.
+- A sound that starts on the music thread no longer races the raycasts.
+- A volume fade no longer freezes when the budget throttles the sound.
 
 ### Changed
-- Building from source now requires the .NET 10 SDK (VS 1.22+).
+- A build from source needs the .NET 10 SDK (Vintage Story 1.22 and later).
 
 ### Performance
-- No more raytrace on sound start, compiled OpenAL calls, zero-allocation weather processing — less stutter when many sounds start at once.
+- No raytrace at sound start, compiled OpenAL calls, and weather work without allocation. Less
+  stutter when many sounds start together.
 
 ## [0.2.4] - 2026-04-27
 
 ### Added
-- **Distance Model overrides** — per-source OpenAL attenuation tuning (default ON):
-  - `SoundRangeMultiplier` (default `1.4`): scales `AL_MAX_DISTANCE`. Sounds carry farther — safe to extend now that real occlusion prevents wall bleed-through.
-  - `AirAbsorptionFactor` (default `1.0`): EFX `AL_AIR_ABSORPTION_FACTOR` per source. Distant sounds lose treble naturally (deeper thunder, muffled distant footsteps). `0.0` = vanilla.
-  - `DistanceRolloffFactor` (default `1.0`): scales `AL_ROLLOFF_FACTOR` for curve shaping.
-  - `DistanceModelExcludeMusic` (default `true`): music sound types skip the overrides.
-  - Master toggle: `EnableDistanceModelOverrides` (default `true`).
-- Applied universally on every sound start via `SoundStartPostfix`. Idempotent per source — safe with re-attachments.
+- **Distance model overrides**, on by default. They tune the attenuation of each sound.
+  - `SoundRangeMultiplier` (1.4): a sound carries farther. Real occlusion stops the bleed
+    through walls.
+  - `AirAbsorptionFactor` (1.0): a far sound loses treble. Thunder is deeper and far footsteps
+    are duller. Use 0.0 for vanilla.
+  - `DistanceRolloffFactor` (1.0): shapes the attenuation curve.
+  - `DistanceModelExcludeMusic` (true): music keeps the vanilla model.
+  - `EnableDistanceModelOverrides` (true): the master toggle.
 
 ### Changed
-- Mod is now `requiredOnClient: true` so clients auto-download from ModDB when joining a server that has it. Server-side remains optional (`requiredOnServer: false`) — server can run without the mod and clients with it still get all clientside patches.
+- The mod is `requiredOnClient`. A client downloads it from the ModDB when it joins a server
+  that has it. The server side stays optional.
 
 ## [0.2.3] - 2026-04-22
 
 ### Changed
-- Versioning switched to 3-segment SemVer (was 4-segment) to match Vintage Story's parser. No more `Failed parsing version string` warning at mod load.
-- Distant thunder crack (`nodistance.ogg`) is now noticeably deeper and quieter at long range:
-  - `ThunderCrackPitchMin` default lowered `0.35` → `0.22` (deeper bass tail at >500m)
-  - Far-distance crack volume curve reshaped: ~40-50% quieter beyond 400m vs old curve. Close-range (≤100m) volume unchanged.
-  - 100-400m: now `0.75 → 0.21` (was `0.75 → 0.35`)
-  - 400-1000m: now `0.21 → 0.05` (was `0.35 → 0.10`)
+- The version has three segments. The game parses it without a warning.
+- The distant thunder crack is deeper and quieter. `ThunderCrackPitchMin` goes from 0.35 to
+  0.22. Beyond 400 m the crack is 40 to 50 percent quieter. Below 100 m the volume does not
+  change.
 
 ## [0.2.2.5] - 2026-04-22
 
 ### Changed
-- Updated for Vintage Story 1.22.0 — minimum game version bumped from 1.21.0 to 1.22.0
-- `EnumBlockMaterial.Liquid` references migrated to `EnumBlockMaterial.Water` (renamed upstream in 1.22)
-- Default material config keys renamed `liquid` → `water` (occlusion + reflectivity sections)
+- The mod supports Vintage Story 1.22. The minimum game version goes from 1.21.0 to 1.22.0.
+- The game renamed the material `Liquid` to `Water`. The default config keys follow the game.
 
 ### Compatibility
-- Existing user `soundphysicsadapted_materials.json` files using the old `liquid` key continue to work — the loader transparently maps `liquid` onto the new `Water` material when no `water` key is present
+- A config file with the old `liquid` key still works. The loader maps the key onto `water`
+  when the file has no `water` key.
 
 ## [0.2.2.3] - 2026-04-03
 
 ### Added
-- Face-sampled ambient volume occlusion — ambient sounds (water, lava, beehives) now use multi-face sampling to determine the least-occluded bbox face center as the acoustic origin, replacing the old averaged-position method that produced buggy interior points and unstable occlusion
-- Proximity center blend — as the player approaches an ambient volume, the acoustic position blends toward the player for an immersive enveloping effect with smooth panning transition at boundaries
-- Bbox-excluding DDA methods (`CalculatePathOcclusionExcludingBboxes`, `CalculateExcludingBboxes`) — occlusion rays now skip blocks inside the ambient volume's own bounding boxes, preventing self-occlusion artifacts
-- Median-of-9-rays occlusion for ambient face centers — robust to both DDA corner-clipping (occ=2 outliers) and edge-slipping (occ=0 outliers), producing stable wall counts (1 wall→1.0, 2 walls→2.0)
-- Face hysteresis with distance and raw occlusion tiebreakers — prevents L/R flip-flop when faces have similar clarity; perpendicular paths (occ=1) preferred over diagonal paths (occ=2+)
-- EMA temporal smoothing on acoustic position (α=0.15, ~300ms convergence) — damps face-switching jitter
+- **An ambient volume sounds stable.** Water, lava and beehives use the least occluded face of
+  their box as the sound origin. The averaged position produced points inside the geometry.
+- The sound position blends toward you as you come close to an ambient volume. The pan stays
+  smooth at the border.
+- An occlusion ray skips the blocks inside the box of the volume. A volume no longer occludes
+  itself.
+- The mod takes the median of nine rays per face. The wall count is stable.
+- A face keeps its choice unless another face is clearly better. Left and right no longer
+  flip.
+- Time smoothing on the sound position damps the rest of the jitter.
 
 ### Fixed
-- Reverb leak through occluded sources — 3 SPR-style fixes prevent reverb from bleeding through fully muffled walls
-- Beehive sound override domain — moved from `survival:` to `game:` domain so the override actually matches the vanilla sound key
-- Point-source ambients (resonators) no longer misclassified as bbox volumes — `SoundType.Ambient` sounds without bbox data now fall through to normal repositioning with probe rays instead of being stuck with no repositioning
-- Exclusion state leak safety — `try/finally` around `RunOcclusion` in bbox-excluding DDA ensures static exclusion state is always cleared even if an exception occurs
-- Unclamped early return in `CalculateExcludingBboxes` — now consistently capped to `MaxOcclusion`
+- Reverb no longer leaks through a fully muffled wall.
+- The beehive sound override uses the `game:` domain, so it matches the vanilla sound.
+- A point ambient sound, such as a resonator, is no longer handled as a box volume.
+- The mod always clears the exclusion state, also after an exception.
+- An early return in the box-excluding raycast respects `MaxOcclusion`.
 
 ### Performance
-- `GetReflectivity` cached per block ID — eliminates redundant material lookups in `ProbeForOpenings`
-- `Vec3d`/`Random` allocations eliminated from `ProbeForOpenings` hot path
+- The mod caches the reflectivity per block and allocates nothing in the opening probe.
 
 ### Config
-- `SoundOverrides` defaults to `false` (was `true`) — custom sound replacements opt-in only
+- `SoundOverrides` is off by default. A custom sound replacement is opt-in.
 
 ## [0.2.2.1] - 2026-03-27
 
 ### Fixed
-- Pre-existing block entity sounds (querns, forges, beehives) that started during world loading were permanently invisible to the occlusion system — they played at full volume through any number of walls. Now queued during startup and retroactively registered with correct occlusion once warmup completes
+- **The mod now occludes a quern, a forge or a beehive that started during world load.**
+  These sounds were invisible to the mod and played at full volume through any wall. The mod
+  queues them and registers them when the warmup ends.
 
 ### Performance
-- DDA rays now early-abort at the inaudibility threshold instead of continuing to `MaxOcclusion=32` — saves ~80% of DDA steps for entombed sounds behind thick walls. Threshold is derived from `MinLowPassFilter` and `BlockAbsorption` (default: ~3.8 blocks of stone = inaudible, material-aware)
+- An occlusion ray stops at the threshold of inaudibility. A sound behind a thick wall costs
+  about 80 percent fewer steps.
 
 ## [0.2.2] - 2026-03-27
 
 ### Added
-- Diffraction floor (rebuilt from scratch) — the old bOcc system that let entombed sounds bleed through many walls is replaced with a physics-grounded floor using bounce ray data. When 2+ open bounce paths and meaningful shared airspace are detected (indicating a real L-corridor or corner path), the LPF floor is raised based on simplified UTD/Maekawa diffraction (~8-10dB per 90° bend). Entombed sounds cannot benefit — both the open path count and >5% shared airspace requirements block wall-leaking
-- Static sound cache — sounds that haven't moved skip raycasts entirely. Automatically bypassed for 1s after any block change (door open/close, break/place) to prevent step-down artifacts. Toggle via `EnableStaticSoundCache` config option
-- `bocc` debug visualization mode — shows bOcc LOS path quality (green=clear, yellow=partial, orange=heavy, red=blocked)
+- **A new diffraction floor.** A sound around a corner needs two open bounce paths and shared
+  airspace before it gets relief. The relief follows a simple diffraction model, about 8 to
+  10 dB for a 90 degree bend. A sealed sound gets no relief, so it cannot leak through walls.
+- **A cache for a sound that does not move.** The sound skips its raycasts. Any block change
+  bypasses the cache for one second. Toggle: `EnableStaticSoundCache`.
+- The debug view has a `bocc` mode. It shows the quality of the line of sight.
 
 ### Changed
-- Occlusion absorption multiplier reduced from ×3 to ×2 — less aggressive per block, more natural muffling curve through thick walls
-- `MaxOcclusion` default raised from `4.0` to `32.0` — the previous cap of 4 blocks caused sounds behind 4+ walls to clamp at the same filter level regardless of additional walls; 32 gives full headroom across the realistic range
+- The absorption multiplier per block goes from 3 to 2. A thick wall muffles more naturally.
+- `MaxOcclusion` goes from 4.0 to 32.0. Four walls and eight walls no longer sound the same.
 
 ### Fixed
-- Tall door (2-3 block) self-occlusion — multiblock upper halves no longer push the sound source above the door into ceiling/wall blocks causing false occlusion
-- Stationary sound debug gap — `FORCE_REFRESH_MS` now bypasses `RateLimitedLog` so sounds that haven't moved still log correctly
+- A tall door no longer occludes its own sound.
+- A sound that does not move writes its debug log correctly.
 
 ### Performance
-- Extracted `RunOcclusion` lambda to a static method, eliminating closure allocations on every tick
-- Zero-cost debug log guards added to all hot-path files — no string formatting overhead when debug logging is off
-- Reuse `multiRayOcclusion` result instead of redundant DDA recalculation
+- No allocation per tick in the occlusion ray. No string work when debug logging is off. The
+  mod reuses the multi-ray result instead of a second raycast.
 
 ### Config
-- `MaxDiffractionFilter` (default `0.35`) — caps diffraction relief at ~9dB, realistic for a single 90° corner bend
-- `MinDiffractionOcclusion` (default `0.3`) — minimum occlusion on diffracted paths (~8dB), prevents unrealistically transparent corners
-- `EnableStaticSoundCache` (default `true`)
-- Config bumped to v4, material config to v8 — outdated configs auto-regenerate from fresh defaults; no legacy migration chains
+- `MaxDiffractionFilter` (0.35) caps the relief at a corner at about 9 dB.
+- `MinDiffractionOcclusion` (0.3) keeps a corner from a fully open sound.
+- `EnableStaticSoundCache` (true).
+- The config goes to v4 and the material config to v8. An outdated file regenerates from
+  fresh defaults.
 
 ## [0.2.1] - 2026-03-26
 
 ### Fixed
-- Door occlusion — closed doors now properly muffle sound; open doors are fully transparent; thin panels that miss AABB ray tests get override-based occlusion directly
-- Weather DDA door separation — dual-accumulator separates Layer 1 ambient muffling (doors count) from 5B spawn detection (doors transparent), so rain sources spawn behind closed doors but still muffle correctly
-- DDA partial-block destination — player inside a partial block (slab, ladder, etc.) no longer gets blanket skip; AABB check determines actual occlusion contribution
-- DDA sky coverage — step-back test replaces legacy heuristic, preventing false sky readings through solid overhangs
-- Glass pane TreatAsFullCube migration — glass panes no longer promoted to full-cube occlusion during config version upgrade
+- A closed door muffles sound. An open door is transparent. A thin panel that a ray misses
+  gets its occlusion from the override.
+- A rain source spawns behind a closed door and still muffles correctly. The weather ray
+  counts a door for the muffling and ignores it for the spawn test.
+- A partial block at your position, such as a slab or a ladder, no longer skips the occlusion
+  test.
+- The sky test no longer reads sky through a solid overhang.
+- A glass pane keeps its own occlusion through a config upgrade.
 
 ## [0.2.0] - 2026-03-25
 
 ### Added
-- Direct path gain (AL_LOWPASS_GAIN) — SPR-style gain formula for more natural wall muffling alongside frequency filtering
-- Debug visualization — `.soundphysics viz` / `.sp viz` shows occlusion rays, bounce paths, and reverb slots as colored wireframes
-- Diffraction HF darkening — sounds around corners lose treble proportional to diffraction angle
-- Auto-scaled foliage occlusion — bushes and foliage scale by actual block volume instead of flat overrides
-- Weather column memory — verified rain/wind columns persist and only recheck on block changes
+- Direct path gain, for a more natural muffling through a wall.
+- The debug view `.soundphysics viz` shows occlusion rays, bounce paths and reverb slots.
+- A sound around a corner loses treble with the angle.
+- Foliage occludes by its real block volume.
+- The mod remembers a verified rain or wind column and rechecks it on a block change only.
 
 ### Fixed
-- Linux EFX compatibility — probes real auxiliary send count, remaps reverb for 2-send devices
-- Reverb filter gain — SetLowpassGainHF was clobbering direct gain on reverb sends
-- Knapping/crafting occlusion — knapping surfaces, loose stones, flints, ores, clayforming no longer block sound
-- Beams in weather — treated as weather-transparent instead of blocking rain sources
-- Positional sources playing as stereo on rejoin — warmup unified with IsWorldReady so spatial audio is applied correctly
-- Sound repositioning wobble — EMA smoothing on target damps dual-path oscillation
-- Stale sound cleanup — orphaned sources detected and removed
-- Bounce offset accuracy — normal offset 0.15 to 0.01
+- EFX on Linux. The mod reads the real number of auxiliary sends and remaps the reverb for a
+  device with two sends.
+- The reverb send no longer clobbers the direct gain.
+- Knapping surfaces, loose stones, flint, ore and clay forming no longer block sound.
+- A support beam no longer blocks rain.
+- A positional sound no longer plays as stereo when you join again.
+- Sound repositioning no longer wobbles between two paths.
+- The mod removes an orphaned sound source.
 
 ### Performance
-- All Harmony patch hooks gated behind IsWorldReady startup check
-- Small decorative objects auto-detected instead of hardcoded overrides
-- DDA debug logs batched per ray
+- All patches wait for the world-ready gate.
+- The mod detects a small decorative block. The hardcoded list is gone.
 
 ## [0.1.9.0] - 2026-03-22
 
 ### Added
-- Per-tick time budget (8ms default) — prevents lagspikes from complex raycasts in dense geometry; remaining sounds deferred to next tick
-- DDA step hard cap (MaxDDASteps=32) — long-distance rays through open air no longer walk 60+ blocks wastefully
-- Block occlusion cache — caches GetOcclusion result per block ID, eliminates redundant lookups (cache size 16384)
-- IsSolidForOcclusion composite cache — single lookup replaces repeated FirstCodePart + material + property checks
-- IsMultiblockDoorSpacer prefix cache — avoids repeated string operations in DDA hot path
+- A time budget per tick, 8 ms by default. Dense geometry no longer causes a lag spike. The
+  mod defers the rest of the sounds to the next tick.
+- A hard cap of 32 steps per ray, a block occlusion cache, and caches for the solid test and
+  the door spacer test.
 
 ### Changed
-- MaxOcclusion default lowered from 10.0 to 4.0 — 4.0 already produces functionally inaudible results (1.8% volume); the extra 6 units wasted DDA steps for zero perceptual benefit
-- MaxSoundsPerTick lowered from 25 to 10 — time budget is now the primary spike guard; count cap is a secondary safety net
-- MaxOverdueSoundsPerTick lowered from 6 to 3 — combined with time budget prevents burst processing spikes
-- StringComparison.Ordinal used everywhere instead of default culture-sensitive comparisons
-- DDA visitor hot path reordered for early exits on most common block types
-- Existing user configs auto-migrated to new performance defaults (only if values match old defaults)
+- `MaxOcclusion` goes from 10.0 to 4.0. At 4.0 a sound is already inaudible.
+- `MaxSoundsPerTick` goes from 25 to 10. `MaxOverdueSoundsPerTick` goes from 6 to 3. The time
+  budget is the primary guard.
+- The mod compares strings by ordinal.
+- The mod migrates your config to the new performance defaults, but only where your values
+  match the old defaults.
 
 ### Fixed
-- Sound repositioning at >25m behind walls — bounce-based offset skipped when too far to prevent nonsensical placement
-- Sound repositioning offset exceeding player-to-sound distance — rejected to prevent sounds jumping behind the listener
+- The mod no longer moves a sound that is more than 25 m away behind a wall.
+- The mod rejects an offset that is larger than the distance to the sound. A sound cannot jump
+  behind you.
 
 ## [0.1.8] - 2026-03-19
 
 ### Added
-- Volume-scaled occlusion for chiseled & partial blocks — carved blocks occlude sound proportional to their actual remaining volume instead of being treated as fully solid
-- Thatch/sod roofing occlusion — thatch roofs, sod roofs, and hay bales now properly block rain and sound (previously near-transparent due to Plant material classification)
-- Decorative block transparency — toolracks, torchholders, lanterns, candles, signs, firepits, anvils, paintings, clutter, ground storage, and similar non-structural blocks no longer block sound
-- Berry bush & Wildcraftfruit mod support — proper foliage-level occlusion for all vanilla and Wildcraftfruit berry bush variants
-- Wildgrass mod compatibility — wildgrass blocks no longer treated as solid walls
-- Thunder pitch variety — distant thunder cracks pitch-shift lower based on distance; all thunder gets random pitch variation per strike
-- Config auto-migration — saved material configs automatically pick up new block overrides on version upgrade
+- A chiseled or partial block occludes by its remaining volume.
+- A thatch roof, a sod roof and a hay bale block rain and sound.
+- Tool racks, torch holders, lanterns, candles, signs, firepits, anvils, paintings and clutter
+  no longer block sound.
+- Berry bushes, the Wildcraft Fruit mod and the Wildgrass mod get correct foliage occlusion.
+- Distant thunder shifts to a lower pitch. Every strike gets a random pitch.
+- A saved material config picks up new block overrides on an upgrade.
 
 ### Fixed
-- Sound flickering near walls — coherence check prevents sound repositioning from flip-flopping direction at wall edges
-- Permeated sound jumping — when no open paths exist, sound stays at original position instead of jumping wildly between offsets
-- Distant sound muffling too slow — EMA smoothing now compensates for update interval differences so far sounds transition at the same perceived rate as close sounds
-- Reverb cache oscillation at range boundary — dead-zone prevents cache key flip-flopping for sounds at ~45 blocks distance
-- Volume wobble at budget cutoff — throttle fade now freezes when it detects rapid oscillation, unfreezes after stabilizing
-- Chiseled blocks over-muffling — routed through collision-box path instead of solid fast path, so carved shapes reflect actual geometry
-- Rain wobble under porches/overhangs — decorative blocks on walls no longer cause intermittent occlusion spikes as player moves
-- Weather DDA start-position detection — proper step-back test instead of always skipping first block
-- Fences/glass rain occlusion — thin geometry now applies correct material occlusion instead of near-zero AABB estimate
-- Config initialization crash — duplicate key in defaults crashed material config loading
-- Multiblock door spacers causing phantom occlusion — upper blocks of vanilla 2×3 gates (and similar multi-block doors) no longer register as solid wood in DDA raycasts
+- A sound no longer flickers at a wall edge.
+- A sound with no open path stays at its position instead of a jump between offsets.
+- A far sound muffles at the same perceived rate as a near sound.
+- The reverb cache no longer oscillates at about 45 blocks.
+- The throttle fade freezes when it finds a fast oscillation and continues when the sound is
+  stable.
+- A chiseled block no longer muffles too much.
+- A decorative block on a wall no longer causes rain wobble under a porch.
+- A fence and a glass pane apply their material occlusion.
+- The material config no longer crashes on a duplicate key.
+- The upper block of a 2x3 gate no longer counts as solid wood.
 
 ## [0.1.7] - 2026-03-05
 
 ### Added
-- Medieval Expansion mod compatibility (doors, gates, and spacer blocks)
-- Universal door/gate detection for modded blocks (portcullis, etc.)
-- Wind sources now positioned at ceiling height for sky openings instead of floor level
-- Ceiling height inference for wind placement (searches nearby roof geometry)
-- Wind debug visualization (magenta blocks at inferred ceiling height)
-- World-ready gate and warmup system — defers raycasting until world is fully loaded
+- Support for the Medieval Expansion mod: doors, gates and spacer blocks.
+- Door and gate detection for modded blocks, such as a portcullis.
+- A wind source sits at ceiling height for a sky opening, not at floor level. The mod infers
+  the ceiling height from the roof geometry nearby.
+- A debug view for wind, in magenta.
+- A world-ready gate. The mod defers its raycasts until the world is ready.
 
 ### Fixed
-- Multiplayer join freeze caused by raycasting against incomplete block accessor
-- Opened gates/doors with spacer blocks no longer block sound (Medieval Expansion)
-- Solid-face fast path now correctly skipped for open interactable blocks
-- Reverb and occlusion deferred during world load instead of applied immediately
+- The freeze when you join a multiplayer server. The mod raycast against an incomplete world.
+- An open gate with spacer blocks no longer blocks sound.
+- The mod skips the fast path for a solid face on an open interactable block.
 
 ## [0.1.6.1] - 2026-03-02
 
 ### Fixed
-- Resonator state not saving to chunk on server (ToTreeAttributes/FromTreeAttributes patches now applied server-side)
-- Client-server desync when only client has mod installed
-- Carry On mod detection missing on server side
-- Tooltip now shows correct key binding based on Carry On presence
+- The resonator state saves to the chunk on the server.
+- The desync when the client has the mod and the server does not.
+- The mod detects Carry On on the server side. The tooltip shows the correct key.
 
 ## [0.1.6] - 2026-03-02
 
 ### Added
-- Thunder & lightning overhaul: dedicated enclosure system, 1000-block range with realistic falloff
-- Rumble volume variety (0.2–1.0x RNG), indoor cracks muffled with aggressive LPF (500Hz floor)
-- Thunder distance thresholds rescaled to match bolt distribution, raised source limits (L1:12, L2:20)
-- March-along probe rays for cave exit detection, player-centric DDA heights for weather below player
-- SoundSourceAdjuster for door Y-position correction and multiblock placeholder resolution
-- Rain position averaging across nearest 9 columns instead of single nearest
-- Config migration system for seamless upgrades between versions
-- ConfigLib integration for optional in-game settings GUI
+- New thunder and lightning. A dedicated enclosure system, a range of 1000 blocks and a
+  realistic falloff.
+- Random rumble volume. The mod muffles an indoor crack hard, with a floor at 500 Hz.
+- Probe rays that march along a cave to find its exit.
+- The mod corrects the sound position for a door and for a multiblock placeholder.
+- The rain position is the average of the nearest nine columns.
+- A config migration system and support for the ConfigLib settings window.
 
 ### Fixed
-- Sounds at player position losing stereo (no longer forced to mono downmix)
-- Spawn-time position fingerprinting prevents self-occlusion on player-emitted sounds
-- Per-sound range used for reverb attenuation (removed MaxSoundDistance hard gate)
-- Occlusion floor/ceiling inversion that made repositioned sounds too muffled
-- Music pitch getting stuck after exiting water
+- A sound at your own position keeps its stereo.
+- A sound that you make yourself no longer occludes itself.
+- The reverb attenuation uses the range of the sound.
+- Repositioned sounds are no longer too muffled.
+- The music pitch no longer sticks after you leave the water.
 
 ### Changed
-- Tuned adaptive EMA for more realistic acoustic transitions
+- Better tuned smoothing for a more realistic transition.
 
 ## [0.1.5] - 2026-02-25
 
 ### Added
-- Reverb cache redesign with composite key (soundCell + playerCell) — auto-invalidates on player movement
-- Close sounds use 2-block player cells (responsive), far sounds use 8-block cells (stable)
-- Acoustic boundary detection via SharedAirspaceRatio — sounds near corners/doorways get every-tick updates
+- A new reverb cache key from the sound cell and your own cell. It invalidates itself when you
+  move.
+- A near sound uses a cell of 2 blocks, a far sound uses a cell of 8 blocks.
+- A sound near a corner or a doorway updates every tick.
 
 ### Changed
-- Adaptive EMA smoothing scales alpha by change magnitude (large: 0.70/150ms, medium: 0.55/200ms, small: 0.25)
-- Corner transitions reduced from ~1s to ~300ms with no discontinuities
+- The smoothing scales with the size of the change. A corner transition needs about 300 ms
+  instead of about 1 s.
 
 ### Fixed
-- Filter discontinuity when sound crossed occ<1.0 threshold into skipRepositioning branch
-- Capped max EMA alpha at 0.70 to prevent single-tick LPF pops
+- A jump in the filter when a sound crossed the repositioning threshold.
+- A pop in the filter from a single tick, now capped.
 
 ## [0.1.4] - 2026-02-22
 
 ### Added
-- Runtime API for other mods to configure material overrides, occlusion, and reflectivity
-- Door/multiblock sound source adjustment for correct occlusion
-- Lava-specific sound filter configuration
-- Wind sound exemption from reverb processing
+- A runtime API. Another mod can set material overrides, occlusion and reflectivity.
+- The mod corrects the sound position for a door and a multiblock.
+- A filter configuration for lava.
+- Wind skips the reverb.
 
 ### Fixed
-- Resonator lifecycle handling (orphaned tracks and duplication)
-- Throttle churn at budget boundary (distance hysteresis)
-- Thunder sound placement underground/underwater (direction clamping)
-- Weather source spawning through closed doors
+- The resonator lifecycle. Orphaned tracks and duplicates are gone.
+- The churn at the budget border, with distance hysteresis.
+- Thunder plays in the correct direction underground and underwater.
+- A weather source no longer spawns through a closed door.
 
 ## [0.1.3] - 2026-02-09
 
 ### Added
-- Sound override system (custom sound assets replacing vanilla)
-- Beehive sound override as first implementation
-- CarryOn mod compatibility patches
-- Sound repositioning jumps when walking around corners
+- A sound override system. A custom sound file replaces a vanilla sound.
+- The beehive override, as the first sound.
+- Support for the Carry On mod.
 
 ### Changed
-- Resonator patches refactored into consolidated file
+- The resonator patches live in one file.
 
 ## [0.1.2] - 2026-02-08
 
 ### Added
-- Sound repositioning with smoothing and hysteresis
-- DDA block traversal for reverb raycasting
+- Sound repositioning, with smoothing and hysteresis.
+- A DDA block traversal for the reverb raycasts.
 
 ### Fixed
-- Sound repositioning jumps and audio artifacts
-- Filter detach bugs during state transitions
+- Jumps and artifacts from the repositioning.
+- A filter that detached during a state change.
 
 ## [0.1.1] - 2026-02-07
 
 ### Added
-- Weather audio integration (rain, wind, hail positional sources)
-- Thunder audio handler with direction-aware placement
-- Enclosure-based weather muffling
+- Weather audio. Rain, wind and hail get a position.
+- A thunder handler that knows the direction of the strike.
+- Weather muffling from the enclosure of your position.
 
 ### Changed
-- Performance optimization for raycast operations
+- Faster raycasts.
 
 ## [0.1.0] - 2026-02-06
 
 ### Added
-- Initial release
-- Raycast-based sound occlusion through walls
-- Dynamic reverb from cave/room geometry
-- Material-aware sound filtering (wood, stone, metal, etc.)
-- Configurable sound physics settings
-- Harmony patch system for audio interception
+- The first release.
+- Sound occlusion through walls, from raycasts.
+- Reverb from the geometry of a cave or a room.
+- A filter that knows the material: wood, stone, metal and more.
+- Configurable settings.
+- A Harmony patch system for the audio.
