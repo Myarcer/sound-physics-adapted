@@ -115,6 +115,11 @@ namespace soundphysicsadapted
         private ReverbResult cachedPlayerReverb = ReverbResult.None;
         private long lastPlayerReverbTimeMs = 0;
         private const long PLAYER_REVERB_INTERVAL_MS = 250;  // Recalc every 250ms
+        // Listener position of the last computed player reverb. The raytrace reads no
+        // clock and seeds its probe RNG from the two positions only, so for a listener
+        // that has not moved in a world that has not changed it returns the value the
+        // cache already holds.
+        private Vec3d lastPlayerReverbPos = null;
 
         // === Pre-allocated reusable objects (AlconDevTest optimization) ===
         // Reduces GC pressure in hot paths that run every tick
@@ -455,9 +460,19 @@ namespace soundphysicsadapted
             if (currentTimeMs - lastPlayerReverbTimeMs < PLAYER_REVERB_INTERVAL_MS) return;
             lastPlayerReverbTimeMs = currentTimeMs;
 
+            // Static listener, unchanged world: the raytrace would return what the cache
+            // already holds, so skip it. The block-change grace window lets a door or a
+            // wall reach the player reverb on the next cadence step.
+            bool inGraceWindow = lastBlockChangeInvalidationMs > 0
+                && (currentTimeMs - lastBlockChangeInvalidationMs) < BLOCK_CHANGE_GRACE_MS;
+            if (!inGraceWindow && lastPlayerReverbPos != null
+                && playerPos.DistanceTo(lastPlayerReverbPos) < MOVE_THRESHOLD)
+                return;
+
             // Calculate reverb at player position (no occlusion - it's from player to player)
             var (reverbResult, _) = AcousticRaytracer.CalculateWithPaths(playerPos, playerPos, blockAccessor, 0f);
             cachedPlayerReverb = reverbResult;
+            lastPlayerReverbPos = playerPos.Clone();
 
             if (SoundPhysicsAdaptedModSystem.IsReverbDebugEnabled)
                 SoundPhysicsAdaptedModSystem.ReverbDebugLog(
@@ -1049,6 +1064,7 @@ namespace soundphysicsadapted
             soundCache.Clear();
             reverbCellCache?.Clear();
             reverbCellCache = null;
+            lastPlayerReverbPos = null;
         }
     }
 }
