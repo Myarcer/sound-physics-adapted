@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 
@@ -13,16 +12,22 @@ namespace soundphysicsadapted
     /// from the sound can prove the negative — "no air path to the player exists" —
     /// far cheaper than rays can fail to find one.
     ///
-    /// Only a COMPLETED flood fill counts: if the search hits the radius cap or the
-    /// node budget before exhausting the cavity, the cavity extends beyond what we
-    /// explored and nothing is proven (Inconclusive → run the normal raytrace).
+    /// Only a COMPLETED flood fill counts: if the search leaves the radius box through
+    /// air or hits the node budget before exhausting the cavity, the cavity extends
+    /// beyond what we explored and nothing is proven (Inconclusive → run the normal
+    /// raytrace). The caller treats Clear and Inconclusive the same, so the search
+    /// stops the moment either becomes the only possible outcome: the first passable
+    /// block past the radius cap ends the search (A8 — an open cavity used to flood
+    /// the whole box for a verdict that changed nothing).
     ///
     /// Passability uses BlockClassification.IsSolidForOcclusion (per-block-ID cached),
     /// so partial blocks and chisel work count as passable — biased against false
     /// entombment, which would silence an audible sound.
     ///
     /// Static scratch state is safe: all compute runs on the client game thread
-    /// (off-thread Start() processing is deferred to the tick).
+    /// (off-thread Start() processing is deferred to the tick). The visited set and
+    /// the queue are flat preallocated arrays over the search box — no hashing, no
+    /// per-call allocation (A8).
     /// </summary>
     public static class EntombmentChecker
     {
@@ -41,12 +46,17 @@ namespace soundphysicsadapted
             Clear,
             /// <summary>Cavity fully explored, player not inside — sound is sealed off.</summary>
             Entombed,
-            /// <summary>Search hit the radius/node budget — nothing proven.</summary>
+            /// <summary>Open-ended cavity or budget hit — nothing proven.</summary>
             Inconclusive
         }
 
-        private static readonly Queue<(int x, int y, int z)> _queue = new Queue<(int, int, int)>();
-        private static readonly HashSet<long> _visited = new HashSet<long>();
+        // Local coordinates pack into 5-bit fields: lx | ly << 5 | lz << 10, each in
+        // [0, 20] for the 21-block box. That index addresses _visited directly and is
+        // what _queue stores — no hashing, no tuples, and a solid block is marked
+        // visited too, so it is read at most once per check.
+        private const int GRID = 2 * MAX_RADIUS + 1;                    // 21
+        private static readonly byte[] _visited = new byte[32 * 32 * 32];
+        private static readonly int[] _queue = new int[GRID * GRID * GRID];
         private static readonly BlockPos _probePos = new BlockPos(0, 0, 0, 0);
 
         private static readonly int[][] _neighbors = new int[][]
@@ -55,11 +65,6 @@ namespace soundphysicsadapted
             new[] { 0, 1, 0 }, new[] { 0, -1, 0 },
             new[] { 0, 0, 1 }, new[] { 0, 0, -1 }
         };
-
-        private static long Pack(int x, int y, int z)
-        {
-            return ((long)(x & 0x1FFFFF) << 42) | ((long)(y & 0xFFFFF) << 21) | (long)(z & 0x1FFFFF);
-        }
 
         private static bool IsPassable(IBlockAccessor blockAccessor, int x, int y, int z)
         {
@@ -76,18 +81,20 @@ namespace soundphysicsadapted
             int py = (int)System.Math.Floor(playerPos.Y);
             int pz = (int)System.Math.Floor(playerPos.Z);
 
-            _queue.Clear();
-            _visited.Clear();
-
             // Same block as the listener — no cavity can seal them apart.
             if (sx == px && sy == py && sz == pz) return Result.Clear;
+
+            System.Array.Clear(_visited, 0, _visited.Length);
+            int head = 0;
+            int tail = 0;
 
             // Seed: the sound's own block, or its passable neighbors when the sound
             // sits inside a solid block (common for block-attached sounds).
             if (IsPassable(blockAccessor, sx, sy, sz))
             {
-                _queue.Enqueue((sx, sy, sz));
-                _visited.Add(Pack(sx, sy, sz));
+                int center = MAX_RADIUS | (MAX_RADIUS << 5) | (MAX_RADIUS << 10);
+                _queue[tail++] = center;
+                _visited[center] = 1;
             }
             else
             {
@@ -98,20 +105,25 @@ namespace soundphysicsadapted
                     int nz = sz + _neighbors[n][2];
                     if (IsPassable(blockAccessor, nx, ny, nz))
                     {
-                        _queue.Enqueue((nx, ny, nz));
-                        _visited.Add(Pack(nx, ny, nz));
+                        int key = (nx - sx + MAX_RADIUS)
+                                | ((ny - sy + MAX_RADIUS) << 5)
+                                | ((nz - sz + MAX_RADIUS) << 10);
+                        _queue[tail++] = key;
+                        _visited[key] = 1;
                     }
                 }
                 // Fully embedded sound — can't establish a starting cavity.
-                if (_queue.Count == 0) return Result.Inconclusive;
+                if (tail == 0) return Result.Inconclusive;
             }
 
-            bool boundaryReached = false;
             int nodesVisited = 0;
 
-            while (_queue.Count > 0)
+            while (head < tail)
             {
-                var (cx, cy, cz) = _queue.Dequeue();
+                int packed = _queue[head++];
+                int cx = sx + (packed & 31) - MAX_RADIUS;
+                int cy = sy + ((packed >> 5) & 31) - MAX_RADIUS;
+                int cz = sz + ((packed >> 10) & 31) - MAX_RADIUS;
 
                 if (cx == px && cy == py && cz == pz) return Result.Clear;
 
@@ -124,15 +136,15 @@ namespace soundphysicsadapted
                     int nz = cz + _neighbors[n][2];
 
                     // Radius cap: AIR continuing past the search volume means the
-                    // cavity is open-ended — we can no longer prove entombment.
-                    // A solid block past the cap still seals the cavity, so only
-                    // passable overflow flips the result to Inconclusive.
+                    // cavity is open-ended — Entombed is impossible, and the caller
+                    // treats Clear and Inconclusive the same, so stop here. A solid
+                    // block past the cap still seals the cavity.
                     if (System.Math.Abs(nx - sx) > MAX_RADIUS ||
                         System.Math.Abs(ny - sy) > MAX_RADIUS ||
                         System.Math.Abs(nz - sz) > MAX_RADIUS)
                     {
-                        if (!boundaryReached && IsPassable(blockAccessor, nx, ny, nz))
-                            boundaryReached = true;
+                        if (IsPassable(blockAccessor, nx, ny, nz))
+                            return Result.Inconclusive;
                         continue;
                     }
 
@@ -141,18 +153,21 @@ namespace soundphysicsadapted
                     // as a wall that seals the cavity — that would silence an audible sound.
                     if (nx == px && ny == py && nz == pz) return Result.Clear;
 
-                    long key = Pack(nx, ny, nz);
-                    if (_visited.Contains(key)) continue;
-                    _visited.Add(key);
+                    int key = (nx - sx + MAX_RADIUS)
+                            | ((ny - sy + MAX_RADIUS) << 5)
+                            | ((nz - sz + MAX_RADIUS) << 10);
+                    if (_visited[key] != 0) continue;
+                    _visited[key] = 1;
 
                     if (!IsPassable(blockAccessor, nx, ny, nz)) continue;
 
-                    _queue.Enqueue((nx, ny, nz));
+                    _queue[tail++] = key;
                 }
             }
 
-            // Frontier exhausted. Only a fully-contained cavity proves entombment.
-            return boundaryReached ? Result.Inconclusive : Result.Entombed;
+            // Frontier exhausted without leaving the box — the cavity is sealed and
+            // the player is not inside it.
+            return Result.Entombed;
         }
     }
 }

@@ -29,6 +29,11 @@ namespace soundphysicsadapted
         private const long NEAR_INTERVAL_MS = 200;    // 4 ticks - still responsive
         private const long FAR_INTERVAL_MS = 500;     // 10 ticks - background sounds
 
+        // A6: an ambient volume follows the player, so it holds the 50 ms cadence only
+        // while it is close. Past this distance the face point barely moves per player
+        // step and the volume falls back to the normal distance buckets.
+        private const float AMBIENT_BOUNDARY_DISTANCE = 20f;
+
         // === Static Cache ===
         // Skip raycast if nothing moved. Force refresh on timer OR on block change.
         private const double MOVE_THRESHOLD = 0.25;    // Blocks - below this = "didn't move"
@@ -808,9 +813,14 @@ namespace soundphysicsadapted
                 AudioRenderer.ResetSoundPosition(sound, isAmbientVolume ? acousticPos : soundPos);
 
                 // Occlusion near the 0.3 threshold means foliage is building up, so keep
-                // the fast update rate. Ambient volumes always update fast: their position
-                // moves with the player.
-                cache.NearAcousticBoundary = isAmbientVolume || occlusion > 0.15f;
+                // the fast update rate. An ambient volume moves with the player, so it
+                // updates fast only while it is close (A6) — a far volume held the 50 ms
+                // cadence forever, and with rain active that was the most expensive
+                // per-sound class in the profile. Its occlusion does not override the
+                // gate: a far, heavily occluded volume flips nothing quickly.
+                cache.NearAcousticBoundary = isAmbientVolume
+                    ? distance <= AMBIENT_BOUNDARY_DISTANCE
+                    : occlusion > 0.15f;
 
                 if (firstLogOfTick && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                 {
