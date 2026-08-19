@@ -41,6 +41,15 @@ namespace soundphysicsadapted
         private static readonly DDABlockTraversal.BlockVisitor _runOcclusionVisitor = RunOcclusionVisitor;
 
         /// <summary>
+        /// Start position of one offset ray. The eight offset rays of a multi-ray call
+        /// built two Vec3d each — one for the offset, one for the sum. RunOcclusion reads
+        /// the start position during the call and keeps no reference after it, so one
+        /// scratch instance serves every offset ray. Single-threaded, like the _v state
+        /// above.
+        /// </summary>
+        private static readonly Vec3d _offsetRayOrigin = new Vec3d();
+
+        /// <summary>
         /// Clear the block occlusion cache. Call when config reloads or materials change.
         /// Delegates to shared BlockClassification caches.
         /// </summary>
@@ -134,9 +143,12 @@ namespace soundphysicsadapted
                     {
                         // Convergent rays: offset only the SOURCE, all rays converge to same player position
                         // This prevents offset rays from clipping adjacent blocks at short distances
-                        Vec3d offset = new Vec3d(x * variation, y * variation, z * variation);
+                        _offsetRayOrigin.Set(
+                            soundPos.X + x * variation,
+                            soundPos.Y + y * variation,
+                            soundPos.Z + z * variation);
                         float rayOcclusion = RunOcclusion(
-                            soundPos.AddCopy(offset),
+                            _offsetRayOrigin,
                             playerPos,  // No offset - all rays converge to player ears
                             blockAccessor,
                             config
@@ -291,9 +303,12 @@ namespace soundphysicsadapted
                 {
                     for (int z = -1; z <= 1; z += 2)
                     {
-                        Vec3d offset = new Vec3d(x * variation, y * variation, z * variation);
+                        _offsetRayOrigin.Set(
+                            soundPos.X + x * variation,
+                            soundPos.Y + y * variation,
+                            soundPos.Z + z * variation);
                         rays[rayCount++] = RunOcclusion(
-                            soundPos.AddCopy(offset), playerPos, blockAccessor, config);
+                            _offsetRayOrigin, playerPos, blockAccessor, config);
                     }
                 }
             }
