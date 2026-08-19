@@ -40,6 +40,10 @@ namespace soundphysicsadapted
 
 
 
+        // Cache for NeedsSourceAdjustment (multiblock placeholder, or door / gate / portcullis)
+        // 0 = not cached, 1 = needs the adjust path, 2 = plain block
+        private static readonly byte[] needsSourceAdjustCache = new byte[BLOCK_CACHE_SIZE];
+
         // Cache for IsSolidForOcclusion (composite: !chiseled && (fullCube || multipleSolid || treatAsFull))
         // 0 = not cached, 1 = is solid, 2 = is NOT solid
         // This is the hottest check in the DDA — caching the composite result avoids
@@ -58,7 +62,42 @@ namespace soundphysicsadapted
             Array.Clear(hasMultipleSolidFacesCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isChiseledBlockCache, 0, BLOCK_CACHE_SIZE);
             Array.Clear(isSolidForOcclusionCache, 0, BLOCK_CACHE_SIZE);
+            Array.Clear(needsSourceAdjustCache, 0, BLOCK_CACHE_SIZE);
             cachedOcclusionPerSolidBlock = -1f;
+        }
+
+        /// <summary>
+        /// True when <see cref="SoundSourceAdjuster"/> must run its multiblock step and
+        /// its door step for this block. False for every other block, which lets the
+        /// adjuster go straight to block-corner centering.
+        ///
+        /// The answer follows from the block code alone, so it is cached per block ID.
+        /// Without the cache, three substring searches run for every active sound on
+        /// every 50 ms tick, before any distance gate or interval gate.
+        /// </summary>
+        public static bool NeedsSourceAdjustment(Block block)
+        {
+            if (block == null) return false;
+
+            int blockId = block.Id;
+            bool cacheable = blockId >= 0 && blockId < BLOCK_CACHE_SIZE;
+            if (cacheable)
+            {
+                byte cached = needsSourceAdjustCache[blockId];
+                if (cached != 0) return cached == 1;
+            }
+
+            string code = block.Code?.Path;
+            bool needs = code != null
+                && (code.StartsWith("multiblock-", StringComparison.Ordinal)
+                    || code.Contains("door")
+                    || code.Contains("gate")
+                    || code.Contains("portcullis"));
+
+            if (cacheable)
+                needsSourceAdjustCache[blockId] = (byte)(needs ? 1 : 2);
+
+            return needs;
         }
 
         /// <summary>

@@ -36,6 +36,13 @@ namespace soundphysicsadapted
             Block block = blockAccessor.GetBlock(_checkPos);
             if (block == null || block.Id == 0) return soundPos;
 
+            // Most blocks are neither a multiblock placeholder nor a door, so neither
+            // step below can act on them. The verdict is cached per block ID, which
+            // keeps three substring searches out of a path that runs for every active
+            // sound on every tick, before any distance gate or interval gate.
+            if (!BlockClassification.NeedsSourceAdjustment(block))
+                return CenterBlockCornerPosition(soundPos, block);
+
             string code = block.Code?.Path ?? "(null)";
             string blockClass = block.Class ?? "(none)";
 
@@ -57,11 +64,12 @@ namespace soundphysicsadapted
                     code = block.Code?.Path ?? "(null)";
                     blockClass = block.Class ?? "(none)";
 
-                    SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[SoundAdjust] Multiblock resolved: '{originalCode}' -> '{code}' " +
-                        $"(class={blockClass}) at ({_controllerPos.X},{_controllerPos.Y},{_controllerPos.Z})");
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog(
+                            $"[SoundAdjust] Multiblock resolved: '{originalCode}' -> '{code}' " +
+                            $"(class={blockClass}) at ({_controllerPos.X},{_controllerPos.Y},{_controllerPos.Z})");
                 }
-                else
+                else if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
                 {
                     SoundPhysicsAdaptedModSystem.DebugLog(
                         $"[SoundAdjust] Multiblock '{originalCode}' at ({_checkPos.X},{_checkPos.Y},{_checkPos.Z}) " +
@@ -78,17 +86,19 @@ namespace soundphysicsadapted
                 Vec3d adjusted = soundPos.Clone();
                 adjusted.Y += doorShift;
 
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"[SoundAdjust] Door '{code}' (class={blockClass}) " +
-                    $"{(wasMultiblock ? "via multiblock '" + originalCode + "' " : "")}" +
-                    $"at ({_checkPos.X},{_checkPos.Y},{_checkPos.Z}) " +
-                    $"shifted Y +{doorShift:F1} -> ({adjusted.X:F1},{adjusted.Y:F1},{adjusted.Z:F1})");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"[SoundAdjust] Door '{code}' (class={blockClass}) " +
+                        $"{(wasMultiblock ? "via multiblock '" + originalCode + "' " : "")}" +
+                        $"at ({_checkPos.X},{_checkPos.Y},{_checkPos.Z}) " +
+                        $"shifted Y +{doorShift:F1} -> ({adjusted.X:F1},{adjusted.Y:F1},{adjusted.Z:F1})");
 
                 return adjusted;
             }
 
             // Debug: log door/gate blocks that didn't need shifting (height <= 1, e.g. trapdoors)
-            if (code.Contains("door") || code.Contains("gate") || code.Contains("portcullis"))
+            if (SoundPhysicsAdaptedModSystem.IsDebugEnabled
+                && (code.Contains("door") || code.Contains("gate") || code.Contains("portcullis")))
             {
                 int height = block.Attributes?["height"]?.AsInt(0) ?? 0;
                 SoundPhysicsAdaptedModSystem.DebugLog(
@@ -104,7 +114,7 @@ namespace soundphysicsadapted
             // so walking around one side unmuffles immediately while the other side requires
             // seeing most of the block. Shift to block center (+0.5) when all axes are at
             // or very near integer values.
-            soundPos = CenterBlockCornerPosition(soundPos, code);
+            soundPos = CenterBlockCornerPosition(soundPos, block);
 
             return soundPos;
         }
@@ -237,7 +247,7 @@ namespace soundphysicsadapted
         /// </summary>
         private const double CORNER_TOLERANCE = 0.01;
 
-        private static Vec3d CenterBlockCornerPosition(Vec3d pos, string blockCode)
+        private static Vec3d CenterBlockCornerPosition(Vec3d pos, Block block)
         {
             double fracX = pos.X - Math.Floor(pos.X);
             double fracY = pos.Y - Math.Floor(pos.Y);
@@ -259,9 +269,12 @@ namespace soundphysicsadapted
                     Math.Floor(pos.Z) + 0.5
                 );
 
-                SoundPhysicsAdaptedModSystem.DebugLog(
-                    $"[SoundAdjust] Block-center fix: '{blockCode}' " +
-                    $"({pos.X:F2},{pos.Y:F2},{pos.Z:F2}) -> ({centeredPos.X:F2},{centeredPos.Y:F2},{centeredPos.Z:F2})");
+                // Block entities hit this branch on every tick, so the message must not
+                // be built when debug is off.
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    SoundPhysicsAdaptedModSystem.DebugLog(
+                        $"[SoundAdjust] Block-center fix: '{block?.Code?.Path ?? "(null)"}' " +
+                        $"({pos.X:F2},{pos.Y:F2},{pos.Z:F2}) -> ({centeredPos.X:F2},{centeredPos.Y:F2},{centeredPos.Z:F2})");
 
                 return centeredPos;
             }
