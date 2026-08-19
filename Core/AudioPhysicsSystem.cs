@@ -154,6 +154,15 @@ namespace soundphysicsadapted
         private readonly Stopwatch _tickStopwatch = new Stopwatch();
         private int budgetExceededThisTick = 0;
 
+        // An overdue sound passes the normal time budget, so a new oneshot (a footstep,
+        // an impact) is never deferred and never plays unfiltered. It still needs a
+        // ceiling: InvalidateCache marks EVERY sound overdue at once, so after a block
+        // change the whole per-tick allowance could run with no time limit at all. This
+        // factor sets that ceiling as a multiple of MaxTickBudgetMs — 20 ms at the
+        // default 8 ms. A sound deferred at that point comes back on the next tick,
+        // still overdue, and jumps the queue.
+        private const float OVERDUE_BUDGET_FACTOR = 2.5f;
+
         // Stats
         private int updatedThisTick = 0;
         private int cachedThisTick = 0;
@@ -397,11 +406,13 @@ namespace soundphysicsadapted
 
                 // TIME BUDGET: stop processing when tick exceeds budget.
                 // Always allow at least 1 sound per tick (prevents complete starvation).
-                // Overdue sounds (new/stale) bypass the time budget to prevent indefinite deferral.
-                if (timeBudgetMs > 0 && processed > 0 && !candidate.IsOverdue)
+                // Overdue sounds (new/stale) get the wider ceiling, so a new oneshot is
+                // not deferred, but the tick still ends. See OVERDUE_BUDGET_FACTOR.
+                if (timeBudgetMs > 0 && processed > 0)
                 {
+                    float limitMs = candidate.IsOverdue ? timeBudgetMs * OVERDUE_BUDGET_FACTOR : timeBudgetMs;
                     float elapsedMs = (float)_tickStopwatch.Elapsed.TotalMilliseconds;
-                    if (elapsedMs >= timeBudgetMs)
+                    if (elapsedMs >= limitMs)
                     {
                         budgetExceededThisTick++;
                         deferredThisTick++;
