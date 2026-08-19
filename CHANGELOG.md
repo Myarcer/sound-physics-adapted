@@ -3,6 +3,34 @@
 This file lists the changes to Sound Physics Adapted.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Performance
+
+Measured with a 90 second profile of a rainy session. The mod used 4465 ms of the
+main thread, and 3056 ms of that went into block lookup, not into acoustics. The
+changes below remove that overhead. No sound changes: every ray reads the same
+block ids and returns the same values.
+
+- **The mod reads blocks through a chunk-caching accessor.** Each step of a ray
+  reads one block, and the standard accessor takes two locks for each of those
+  reads. The new accessor keeps the last two chunks and reads them directly, so a
+  ray that stays inside one chunk takes no lock. This also gives time back to the
+  render thread and the chunk thread, which share those locks.
+- The weather enclosure scan uses the same accessor.
+- The occlusion rays no longer build two temporary vectors for each offset ray.
+- The mod asks once for each block type whether a sound position needs the door
+  adjustment, instead of searching the block name for every sound on every tick.
+- The mod does not measure the reverb at your position while you stand still. The
+  result cannot change until you move or a block near you changes.
+- Some debug messages were built even with debug off. They are not any more.
+
+### Fixed
+- **Shorter stutter after you place or break a block.** A block change marks every
+  sound for a new measurement, and those measurements had no time limit for the
+  rest of the tick. They now stop at 20 ms. A sound that does not fit is measured
+  on the next tick, before the others.
+
 ## [0.2.6-dev.5] - 2026-08-16
 
 ### Fixed
