@@ -58,6 +58,25 @@ namespace soundphysicsadapted
         // Debug visualization (IRenderer wireframe)
         private static DebugVisualization debugViz;
 
+        // === BLOCK ACCESSOR FOR THE COMPUTE CORE ===
+        // Every DDA step reads one block. The default accessor takes two locks per read:
+        // the global chunk lock in ClientWorldMap.GetChunkAtPos, and the chunk's own pack
+        // lock in WorldChunk.UnpackAndReadBlock. A 90 s profile put 3056 ms of the mod's
+        // 4465 ms main-thread cost inside those two calls — 68 percent of all mod CPU,
+        // and 63 percent of the whole main thread's chunk lookups.
+        //
+        // ICachingBlockAccessor keeps the last two chunks and reads their block array
+        // directly, so a ray that stays inside one chunk takes no lock at all. It returns
+        // the same block ids: both paths end at ChunkData.GetBlockId(index, layer).
+        //
+        // Begin() drops the two cached chunks. It must run at the start of every tick,
+        // because a chunk can unload between ticks and the cache would then hold a dead
+        // reference.
+        //
+        // Main thread only — this type is not thread safe. Off-thread code (the sound
+        // start patches) keeps using clientApi.World.BlockAccessor.
+        private static ICachingBlockAccessor tickBlockAccessor;
+
         // === WORLD READINESS GATE ===
         // Prevents tick handlers and Harmony patches from running expensive raycasts
         // before the world is fully loaded. Without this, DDA raycasts against an
@@ -970,6 +989,18 @@ namespace soundphysicsadapted
         /// Recalculate occlusion for sounds using AudioPhysicsSystem.
         /// All sounds checked every tick; raycast gated by distance-based intervals.
         /// </summary>
+        /// <summary>
+        /// Gives the main-thread block accessor with an empty chunk cache.
+        /// Call it once at the start of a tick and use the result for that tick only.
+        /// See the comment on <see cref="tickBlockAccessor"/> for why the cache exists.
+        /// </summary>
+        private static IBlockAccessor BeginTickBlockAccess()
+        {
+            tickBlockAccessor ??= clientApi.World.GetCachingBlockAccessor(false, false);
+            tickBlockAccessor.Begin();
+            return tickBlockAccessor;
+        }
+
         private void OnOcclusionUpdateTick(float dt)
         {
             if (!config.Enabled || !IsWorldReady || clientApi?.World?.Player?.Entity == null)
@@ -986,7 +1017,7 @@ namespace soundphysicsadapted
 
             // AudioPhysicsSystem: all sounds every tick, raycast gated by distance intervals
             long currentTimeMs = clientApi.World.ElapsedMilliseconds;
-            acousticsManager?.Update(currentPos, clientApi.World.BlockAccessor, currentTimeMs);
+            acousticsManager?.Update(currentPos, BeginTickBlockAccess(), currentTimeMs);
 
             _diagStopwatch.Stop();
             double occMs = _diagStopwatch.Elapsed.TotalMilliseconds;
@@ -1378,6 +1409,10 @@ namespace soundphysicsadapted
             // Reset world readiness
             _worldReady = false;
             _warmupTicksRemaining = 0;
+
+            // Release the cached chunks — they must not outlive the world.
+            tickBlockAccessor?.Dispose();
+            tickBlockAccessor = null;
 
             // Dispose AudioPhysicsSystem
             acousticsManager?.Dispose();
