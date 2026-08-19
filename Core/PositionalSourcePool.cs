@@ -46,6 +46,8 @@ namespace soundphysicsadapted
             public float CurrentVolume;      // What's currently set (for smooth fading)
             public Vec3f LastAppliedPos;     // Last position sent to OpenAL (dead zone filter)
             public long AssignedAtMs;        // Game time of last assignment (swap cooldown)
+            public float Clarity;            // Filter gain measured at the ear (1 = clear)
+            public long MutedSinceMs;        // First tick the source measured inaudible (0 = none)
         }
 
         private readonly ICoreClientAPI capi;
@@ -220,6 +222,34 @@ namespace soundphysicsadapted
         /// <summary>Minimum age before an active slot can be evict-swapped (churn guard).</summary>
         private const long SWAP_COOLDOWN_MS = 2500;
 
+        // ── Measured audibility: a voice must earn its slot ──
+        //
+        // The tracker keeps an opening while it physically exists, and the pool used to
+        // hand a voice to any tracked opening with weight and distance on its side. That
+        // is an opinion about geometry, not a measurement of sound. An opening verified
+        // from the surface kept its voice after the player climbed into the cave below
+        // it, so a rain loop played from a point behind 7 m of rock, at occlusion 5 to 8,
+        // while the opening the player stood under held one slot of four.
+        //
+        // The renderer already holds the filter gain that is on the source right now,
+        // with every path floor in it. If that gain stays under the threshold, the voice
+        // delivers mud and nothing else: it gives the slot back and the opening waits.
+
+        /// <summary>Filter gain under which a source counts as inaudible (about -20 dB).</summary>
+        private const float MUTED_GAIN_THRESHOLD = 0.10f;
+
+        /// <summary>How long a source must measure inaudible before it loses its slot.</summary>
+        private const long MUTED_GRACE_MS = 1500;
+
+        /// <summary>How long an opening waits for a new voice after it lost one.</summary>
+        private const long VOICE_MUTE_HOLD_MS = 10000;
+
+        /// <summary>
+        /// Ear movement that ends the wait early. The mute is a statement about the path
+        /// between the opening and the ear, so it expires when the ear leaves that spot.
+        /// </summary>
+        private const float VOICE_MUTE_RELEASE_DIST = 4f;
+
         // ── Orphaned sounds: fading out detached from any slot ──
         // When a better opening takes over a busy slot, the old sound must not be
         // hard-cut, but waiting for it to fade inside the slot stalled new sources
@@ -255,7 +285,7 @@ namespace soundphysicsadapted
             sources = new PositionalSource[maxSources];
             for (int i = 0; i < maxSources; i++)
             {
-                sources[i] = new PositionalSource();
+                sources[i] = new PositionalSource { Clarity = 1f };
             }
             initialized = true;
         }
@@ -329,6 +359,35 @@ namespace soundphysicsadapted
                                                     * NearFieldFactor(pos, earPos);
                         slotScores[s] = OpeningScore(opening, earPos);
 
+                        // What does this voice actually deliver? Judge only after the
+                        // spawn ramp, so the filter has had time to reach its target.
+                        MeasureClarity(slot);
+                        bool established = nowMs - slot.AssignedAtMs >= SPAWN_RAMP_MS;
+                        if (established && slot.Clarity < MUTED_GAIN_THRESHOLD)
+                        {
+                            if (slot.MutedSinceMs == 0) slot.MutedSinceMs = nowMs;
+                        }
+                        else
+                        {
+                            slot.MutedSinceMs = 0;
+                        }
+
+                        if (slot.MutedSinceMs != 0 && nowMs - slot.MutedSinceMs >= MUTED_GRACE_MS)
+                        {
+                            slot.TargetVolume = 0f;
+                            slotScores[s] = 0f;
+                            opening.VoiceMutedAtMs = nowMs;
+                            opening.VoiceMutedAtEarPos = earPos == null ? null
+                                : new Vec3d(earPos.X, earPos.Y, earPos.Z);
+
+                            if (debug)
+                            {
+                                WeatherAudioManager.WeatherDebugLog(
+                                    $"[5B-{debugTag}] MUTED slot={s} trackId={slot.TrackingId} " +
+                                    $"gain={slot.Clarity:F3} — inaudible for {MUTED_GRACE_MS} ms, releasing slot");
+                            }
+                        }
+
                         if (slot.Sound != null && slot.Sound.IsPlaying)
                         {
                             // Dead zone: only update OpenAL position if moved significantly.
@@ -364,6 +423,29 @@ namespace soundphysicsadapted
                 if (openingAssigned[o]) continue;
                 var cand = trackedOpenings[o];
                 if (cand.Suppressed) continue; // Never assign slots to redundant openings
+
+                // A NEW voice goes only to an opening the scan verified this cycle.
+                // A persisted opening keeps a voice it already holds — that is what
+                // persistence is for, hearing a doorway from around the corner — but it
+                // may not take a free slot from a verified one on the strength of a
+                // weight it earned somewhere else, minutes ago.
+                if (!cand.CurrentlyVerified) continue;
+
+                // An opening whose last voice measured inaudible waits before it gets
+                // another one, or the pool spends every slot on the same mud in a loop.
+                // The wait ends early once the ear has left the spot it was judged from.
+                if (cand.VoiceMutedAtMs != 0)
+                {
+                    bool held = nowMs - cand.VoiceMutedAtMs < VOICE_MUTE_HOLD_MS;
+                    if (held && earPos != null && cand.VoiceMutedAtEarPos != null
+                        && cand.VoiceMutedAtEarPos.DistanceTo(earPos) > VOICE_MUTE_RELEASE_DIST)
+                    {
+                        held = false;
+                    }
+                    if (held) continue;
+                    cand.VoiceMutedAtMs = 0;
+                    cand.VoiceMutedAtEarPos = null;
+                }
 
                 // Virtualization gate: openings whose target volume is inaudible
                 // get no voice. They stay tracked and re-qualify here the moment
@@ -469,6 +551,8 @@ namespace soundphysicsadapted
                 // real value, and stays under the bed that is still carrying the mix.
                 targetSlot.CurrentVolume = Math.Min(SPAWN_HEAD_START, targetSlot.TargetVolume);
                 targetSlot.AssignedAtMs = nowMs;
+                targetSlot.Clarity = 1f;
+                targetSlot.MutedSinceMs = 0;
                 slotScores[bestSlot] = OpeningScore(newOpening, earPos);
 
                 EnsureSourcePlaying(targetSlot);
@@ -743,8 +827,26 @@ namespace soundphysicsadapted
             if (opening.Suppressed) return 0f;
             float dist = earPos != null ? (float)opening.WorldPos.DistanceTo(earPos) : 0f;
             float score = (opening.SmoothedClusterWeight + 0.5f) / (1f + dist);
-            if (opening.CurrentlyVerified) score *= 1.5f;
+            // Verified beats persisted by 3x, which clears the 2x bar in the evict-swap
+            // test: a verified opening can take a slot from a persisted one of the same
+            // size and distance. It used to be 1.5x with no penalty on the persisted
+            // side, so three openings verified from the surface kept their slots while
+            // the opening the player stood under waited.
+            score *= opening.CurrentlyVerified ? 1.5f : 0.5f;
             return score;
+        }
+
+        /// <summary>
+        /// Read back the filter gain the renderer has on this source right now: 1 is
+        /// clear, 0 is sealed, and every path floor is already in it. An untracked
+        /// source (not registered yet) counts as clear, so a fresh voice is never
+        /// judged before it has been measured once.
+        /// </summary>
+        private static void MeasureClarity(PositionalSource slot)
+        {
+            if (slot.Sound == null) { slot.Clarity = 1f; return; }
+            float gain = AudioRenderer.GetCurrentFilterGain(slot.Sound);
+            slot.Clarity = gain > 0f ? Math.Min(gain, 1f) : 1f;
         }
 
         /// <summary>
@@ -840,6 +942,8 @@ namespace soundphysicsadapted
             slot.CurrentVolume = 0f;
             slot.TargetVolume = 0f;
             slot.LastAppliedPos = null;
+            slot.Clarity = 1f;
+            slot.MutedSinceMs = 0;
         }
 
         /// <summary>Fade out and dispose orphaned sounds. Called every update.</summary>
@@ -892,6 +996,8 @@ namespace soundphysicsadapted
             slot.CurrentVolume = 0f;
             slot.TargetVolume = 0f;
             slot.LastAppliedPos = null;
+            slot.Clarity = 1f;
+            slot.MutedSinceMs = 0;
         }
 
         /// <summary>Set all active sources to fade out gracefully.</summary>
@@ -976,13 +1082,18 @@ namespace soundphysicsadapted
                     distWeight = LOUDNESS_DIST_HALF / (LOUDNESS_DIST_HALF + dist);
                 }
 
+                // Clarity is in every term: the Layer 1 bed must duck for the rain the
+                // player hears, not for the volume this pool wrote on a source that a
+                // wall then took away. A muffled voice ducks nothing.
+                float clarity = Math.Clamp(slot.Clarity, 0f, 1f);
+
                 if (slot.CurrentVolume > MinVolume)
                 {
-                    totalContribution += slot.CurrentVolume;
+                    totalContribution += slot.CurrentVolume * clarity;
                     activeCount++;
-                    effective += slot.CurrentVolume * distWeight;
+                    effective += slot.CurrentVolume * distWeight * clarity;
                 }
-                expected += slot.TargetVolume * distWeight;
+                expected += slot.TargetVolume * distWeight * clarity;
             }
 
             Contribution = activeCount > 0 ? Math.Min(totalContribution / activeCount, 1f) : 0f;
@@ -1017,7 +1128,7 @@ namespace soundphysicsadapted
                 sb.AppendLine(
                     $"  [{debugTag}] Slot[{i}] id={slot.TrackingId} " +
                     $"pos=({slot.WorldPos?.X:F0},{slot.WorldPos?.Y:F0},{slot.WorldPos?.Z:F0}) " +
-                    $"vol={slot.CurrentVolume:F3}/{slot.TargetVolume:F3} " +
+                    $"vol={slot.CurrentVolume:F3}/{slot.TargetVolume:F3} clarity={slot.Clarity:F2} " +
                     $"directOcc={directStr} effOcc={effectiveStr} reg={registered} " +
                     $"playing={slot.Sound?.IsPlaying ?? false} " +
                     $"posMode={(PositionSelector != null ? "wind" : "default")}");

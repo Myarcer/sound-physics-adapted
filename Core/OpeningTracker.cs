@@ -113,6 +113,21 @@ namespace soundphysicsadapted
 
         /// <summary>Game time of the last DDA structural integrity check (rate limit).</summary>
         public long LastIntegrityCheckMs;
+
+        /// <summary>
+        /// Game time when the pool took the voice away from this opening because the
+        /// source it placed measured inaudible at the ear. 0 = never.
+        ///
+        /// The tracker keeps an opening as long as it is physically there, which is
+        /// right for tracking and wrong for playing: an opening verified from the
+        /// surface still exists after you climb into the cave below it, but the path
+        /// to it is now rock, and a rain loop played through rock is mud. The opening
+        /// stays tracked and silent until the geometry between it and you changes.
+        /// </summary>
+        public long VoiceMutedAtMs;
+
+        /// <summary>Ear position when the voice was taken away — see <see cref="VoiceMutedAtMs"/>.</summary>
+        public Vec3d VoiceMutedAtEarPos;
     }
 
     /// <summary>

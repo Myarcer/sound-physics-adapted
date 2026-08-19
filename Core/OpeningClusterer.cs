@@ -119,6 +119,28 @@ namespace soundphysicsadapted
                 };
             }
 
+            /// <summary>Member position closest to the given point (the point itself if there are none).</summary>
+            private static Vec3d NearestMember(Vec3d point, List<Vec3d> members)
+            {
+                if (members == null || members.Count == 0) return point;
+
+                var best = members[0];
+                double bestDistSq = double.MaxValue;
+                for (int i = 0; i < members.Count; i++)
+                {
+                    double dx = members[i].X - point.X;
+                    double dy = members[i].Y - point.Y;
+                    double dz = members[i].Z - point.Z;
+                    double distSq = dx * dx + dy * dy + dz * dz;
+                    if (distSq < bestDistSq)
+                    {
+                        bestDistSq = distSq;
+                        best = members[i];
+                    }
+                }
+                return best;
+            }
+
             public void Add(VerifiedRainPosition op)
             {
                 MemberPositions.Add(op.WorldPos);
@@ -148,8 +170,14 @@ namespace soundphysicsadapted
 
             public OpeningCluster Build()
             {
-                var centroid = new Vec3d(
+                // The weighted mean is where the opening is, on average. It is not
+                // always a place a ray got through: the mean of two columns on either
+                // side of a rock rib is the rib, and the source then plays from inside
+                // it. Every member is a point that passed the DDA, so the emitter goes
+                // to the member nearest the mean and keeps the mean only as a target.
+                var weighted = new Vec3d(
                     centX / centWeightSum, centY / centWeightSum, centZ / centWeightSum);
+                var centroid = NearestMember(weighted, MemberEntryPositions);
                 return new OpeningCluster
                 {
                     Centroid = centroid,
