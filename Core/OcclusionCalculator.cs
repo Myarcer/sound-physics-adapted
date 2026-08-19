@@ -50,6 +50,25 @@ namespace soundphysicsadapted
         private static readonly Vec3d _offsetRayOrigin = new Vec3d();
 
         /// <summary>
+        /// How many of the nine rays must agree before the median is settled.
+        ///
+        /// The median of nine is the fifth smallest. If five of the nine sit inside one
+        /// band, then at most four lie below it, so the fifth smallest lies inside the
+        /// band as well. This holds no matter what the rays that were not measured yet
+        /// would have returned, so the ones that are left can be dropped.
+        /// </summary>
+        private const int MEDIAN_QUORUM = 5;
+
+        /// <summary>
+        /// Width of that band, in occlusion units. Two rays that cross the same blocks in
+        /// a different order can differ in the last bits of the sum, so exact equality is
+        /// too strict. The returned value is inside the band, so it differs from the full
+        /// nine-ray median by 1e-4 occlusion units at most. That is a filter gain
+        /// difference near 0.01 percent, far below hearing.
+        /// </summary>
+        private const float MEDIAN_QUORUM_EPSILON = 1e-4f;
+
+        /// <summary>
         /// Clear the block occlusion cache. Call when config reloads or materials change.
         /// Delegates to shared BlockClassification caches.
         /// </summary>
@@ -309,6 +328,17 @@ namespace soundphysicsadapted
                             soundPos.Z + z * variation);
                         rays[rayCount++] = RunOcclusion(
                             _offsetRayOrigin, playerPos, blockAccessor, config);
+
+                        // The median of nine is the fifth smallest. Once five rays agree,
+                        // the four that are left cannot move it out of their band, so the
+                        // remaining DDA work is thrown away. See TryMedianQuorum.
+                        if (rayCount >= MEDIAN_QUORUM
+                            && TryMedianQuorum(rays, rayCount, out float agreed))
+                        {
+                            _vExclusionBboxes = null;
+                            _vExclusionBboxCount = 0;
+                            return Math.Min(agreed, config.MaxOcclusion);
+                        }
                     }
                 }
             }
@@ -331,6 +361,40 @@ namespace soundphysicsadapted
 
             // Median = middle element (index 4 of 9)
             return Math.Min(rays[4], config.MaxOcclusion);
+        }
+
+        /// <summary>
+        /// True when <see cref="MEDIAN_QUORUM"/> of the rays measured so far sit within
+        /// <see cref="MEDIAN_QUORUM_EPSILON"/> of one another, which settles the median of
+        /// nine at that value.
+        ///
+        /// A flat wall answers the same for every ray, so the quorum is normally reached
+        /// on the fifth. A ray that clips a block corner reads one wall too many and
+        /// pushes the quorum out by one ray each. In the worst case no quorum forms and
+        /// every ray runs, which is what the method did before.
+        ///
+        /// At most 81 float compares, against one DDA ray each.
+        /// </summary>
+        private static bool TryMedianQuorum(Span<float> rays, int count, out float agreed)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                int agree = 0;
+                for (int j = 0; j < count; j++)
+                {
+                    if (Math.Abs(rays[j] - rays[i]) <= MEDIAN_QUORUM_EPSILON)
+                        agree++;
+                }
+
+                if (agree >= MEDIAN_QUORUM)
+                {
+                    agreed = rays[i];
+                    return true;
+                }
+            }
+
+            agreed = 0f;
+            return false;
         }
 
         /// <summary>
