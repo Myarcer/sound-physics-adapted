@@ -135,6 +135,14 @@ namespace soundphysicsadapted.Patches
         /// </summary>
         private const string BOOMBOX_SUPPRESSION_KEY = "carryon-boombox";
 
+        /// <summary>
+        /// True while the boombox must watch the "carryKeyHeld" entity attribute to find a pickup.
+        /// Carry On 1.x needs this. Carry On 2.x deleted the attribute and sends
+        /// CarryEvents.BeforeRemoveBlockFromWorld instead, which is an exact signal.
+        /// Set in ApplyPatches from what CarryOnApiBridge finds.
+        /// </summary>
+        private static bool useLegacyCarryKeyDetection = true;
+
         #endregion
 
         #region Public Queries
@@ -197,9 +205,19 @@ namespace soundphysicsadapted.Patches
                         SoundPhysicsAdaptedModSystem.ResonatorDebugLog("CarryOn compat: Patched StartMusic");
                 }
 
-                // Register tick listener to detect carry state changes and pre-steal sound
+                // Carry On 2.x sends an event on the line before it deletes the block. That is an
+                // exact pickup signal, so the sound is stolen there. Carry On 1.x has no such
+                // event and keeps the "carryKeyHeld" attribute, so the tick listener watches it.
+                useLegacyCarryKeyDetection = !CarryOnApiBridge.TryHookBeforeRemoveBlock(api, OnCarryOnBeforeRemoveBlock);
+
+                // Register tick listener to detect carry state changes (and, on Carry On 1.x,
+                // to pre-steal the sound during the pickup animation)
                 api.Event.RegisterGameTickListener(OnCarryCheckTick, 100);
-                api.Logger.Notification("[SoundPhysicsAdapted] Carry On boombox feature enabled");
+
+                string mode = useLegacyCarryKeyDetection
+                    ? $"legacy carryKeyHeld detection (Carry On API: {CarryOnApiBridge.Generation})"
+                    : "BeforeRemoveBlockFromWorld event";
+                api.Logger.Notification($"[SoundPhysicsAdapted] Carry On boombox feature enabled - pickup detection: {mode}");
             }
             catch (Exception ex)
             {
@@ -244,34 +262,39 @@ namespace soundphysicsadapted.Patches
 
             bool isCarryingResonator = IsCarryingResonator(player.Entity, out var carriedBlockCode, out var slot);
 
-            // Check if Carry On pickup key is being held (stored by Carry On in entity attributes)
-            bool carryKeyHeld = false;
-            try
-            {
-                carryKeyHeld = ((TreeAttribute)player.Entity.Attributes).GetBool("carryKeyHeld", false);
-            }
-            catch { }
-
-            // --- Pre-steal logic ---
+            // --- Pre-steal logic (Carry On 1.x only) ---
             // During Carry On's ~800ms pickup animation, the carry key is held.
             // We steal the sound from the resonator's track BEFORE the block is removed,
             // because Carry On's SetBlock(0, pos) disposes the block entity without
             // calling StopMusic - the sound would be lost otherwise.
-            
-            // Only pre-steal when carry key held AND not already doing a pause/resume 
-            // (Ctrl+RMB on a resonator triggers pause, not carry)
-            if (carryKeyHeld && pendingBoomboxSound == null && activeBoomboxSound == null
-                && !ResonatorPatches.IsPausingOrResuming)
+            //
+            // Carry On 2.x deleted the "carryKeyHeld" attribute. There, OnCarryOnBeforeRemoveBlock
+            // does the steal from the event instead, and this whole block stays idle.
+            if (useLegacyCarryKeyDetection)
             {
-                TryPreStealResonatorSound(player);
-            }
+                // Check if Carry On pickup key is being held (stored by Carry On in entity attributes)
+                bool carryKeyHeld = false;
+                try
+                {
+                    carryKeyHeld = ((TreeAttribute)player.Entity.Attributes).GetBool("carryKeyHeld", false);
+                }
+                catch { }
 
-            // Cancel pre-steal if carry key released without picking up
-            if (!carryKeyHeld && pendingBoomboxSound != null && !isCarryingResonator)
-            {
-                if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
-                    SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Carry key released without pickup, canceling pre-steal");
-                CancelPreSteal();
+                // Only pre-steal when carry key held AND not already doing a pause/resume
+                // (Ctrl+RMB on a resonator triggers pause, not carry)
+                if (carryKeyHeld && pendingBoomboxSound == null && activeBoomboxSound == null
+                    && !ResonatorPatches.IsPausingOrResuming)
+                {
+                    TryPreStealFromLookedAtResonator(player);
+                }
+
+                // Cancel pre-steal if carry key released without picking up
+                if (!carryKeyHeld && pendingBoomboxSound != null && !isCarryingResonator)
+                {
+                    if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.ResonatorDebugLog("Boombox: Carry key released without pickup, canceling pre-steal");
+                    CancelPreSteal();
+                }
             }
 
             // Timeout pre-steal after 3 seconds (safety net for edge cases)
@@ -310,14 +333,34 @@ namespace soundphysicsadapted.Patches
         }
 
         /// <summary>
-        /// Attempt to pre-steal the sound from a resonator the player is looking at.
-        /// Called when carry key is held and we don't already have a pending/active boombox sound.
+        /// Carry On 2.x pickup signal. Carry On sends CarryEvents.BeforeRemoveBlockFromWorld on the
+        /// line before it calls SetBlock(0, pos), so the block entity and its sound are both still
+        /// alive here. Fires for every carryable block, so the resonator check happens here.
         /// </summary>
-        private static void TryPreStealResonatorSound(IClientPlayer player)
+        private static void OnCarryOnBeforeRemoveBlock(BlockPos pos)
+        {
+            if (capi == null || pos == null) return;
+            if (pendingBoomboxSound != null || activeBoomboxSound != null) return;
+
+            // Ctrl+RMB on a resonator triggers our pause/resume, not a carry
+            if (ResonatorPatches.IsPausingOrResuming) return;
+
+            var be = capi.World.BlockAccessor.GetBlockEntity(pos) as BlockEntityResonator;
+            if (be == null || !be.IsPlaying) return;
+
+            PreStealResonatorSound(be, pos);
+        }
+
+        /// <summary>
+        /// Carry On 1.x pickup guess: steal from the resonator the player is looking at while the
+        /// carry key is held. The pickup can still fail, so CancelPreSteal returns the sound.
+        /// </summary>
+        private static void TryPreStealFromLookedAtResonator(IClientPlayer player)
         {
             if (capi == null) return;
 
-            // Cooldown after placement — don't immediately re-steal the block we just placed
+            // Cooldown after placement — don't immediately re-steal the block we just placed.
+            // Only needed here: the 2.x event fires on a real pickup and never guesses.
             if (lastPlacementTimeMs > 0 && capi.World.ElapsedMilliseconds - lastPlacementTimeMs < 2000)
                 return;
 
@@ -327,11 +370,20 @@ namespace soundphysicsadapted.Patches
             var be = capi.World.BlockAccessor.GetBlockEntity(sel.Position) as BlockEntityResonator;
             if (be == null || !be.IsPlaying) return;
 
+            PreStealResonatorSound(be, sel.Position);
+        }
+
+        /// <summary>
+        /// Take the live sound off a playing resonator and hold it until the carry is confirmed.
+        /// Shared by both Carry On generations.
+        /// </summary>
+        private static void PreStealResonatorSound(BlockEntityResonator be, BlockPos pos)
+        {
             var sound = ResonatorReflection.GetSound(be);
             if (sound == null || sound.IsDisposed) return;
 
             if (SoundPhysicsAdaptedModSystem.IsResonatorDebugEnabled)
-                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Pre-stealing sound from resonator at {sel.Position}, isPlaying={sound.IsPlaying}");
+                SoundPhysicsAdaptedModSystem.ResonatorDebugLog($"Boombox: Pre-stealing sound from resonator at {pos}, isPlaying={sound.IsPlaying}");
 
             // Clear the sound reference from the track so block entity cleanup can't dispose it.
             // When Carry On calls SetBlock(0, pos), the block entity will be removed.
@@ -351,7 +403,7 @@ namespace soundphysicsadapted.Patches
             }
 
             pendingBoomboxSound = sound;
-            pendingPickupPos = sel.Position.Copy();
+            pendingPickupPos = pos.Copy();
             pendingStolenTimeMs = capi.World.ElapsedMilliseconds;
             pendingSourceResonator = be;
             wasPlayingWhenPickedUp = sound.IsPlaying;
@@ -398,9 +450,12 @@ namespace soundphysicsadapted.Patches
 
             if (!pendingBoomboxSound.IsDisposed)
             {
-                // Try to return the sound to the original resonator's track
+                // Try to return the sound to the original resonator's track.
+                // Only when the block is still in the world: after Carry On removed it, the block
+                // entity we hold is unloaded, so writing the sound back would leak it and leave
+                // the music playing forever at the old position.
                 bool returned = false;
-                if (pendingSourceResonator != null)
+                if (pendingSourceResonator != null && ResonatorStillInWorld(pendingPickupPos))
                 {
                     try
                     {
@@ -457,8 +512,27 @@ namespace soundphysicsadapted.Patches
         }
 
         /// <summary>
+        /// True when a resonator block is still placed at this position.
+        /// </summary>
+        private static bool ResonatorStillInWorld(BlockPos pos)
+        {
+            if (capi == null || pos == null) return false;
+
+            try
+            {
+                var block = capi.World.BlockAccessor.GetBlock(pos);
+                return block != null && block.Id != 0 && (block.Code?.Path?.Contains("resonator") ?? false);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Check if an entity is carrying a resonator block via Carry On.
-        /// Checks both Hands and Back slots.
+        /// Checks both Hands and Back slots. Carry On 2.x dropped the Back slot from its own
+        /// resonator patch, so Back only matches on Carry On 1.x or a user patch that adds it back.
         /// </summary>
         private static bool IsCarryingResonator(Entity entity, out string blockCode, out CarrySlotType slot)
         {
@@ -549,20 +623,7 @@ namespace soundphysicsadapted.Patches
                 // picking up a SILENT one nearby — we stole from the wrong block. Cancel
                 // the steal so the silent pickup stays silent and the playing resonator
                 // keeps playing.
-                bool stoleFromWrongBlock = false;
-                if (capi != null && pendingPickupPos != null)
-                {
-                    try
-                    {
-                        var blockAtPickup = capi.World.BlockAccessor.GetBlock(pendingPickupPos);
-                        if (blockAtPickup != null && blockAtPickup.Id != 0 &&
-                            (blockAtPickup.Code?.Path?.Contains("resonator") ?? false))
-                        {
-                            stoleFromWrongBlock = true;
-                        }
-                    }
-                    catch { }
-                }
+                bool stoleFromWrongBlock = ResonatorStillInWorld(pendingPickupPos);
 
                 if (stoleFromWrongBlock)
                 {
@@ -961,6 +1022,9 @@ namespace soundphysicsadapted.Patches
         /// </summary>
         public static void Cleanup()
         {
+            CarryOnApiBridge.Unhook();
+            useLegacyCarryKeyDetection = true;
+
             StopBoomboxTick();
 
             if (activeBoomboxSound != null && !activeBoomboxSound.IsDisposed)

@@ -38,6 +38,30 @@ some.
   no smoothing at all. The test now measures level, so it means 0.17 dB
   everywhere.
 
+### Fixed
+
+The carried resonator plays again with Carry On 2.0. Carry On 2.0 removed the
+`carryKeyHeld` entity attribute. The mod read that attribute to find the moment
+of a pickup, because it must take the sound off the resonator before Carry On
+deletes the block. Without the attribute the mod never took the sound, so the
+music stopped at each pickup and started again only at the next placement.
+
+- **The mod now uses `CarryEvents.BeforeRemoveBlockFromWorld`.** Carry On 2.0
+  sends this event on the line before it deletes the block, so it gives the exact
+  position of the pickup. This is more accurate than the old attribute, which only
+  told the mod that a pickup was in progress somewhere.
+- **Carry On 1.x keeps the old behavior.** The mod looks for the event when it
+  starts. If the event is absent, the mod uses the `carryKeyHeld` attribute as
+  before. Both versions of Carry On work. The log line
+  `Carry On boombox feature enabled` shows which detection is in use.
+- **The mod no longer returns a sound to a resonator that left the world.** This
+  could keep the music playing at the old position after a failed pickup.
+
+Note: Carry On 2.0 removed the back slot from its own resonator patch, so you can
+no longer put a resonator on your back. That is a Carry On change and this mod
+cannot undo it. The mod still supports the back slot for Carry On 1.x and for a
+user patch that adds the slot again.
+
 ### Performance
 
 Measured with two 90 second profiles of a rainy session, one before the changes
