@@ -350,12 +350,17 @@ namespace soundphysicsadapted
                     // Snap-up would cause sawtooth volume when members oscillate 4→3→4→3.
                     if (cluster.MemberCount >= tracked.SmoothedClusterWeight)
                     {
-                        // Fast attack: 50% per tick → 90% convergence in ~200ms
-                        tracked.SmoothedClusterWeight += (cluster.MemberCount - tracked.SmoothedClusterWeight) * 0.5f;
+                        // Attack: 12% per tick → time constant ~0.8s, 90% in ~1.8s.
+                        // This was 0.5 (90% in 200ms), which is a fast lane for sampling
+                        // noise: every upward flicker of the member count arrived at the
+                        // ear almost unfiltered, then decayed slowly, so the source
+                        // sawtoothed. A hole in a wall does not grow, so an upward step
+                        // has no more claim to speed than a downward one.
+                        tracked.SmoothedClusterWeight += (cluster.MemberCount - tracked.SmoothedClusterWeight) * 0.12f;
                     }
                     else
                     {
-                        // Slow decay: 6% per tick at ~10Hz → ~4s to converge
+                        // Decay: 6% per tick at ~10Hz → time constant ~1.7s.
                         // Absorbs transient member drops from DDA angle changes / small objects
                         tracked.SmoothedClusterWeight += (cluster.MemberCount - tracked.SmoothedClusterWeight) * 0.06f;
                     }

@@ -178,6 +178,19 @@ namespace soundphysicsadapted
         // Each entry tracks consecutive DDA failures for gradual removal.
         private readonly Dictionary<(int x, int z), CachedOpening> openingCache = new();
 
+        // ── Per-cycle column bookkeeping (reused, cleared at the start of each cycle) ──
+        // The DDA budget tests only a part of the exposed columns. Without these two
+        // sets, a cached column that the budget never reached looked exactly like a
+        // column that was tested and found blocked, so it collected fail counts and
+        // was evicted after one second. The cluster member count then measured our
+        // sampling rate instead of the size of the hole, and the positional source
+        // volume followed that number up and down.
+        //
+        // exposedThisCycle: every column the heightmap reported as sky-exposed.
+        // testedThisCycle:  every column a DDA ray actually evaluated.
+        private readonly HashSet<(int x, int z)> exposedThisCycle = new();
+        private readonly HashSet<(int x, int z)> testedThisCycle = new();
+
         /// <summary>
         /// Invalidate cached opening columns near a block change.
         /// Evicts any column within 1 block XZ of the changed position,
@@ -365,6 +378,14 @@ namespace soundphysicsadapted
             foreach (var kvp in openingCache)
                 kvp.Value.ReVerifiedThisCycle = false;
 
+            // Record which columns the heightmap calls exposed this cycle. A cached
+            // column that is missing here is no longer exposed at all (roofed over),
+            // which is real evidence and does count against it — see MergeCacheAndComputeOutput.
+            exposedThisCycle.Clear();
+            testedThisCycle.Clear();
+            for (int e = 0; e < ctx.ExposedCandidates.Count; e++)
+                exposedThisCycle.Add((ctx.ExposedCandidates[e].WorldX, ctx.ExposedCandidates[e].WorldZ));
+
             // ── Steps 2 & 3: DDA verification + neighbor search ──
             if (ctx.ExposedCandidates.Count > 0)
             {
@@ -390,7 +411,7 @@ namespace soundphysicsadapted
 
             WeatherAudioManager.WeatherDebugLog(
                 $"Enclosure calc: sky={SkyCoverage:F2} occl={OcclusionFactor:F2} " +
-                $"exposed={ctx.ExposedCandidates.Count} verified={Math.Min(ctx.ExposedCandidates.Count, MAX_DDA_CANDIDATES)} " +
+                $"exposed={ctx.ExposedCandidates.Count} tested={testedThisCycle.Count} " +
                 $"direct={ctx.DirectCount} neighbor={ctx.NeighborFinds} probe={ctx.ProbeFinds} " +
                 $"fresh={ctx.FreshVerified.Count} cached={openingCache.Count} openings={verifiedOpenings.Count}");
 
@@ -509,8 +530,18 @@ namespace soundphysicsadapted
 
         private void VerifyExposedCandidates(ScanContext ctx)
         {
-            // Sort by distance -- verify closest first (most perceptually relevant)
-            ctx.ExposedCandidates.Sort((a, b) => a.HorizontalDist.CompareTo(b.HorizontalDist));
+            // Sort: columns already in the cache first, then the rest by distance.
+            // The cached columns are the ones that currently feed audible sources, so
+            // their state must be refreshed every cycle or their fate is decided by the
+            // budget instead of by geometry. The cache holds about ten columns against
+            // a budget of 15-50, so putting them first starves no new discovery.
+            ctx.ExposedCandidates.Sort((a, b) =>
+            {
+                bool aCached = openingCache.ContainsKey((a.WorldX, a.WorldZ));
+                bool bCached = openingCache.ContainsKey((b.WorldX, b.WorldZ));
+                if (aCached != bCached) return aCached ? -1 : 1;
+                return a.HorizontalDist.CompareTo(b.HorizontalDist);
+            });
 
             // Adaptive DDA budget: scale with enclosure level.
             // Outdoors (sky~0): 15 candidates (plenty — rain is everywhere).
@@ -549,6 +580,7 @@ namespace soundphysicsadapted
                 // Schmitt trigger: columns already in the cache use the lenient leave
                 // threshold. New columns must beat the stricter join threshold.
                 var columnKey = (candidate.WorldX, candidate.WorldZ);
+                testedThisCycle.Add(columnKey);
                 bool alreadyCached = openingCache.ContainsKey(columnKey);
                 float effectiveThreshold = alreadyCached ? HYSTERESIS_LEAVE_THRESHOLD : HYSTERESIS_JOIN_THRESHOLD;
 
@@ -1141,11 +1173,22 @@ namespace soundphysicsadapted
 
                     if (manhattanDist <= SCAN_RADIUS)
                     {
-                        // Inside diamond but NOT re-verified → DDA failed (genuinely occluded)
-                        kvp.Value.ConsecutiveFailCount++;
-                        if (kvp.Value.ConsecutiveFailCount > MAX_CONSECUTIVE_FAILS)
+                        // Inside the diamond, but only count a failure when the scan
+                        // gave a real answer about this column:
+                        //   tested and not verified → DDA says it is blocked now
+                        //   no longer exposed       → the heightmap says it is roofed now
+                        // A column that was merely out of the DDA budget keeps its state.
+                        // Penalising those made the cache population, and with it the
+                        // cluster member count and the source volume, follow the budget.
+                        bool answered = testedThisCycle.Contains(kvp.Key)
+                                     || !exposedThisCycle.Contains(kvp.Key);
+                        if (answered)
                         {
-                            keysToRemove.Add(kvp.Key);
+                            kvp.Value.ConsecutiveFailCount++;
+                            if (kvp.Value.ConsecutiveFailCount > MAX_CONSECUTIVE_FAILS)
+                            {
+                                keysToRemove.Add(kvp.Key);
+                            }
                         }
                     }
                     // Outside diamond: memory persistence — don't increment fail count.

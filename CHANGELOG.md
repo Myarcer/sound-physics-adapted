@@ -6,6 +6,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.2.6-dev.6] - 2026-08-19
 
 ### Fixed
+- **Rain through an opening keeps a steady level.** The level of a positional weather source
+  follows the size of its opening, and the mod measured that size as the number of open
+  columns it holds in its cache. The scan tests only the 15 to 50 nearest columns of the
+  ones the heightmap reports, but it counted a failure against every cached column it did
+  not verify, including the columns the budget never reached. Those columns left the cache
+  one second later and came back when the scan reached them again. The measured size of one
+  opening moved between 1 and 9 columns in eight seconds, which is 9 dB of level, and the
+  ambient bed moved with it in the opposite direction. A column now counts as a failure only
+  when the scan gives an answer about it: the rays tested it and found it blocked, or the
+  heightmap no longer reports it as open. Columns that are already in the cache are also
+  tested first, so the budget can no longer decide their fate.
+- **The size of an opening rises as slowly as it falls.** The size followed an upward step in
+  0.2 s and a downward step in about 4 s. An opening does not grow, so the fast rise served
+  only to let each upward flicker of the count through to the ear. The rise now takes about
+  1.8 s.
+- **One block of sky is no longer as loud as open sky.** The level of a source was the square
+  root of its area, but with a floor of 0.35 under it, so a single block of sky played at
+  0.35 while the whole ambient bed outdoors plays at about 0.32. The floor sat above the
+  curve for every size and only flattened the small end, so it is gone, and the aperture
+  that plays at full level is now 16 blocks. One block plays at 0.25, a doorway of 8 blocks
+  at 0.71.
+- **The proximity fade starts smoothly.** The fade that quiets a source you walk through
+  applied to openings of 4 columns and more, and not at all below that. A source 2 to 3 m
+  away could lose half of its level from a change of one column. The fade now ramps in
+  between 3 and 6 columns.
 - **The carried resonator plays again with Carry On 2.0.** Carry On 2.0 removed the
   `carryKeyHeld` entity attribute. The mod read that attribute to find the moment of a
   pickup, because it must take the sound off the resonator before Carry On deletes the

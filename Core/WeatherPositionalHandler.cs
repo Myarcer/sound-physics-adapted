@@ -282,13 +282,13 @@ namespace soundphysicsadapted
         // ════════════════════════════════════════════════════════════════
 
         private static float CalculateRainVolume(TrackedOpening opening, float intensity, float multiplier)
-            => PositionalSourcePool.SizeWeightVolume(opening, intensity, multiplier, 8f, 0.35f);
+            => PositionalSourcePool.SizeWeightVolume(opening, intensity, multiplier, 16f);
 
         private static float CalculateWindVolume(TrackedOpening opening, float windSpeed, float multiplier)
-            => PositionalSourcePool.SizeWeightVolume(opening, windSpeed, multiplier, 6f, 0.30f);
+            => PositionalSourcePool.SizeWeightVolume(opening, windSpeed, multiplier, 12f);
 
         private static float CalculateHailVolume(TrackedOpening opening, float hailIntensity, float multiplier)
-            => PositionalSourcePool.SizeWeightVolume(opening, hailIntensity, multiplier, 8f, 0.40f);
+            => PositionalSourcePool.SizeWeightVolume(opening, hailIntensity, multiplier, 16f);
 
         // ════════════════════════════════════════════════════════════════
         // Debug

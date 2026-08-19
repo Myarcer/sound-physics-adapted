@@ -655,26 +655,34 @@ namespace soundphysicsadapted
             if (VolumeCalculator != null)
                 return VolumeCalculator(opening, intensity, multiplier);
 
-            return SizeWeightVolume(opening, intensity, multiplier, 8f, 0.35f);
+            return SizeWeightVolume(opening, intensity, multiplier, 16f);
         }
 
         /// <summary>
         /// Shared per-type volume formula: intensity * sqrt(clusterWeight/divisor) * multiplier.
-        /// The floor keeps tiny 1-member clusters audible; suppressed or structurally
-        /// zeroed openings return 0 so their source fades out and gets removed by the
-        /// audibility timeout. Weather types differ only in divisor and floor:
-        /// rain (8, 0.35), wind (6, 0.30 — fills openings more evenly), hail (8, 0.40 —
-        /// percussive, slightly louder per source).
+        /// Suppressed or structurally zeroed openings return 0, so their source fades
+        /// out and the slot returns to the pool.
+        ///
+        /// An opening radiates the rain field it collects, so the power it delivers
+        /// follows its area and the level follows sqrt(area). One member column is one
+        /// block of aperture. The divisor is the aperture that plays at full level:
+        /// rain and hail 16, wind 12 (wind fills an opening more evenly).
+        ///
+        /// The old curve divided by 8 and then floored the result at 0.35, so a single
+        /// block of sky played at 0.35 — measured against a Layer 1 outdoor bed of 0.32,
+        /// one skylight column was louder than standing in the open. The floor is gone:
+        /// it sat above the sqrt value for every weight of 1 or more, so it only ever
+        /// flattened the small end of the curve, which is the end that matters here.
+        /// One block now plays at 0.25, an 8-block doorway at 0.71.
         /// </summary>
         public static float SizeWeightVolume(
             TrackedOpening opening, float intensity, float multiplier,
-            float sizeDivisor, float sizeFloor)
+            float sizeDivisor)
         {
             if (opening.Suppressed || opening.SmoothedClusterWeight < 0.01f)
                 return 0f;
 
             float sizeWeight = MathF.Sqrt(Math.Min(opening.SmoothedClusterWeight / sizeDivisor, 1f));
-            sizeWeight = Math.Max(sizeWeight, sizeFloor);
             return Math.Clamp(intensity * sizeWeight * multiplier, 0f, 1f);
         }
 
@@ -688,19 +696,27 @@ namespace soundphysicsadapted
         /// </summary>
         private float ProximityFadeFactor(TrackedOpening opening, Vec3d earPos)
         {
-            // Skip proximity fade for small openings (doorways, windows)
-            if (opening.SmoothedClusterWeight < ProximityFadeMinClusterWeight)
-                return 1f;
-
             if (earPos == null) return 1f;
+
+            // How much of the fade applies at this opening size. This used to be a
+            // switch at ProximityFadeMinClusterWeight: a source 2-3 m away kept full
+            // level at weight 3.9 and lost up to half of it at weight 4.1, so every
+            // wobble of the member count across the threshold was an audible step.
+            // The fade now ramps in over one weight either side of the threshold.
+            float wLo = ProximityFadeMinClusterWeight - 1f;
+            float wHi = ProximityFadeMinClusterWeight + 2f;
+            float applied = Math.Clamp((opening.SmoothedClusterWeight - wLo) / (wHi - wLo), 0f, 1f);
+            applied = applied * applied * (3f - 2f * applied); // smoothstep — no kink at either end
+            if (applied <= 0f) return 1f;
 
             float dist = (float)opening.WorldPos.DistanceTo(earPos);
 
+            float distFade;
             if (dist >= ProximityFadeStartDist) return 1f;
-            if (dist <= ProximityFadeEndDist) return 0f;
+            else if (dist <= ProximityFadeEndDist) distFade = 0f;
+            else distFade = (dist - ProximityFadeEndDist) / (ProximityFadeStartDist - ProximityFadeEndDist);
 
-            // Linear fade between end and start distances
-            return (dist - ProximityFadeEndDist) / (ProximityFadeStartDist - ProximityFadeEndDist);
+            return 1f - applied * (1f - distFade);
         }
 
         /// <summary>
