@@ -5,116 +5,101 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.2.6-dev.6] - 2026-08-19
 
-### Changed
-
-Sounds no longer change level faster than a real sound can. Release 0.2.6-dev.5
-gave each audible value one smoothing stage, which was correct, but it set the
-speed of that stage from the SIZE of the change, so the largest changes moved the
-fastest. A sound that went behind rock 22 m away lost 16 dB in a third of a
-second, a rate near 100 dB per second. Measured rates read like this: 5 to 20 dB
-per second sounds like a source that moved, more than 40 dB per second sounds
-like someone pulled a fader, more than 200 dB per second sounds like a gate. The
-mod was above the second limit in every wall transition and above the third in
-some.
-
-- **The filter now has a speed limit, in dB per second.** The tables still set
-  the shape of a transition and it still eases out at the end. Only the top speed
-  is new.
-- **The limit falls with distance.** A sound goes quiet across the width of its
-  shadow boundary, and that width grows with the square root of the distance:
-  about 0.9 m at 5 m and 1.9 m at 20 m for 1 kHz, which you walk across in 0.9 s
-  and 1.8 s. A door at arm's length keeps the speed it has today. The same 16 dB
-  at 22 m now takes 1.6 s instead of 0.3 s.
-- **The limit rises with your speed.** What you cross when a sound goes quiet is
-  a distance, the shadow boundary, not a duration, so the time it takes depends
-  on how fast you cross it. Someone who drops down a hole crosses it about eight
-  times faster than someone who walks. Held to a walking rate, that drop needed
-  more than six seconds to reach full occlusion. It now seals in 0.8 s, a sprint
-  in 2.2 s, and standing still or walking is unchanged. A hard limit of 150 dB
-  per second keeps the fastest fall short of a gate.
-- **A very quiet sound converges instead of jumping.** The test for "close
-  enough" measured gain, not level, so 0.002 of gain stood for 0.35 dB near full
-  volume but 6 dB deep in the muffled range. A muffled sound could jump 6 dB with
-  no smoothing at all. The test now measures level, so it means 0.17 dB
-  everywhere.
-
 ### Fixed
+- **The carried resonator plays again with Carry On 2.0.** Carry On 2.0 removed the
+  `carryKeyHeld` entity attribute. The mod read that attribute to find the moment of a
+  pickup, because it must take the sound off the resonator before Carry On deletes the
+  block. Without the attribute the mod never took the sound, so the music stopped at each
+  pickup and started again only at the next placement. The mod now uses
+  `CarryEvents.BeforeRemoveBlockFromWorld`, which Carry On 2.0 sends on the line before it
+  deletes the block. The event gives the exact position of the pickup.
+- **Carry On 1.x keeps the old behavior.** The mod looks for the event when it starts. If
+  the event is absent, the mod uses the `carryKeyHeld` attribute as before. Both versions
+  of Carry On work. The log line `Carry On boombox feature enabled` shows which detection
+  is in use.
+- The mod no longer returns a sound to a resonator that left the world. This could keep the
+  music playing at the old position after a failed pickup.
+- **Rain and wind no longer switch on when the mod finds an opening.** A positional weather
+  source starts because the opening was verified, not because the world changed, so it must
+  not be heard starting. Two faults made it one of the loudest events in the mix: a new
+  source jumped straight to volume 0.15, a step of about 17 dB inside one frame, and the
+  slow spawn ramp stopped after a single tick, because it ended at a fixed volume that the
+  first tick already passed. A new source reached full level in about 0.3 s. It now starts
+  near silence and rises over 2.5 s, and the ramp ends on time, not on level. The Layer 1
+  bed already holds its level until the positional sources are ready, so the slower rise
+  opens no gap.
+- **A very quiet sound converges instead of jumping.** The test for "close enough" measured
+  gain, not level, so 0.002 of gain stood for 0.35 dB near full volume but 6 dB deep in the
+  muffled range. A muffled sound could jump 6 dB with no smoothing at all. The test now
+  measures level, so it means 0.17 dB everywhere.
+- **Shorter stutter after you place or break a block.** A block change marks every sound for
+  a new measurement, and those measurements had no time limit for the rest of the tick. They
+  now stop at 20 ms. A sound that does not fit is measured on the next tick, before the
+  others.
 
-The carried resonator plays again with Carry On 2.0. Carry On 2.0 removed the
-`carryKeyHeld` entity attribute. The mod read that attribute to find the moment
-of a pickup, because it must take the sound off the resonator before Carry On
-deletes the block. Without the attribute the mod never took the sound, so the
-music stopped at each pickup and started again only at the next placement.
+Note: Carry On 2.0 removed the back slot from its own resonator patch, so you can no longer
+put a resonator on your back. That is a Carry On change and this mod cannot undo it. The mod
+still supports the back slot for Carry On 1.x and for a user patch that adds the slot again.
 
-- **The mod now uses `CarryEvents.BeforeRemoveBlockFromWorld`.** Carry On 2.0
-  sends this event on the line before it deletes the block, so it gives the exact
-  position of the pickup. This is more accurate than the old attribute, which only
-  told the mod that a pickup was in progress somewhere.
-- **Carry On 1.x keeps the old behavior.** The mod looks for the event when it
-  starts. If the event is absent, the mod uses the `carryKeyHeld` attribute as
-  before. Both versions of Carry On work. The log line
-  `Carry On boombox feature enabled` shows which detection is in use.
-- **The mod no longer returns a sound to a resonator that left the world.** This
-  could keep the music playing at the old position after a failed pickup.
-
-Note: Carry On 2.0 removed the back slot from its own resonator patch, so you can
-no longer put a resonator on your back. That is a Carry On change and this mod
-cannot undo it. The mod still supports the back slot for Carry On 1.x and for a
-user patch that adds the slot again.
+### Changed
+- **The filter has a speed limit, in dB per second.** Release 0.2.6-dev.5 gave each audible
+  value one smoothing stage, which was correct, but it set the speed of that stage from the
+  size of the change, so the largest changes moved the fastest. A sound that went behind rock
+  22 m away lost 16 dB in a third of a second, a rate near 100 dB per second. 5 to 20 dB per
+  second sounds like a source that moved, more than 40 dB per second sounds like someone
+  pulled a fader, and more than 200 dB per second sounds like a gate. The mod was above the
+  second rate in every wall transition and above the third in some. The tables still set the
+  shape of a transition and it still eases out at the end. Only the top speed is new.
+- **The limit falls with distance.** A sound goes quiet across the width of its shadow
+  boundary, and that width grows with the square root of the distance: about 0.9 m at 5 m and
+  1.9 m at 20 m for 1 kHz, which you walk across in 0.9 s and 1.8 s. A door at arm's length
+  keeps the speed it has today. The same 16 dB at 22 m now takes 1.6 s instead of 0.3 s.
+- **The limit rises with your speed.** What you cross when a sound goes quiet is a distance,
+  the shadow boundary, not a duration, so the time it takes depends on how fast you cross it.
+  Someone who drops down a hole crosses it about eight times faster than someone who walks.
+  Held to a walking rate, that drop needed more than six seconds to reach full occlusion. It
+  now seals in 0.8 s and a sprint seals in 2.2 s. Standing still or walking is unchanged. A
+  hard limit of 150 dB per second keeps the fastest fall short of a gate.
 
 ### Performance
-
-Measured with two 90 second profiles of a rainy session, one before the changes
-and one after the block-lookup pass. The mod went from 4465 ms to 3372 ms of
-main-thread time, and the median occlusion tick went from 3.0 ms to 1.5 ms. Of
-the 4465 ms, 3056 ms went into block lookup, not into acoustics. The changes
-below remove that overhead. No sound changes: every ray reads the same block
-ids and returns the same values.
-
-- **The mod reads blocks through a chunk-caching accessor.** Each step of a ray
-  reads one block, and the standard accessor takes two locks for each of those
-  reads. The new accessor keeps the last two chunks and reads them directly, so a
-  ray that stays inside one chunk takes no lock. This also gives time back to the
-  render thread and the chunk thread, which share those locks.
+- Two 90 second profiles of a rainy session, one before the changes and one after, show
+  4465 ms of main-thread time before and 3372 ms after. The median occlusion tick went from
+  3.0 ms to 1.5 ms. Of the 4465 ms, 3056 ms went into block lookup, not into acoustics. No
+  sound changes: every ray reads the same block ids and returns the same values.
+- **The mod reads blocks through a chunk-caching accessor.** Each step of a ray reads one
+  block, and the standard accessor takes two locks for each of those reads. The new accessor
+  keeps the last two chunks and reads them directly, so a ray that stays inside one chunk
+  takes no lock. This also gives time back to the render thread and the chunk thread, which
+  share those locks.
 - The weather enclosure scan uses the same accessor.
+- **A flat wall settles the nine-ray measurement after five rays.** The mod uses the median
+  of nine rays. When five rays agree, the median cannot leave their band, so the four rays
+  that are left are not run. The result differs from the full measurement by at most 0.0001
+  occlusion units, which is below hearing.
+- **The sealed-cavity search stops at the first opening it finds.** The search proves that a
+  heavily occluded sound sits in a sealed cavity. In an open cave it explored the full search
+  volume and proved nothing. Air past the search radius already ends the proof, so the search
+  now stops there. The search also marks visited blocks in a flat array instead of a hash
+  set, so each step got cheaper too. The second profile showed this search at 18 percent of
+  the mod.
+- **A far water, lava or rain volume now measures at the rate of its distance.** These volumes
+  follow the player, so the mod held every one of them at the 50 ms rate, at any distance.
+  Past 20 blocks the measured position barely moves per player step, so volumes beyond that
+  now use the normal 200 ms and 500 ms rates. The face measurement of these volumes was 45
+  percent of the mod in the first profile, and rain pays this cost on every surface it wets.
 - The occlusion rays no longer build two temporary vectors for each offset ray.
-- The mod asks once for each block type whether a sound position needs the door
-  adjustment, instead of searching the block name for every sound on every tick.
-- The mod does not measure the reverb at your position while you stand still. The
-  result cannot change until you move or a block near you changes.
+- The mod asks once for each block type whether a sound position needs the door adjustment,
+  instead of searching the block name for every sound on every tick.
+- The mod does not measure the reverb at your position while you stand still. The result
+  cannot change until you move or a block near you changes.
 - Some debug messages were built even with debug off. They are not any more.
-- **A flat wall settles the nine-ray measurement after five rays.** The mod uses
-  the median of nine rays. When five rays agree, the median cannot leave their
-  band, so the four rays that are left are not run. The result differs from the
-  full measurement by at most 0.0001 occlusion units, which is below hearing.
-- **The sealed-cavity search stops at the first opening it finds.** The search
-  proves that a heavily occluded sound sits in a sealed cavity. In an open cave
-  it explored the full search volume and proved nothing. Air past the search
-  radius already ends the proof, so the search now stops there. The search also
-  marks visited blocks in a flat array instead of a hash set, so each step got
-  cheaper too. The second profile showed this search at 18 percent of the mod.
-- **A far water, lava or rain volume now measures at the rate of its distance.**
-  These volumes follow the player, so the mod held every one of them at the 50 ms
-  rate, at any distance. Past 20 blocks the measured position barely moves per
-  player step, so volumes beyond that now use the normal 200 ms and 500 ms rates.
-  The face measurement of these volumes was 45 percent of the mod in the first
-  profile, and rain pays this cost on every surface it wets.
 
-### Fixed
-- **Rain and wind no longer switch on when the mod finds an opening.** A
-  positional weather source starts because the opening was verified, not because
-  the world changed, so it must not be heard starting. Two faults made it one of
-  the loudest events in the mix: a new source jumped straight to volume 0.15, a
-  step of about 17 dB inside one frame, and the slow spawn ramp stopped after a
-  single tick, because it ended at a fixed volume that the first tick already
-  passed. A new source reached full level in about 0.3 s. It now starts near
-  silence and rises over 2.5 s, and the ramp ends on time, not on level. The
-  Layer 1 bed already holds its level until the positional sources are ready, so
-  the slower rise opens no gap.
-- **Shorter stutter after you place or break a block.** A block change marks every
-  sound for a new measurement, and those measurements had no time limit for the
-  rest of the tick. They now stop at 20 ms. A sound that does not fit is measured
-  on the next tick, before the others.
+### Internal
+- New file `Patches/CarryOnApiBridge.cs`. It finds the Carry On API through reflection and
+  binds `CarryEvents.BeforeRemoveBlockFromWorld` when the event is present.
+- `Core/SmoothingCurves.cs` holds the rate limiter. `SoundPhysicsAdaptedModSystem` owns one
+  `ICachingBlockAccessor` for the tick, and `Core/BlockClassification.cs` holds the
+  source-adjust verdict per block id.
 
 ## [0.2.6-dev.5] - 2026-08-16
 
