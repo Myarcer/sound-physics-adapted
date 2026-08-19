@@ -962,7 +962,14 @@ namespace soundphysicsadapted
 
             // FREEZE DIAGNOSTIC: Time SmoothAll
             _diagStopwatch.Restart();
-            AudioRenderer.SmoothAll(clientApi?.World?.ElapsedMilliseconds ?? 0L);
+            // The listener position feeds the slew ceiling only: a far sound goes quiet
+            // over a wider shadow boundary, so it converges slower. Same ear position the
+            // occlusion tick measures from.
+            var smoothPlayer = clientApi?.World?.Player?.Entity;
+            Vec3d listenerPos = smoothPlayer != null
+                ? smoothPlayer.Pos.XYZ.Add(smoothPlayer.LocalEyePos)
+                : null;
+            AudioRenderer.SmoothAll(clientApi?.World?.ElapsedMilliseconds ?? 0L, listenerPos);
             _diagStopwatch.Stop();
             double smoothMs = _diagStopwatch.Elapsed.TotalMilliseconds;
             _diagSmoothTickCount++;

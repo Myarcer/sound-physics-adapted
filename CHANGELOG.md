@@ -5,6 +5,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.2.6-dev.6] - 2026-08-19
 
+### Changed
+
+Sounds no longer change level faster than a real sound can. Release 0.2.6-dev.5
+gave each audible value one smoothing stage, which was correct, but it set the
+speed of that stage from the SIZE of the change, so the largest changes moved the
+fastest. A sound that went behind rock 22 m away lost 16 dB in a third of a
+second, a rate near 100 dB per second. Measured rates read like this: 5 to 20 dB
+per second sounds like a source that moved, more than 40 dB per second sounds
+like someone pulled a fader, more than 200 dB per second sounds like a gate. The
+mod was above the second limit in every wall transition and above the third in
+some.
+
+- **The filter now has a speed limit, in dB per second.** The tables still set
+  the shape of a transition and it still eases out at the end. Only the top speed
+  is new.
+- **The limit falls with distance.** A sound goes quiet across the width of its
+  shadow boundary, and that width grows with the square root of the distance:
+  about 0.9 m at 5 m and 1.9 m at 20 m for 1 kHz, which you walk across in 0.9 s
+  and 1.8 s. A door at arm's length keeps the speed it has today. The same 16 dB
+  at 22 m now takes 1.6 s instead of 0.3 s.
+- **The limit rises with your speed.** What you cross when a sound goes quiet is
+  a distance, the shadow boundary, not a duration, so the time it takes depends
+  on how fast you cross it. Someone who drops down a hole crosses it about eight
+  times faster than someone who walks. Held to a walking rate, that drop needed
+  more than six seconds to reach full occlusion. It now seals in 0.8 s, a sprint
+  in 2.2 s, and standing still or walking is unchanged. A hard limit of 150 dB
+  per second keeps the fastest fall short of a gate.
+- **A very quiet sound converges instead of jumping.** The test for "close
+  enough" measured gain, not level, so 0.002 of gain stood for 0.35 dB near full
+  volume but 6 dB deep in the muffled range. A muffled sound could jump 6 dB with
+  no smoothing at all. The test now measures level, so it means 0.17 dB
+  everywhere.
+
 ### Performance
 
 Measured with two 90 second profiles of a rainy session, one before the changes
@@ -44,6 +77,16 @@ ids and returns the same values.
   profile, and rain pays this cost on every surface it wets.
 
 ### Fixed
+- **Rain and wind no longer switch on when the mod finds an opening.** A
+  positional weather source starts because the opening was verified, not because
+  the world changed, so it must not be heard starting. Two faults made it one of
+  the loudest events in the mix: a new source jumped straight to volume 0.15, a
+  step of about 17 dB inside one frame, and the slow spawn ramp stopped after a
+  single tick, because it ended at a fixed volume that the first tick already
+  passed. A new source reached full level in about 0.3 s. It now starts near
+  silence and rises over 2.5 s, and the ramp ends on time, not on level. The
+  Layer 1 bed already holds its level until the positional sources are ready, so
+  the slower rise opens no gap.
 - **Shorter stutter after you place or break a block.** A block change marks every
   sound for a new measurement, and those measurements had no time limit for the
   rest of the tick. They now stop at 20 ms. A sound that does not fit is measured

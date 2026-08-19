@@ -54,8 +54,14 @@ namespace soundphysicsadapted
         // this 25ms tick is the only place an audible value moves toward one (audit A4).
         private const float SMOOTH_TICK_MS = SmoothingCurves.TickMs;
 
-        // Filter convergence threshold: stop smoothing when close enough
+        // Filter convergence threshold, in linear gain. Still used to decide whether a
+        // value is worth writing to OpenAL — that question is about the write, not about
+        // the transition, so linear is right for it.
         private const float CONVERGE_EPSILON = 0.002f;
+
+        // Convergence threshold for the transition itself, in natural-log gain units.
+        // 0.02 is about 0.17 dB and means the same thing at every level.
+        private const float LOG_CONVERGE_EPSILON = 0.02f;
 
         // Below this gain the filter is at its floor — clamp before the log conversion.
         private const float MIN_LOG_GAIN = 1e-5f;
@@ -1195,7 +1201,56 @@ namespace soundphysicsadapted
         /// Rates and their reasons: <see cref="SmoothingCurves"/>.
         /// </summary>
         /// <param name="nowMs">Game time, for the throttle envelope.</param>
-        public static void SmoothAll(long nowMs)
+        /// <summary>
+        /// Distance from the listener to the sound, in blocks, or 0 when either position
+        /// is unknown. Only the slew ceiling reads it, and its unknown case is the
+        /// reference distance, so 0 is a safe answer.
+        /// </summary>
+        private static float DistanceToListener(FilterEntry entry, Vec3d listenerPos)
+        {
+            if (listenerPos == null || entry.LastPosition == null) return 0f;
+            return (float)entry.LastPosition.DistanceTo(listenerPos);
+        }
+
+        // Listener speed in blocks per second, for the slew ceiling. Measured here rather
+        // than read off the entity so it needs no plumbing and follows whatever moved the
+        // ear, including a boat or a mount.
+        private static Vec3d lastListenerPos;
+        private static float listenerSpeed;
+
+        /// <summary>Speed above which a jump counts as a teleport and is not a speed.</summary>
+        private const float MAX_LISTENER_SPEED = 40f;
+
+        /// <summary>
+        /// Updates <see cref="listenerSpeed"/> from the distance the ear moved since the
+        /// last tick. Smoothed upward slowly and downward slowly enough that one stuttered
+        /// frame cannot spike the ceiling, but fast enough to catch the start of a fall.
+        /// </summary>
+        private static void UpdateListenerSpeed(Vec3d listenerPos, float elapsedMs)
+        {
+            if (listenerPos == null || elapsedMs <= 0f)
+            {
+                lastListenerPos = listenerPos?.Clone();
+                return;
+            }
+
+            if (lastListenerPos == null)
+            {
+                lastListenerPos = listenerPos.Clone();
+                listenerSpeed = 0f;
+                return;
+            }
+
+            float raw = (float)lastListenerPos.DistanceTo(listenerPos) / (elapsedMs / 1000f);
+            lastListenerPos.Set(listenerPos);
+
+            // A teleport or a world change is not motion through geometry.
+            if (raw > MAX_LISTENER_SPEED) raw = 0f;
+
+            listenerSpeed += (raw - listenerSpeed) * 0.4f;
+        }
+
+        public static void SmoothAll(long nowMs, Vec3d listenerPos = null)
         {
             if (!IsInitialized) return;
 
@@ -1214,6 +1269,10 @@ namespace soundphysicsadapted
             if (lastSmoothTickMs > 0 && nowMs > lastSmoothTickMs)
                 fadeElapsedMs = Math.Min(250f, nowMs - lastSmoothTickMs);
             lastSmoothTickMs = nowMs;
+
+            // Feeds the slew ceiling: the shadow boundary a sound goes quiet across is a
+            // distance, so how fast it is crossed decides how fast the sound may change.
+            UpdateListenerSpeed(listenerPos, fadeElapsedMs);
 
             // Diving or surfacing changes the reverb send gains inside ApplyToSource.
             // Converged entries must write their sends once more when that happens.
@@ -1248,16 +1307,36 @@ namespace soundphysicsadapted
 
                 float current = entry.CurrentValue < MIN_LOG_GAIN ? MIN_LOG_GAIN : entry.CurrentValue;
 
-                if (Math.Abs(effectiveTarget - current) >= CONVERGE_EPSILON)
+                float logCurrent = MathF.Log(current);
+                float logDiff = MathF.Log(effectiveTarget) - logCurrent;
+
+                // Converged test in the LOG domain, because the step below is a log step.
+                // A linear threshold means a different thing at every level: 0.002 of gain
+                // is 0.35 dB at -26 dB but 6 dB at -54 dB, so a transition deep in the
+                // muffled range used to fall under it and snap instead of converging. The
+                // muffled range is where this mod spends its time.
+                if (MathF.Abs(logDiff) >= LOG_CONVERGE_EPSILON)
                 {
-                    float logCurrent = MathF.Log(current);
-                    float logDiff = MathF.Log(effectiveTarget) - logCurrent;
+                    bool muffling = logDiff < 0f;
 
                     // Occlusion units, so the bands in SmoothingCurves mean what they say:
                     // filter = exp(-occlusion * BlockAbsorption * 2).
                     float occDelta = Math.Abs(logDiff) / absorptionScale;
-                    float alpha = SmoothingCurves.GainAlpha(occDelta, muffling: logDiff < 0f);
-                    current = MathF.Exp(logCurrent + logDiff * alpha);
+                    float alpha = SmoothingCurves.GainAlpha(occDelta, muffling);
+                    float step = logDiff * alpha;
+
+                    // Slew ceiling (audit A14). The table sets the shape of the
+                    // transition, this bounds its speed in dB per second. A large step
+                    // rides the ceiling at a constant dB rate and drops back onto the
+                    // table for the last part, so it still eases out. The ceiling falls
+                    // with the square root of the distance, because the shadow boundary
+                    // a sound goes quiet across widens the same way.
+                    float maxStep = SmoothingCurves.MaxLogStepPerTick(
+                        DistanceToListener(entry, listenerPos), listenerSpeed, muffling);
+                    if (step > maxStep) step = maxStep;
+                    else if (step < -maxStep) step = -maxStep;
+
+                    current = MathF.Exp(logCurrent + step);
                     entry.CurrentValue = current;
                     smoothed++;
                 }

@@ -78,12 +78,20 @@ namespace soundphysicsadapted
         // ── Tunable parameters (sensible defaults, overridable per type) ──
 
         /// <summary>
-        /// Fade-in rate per tick (exponential). Higher = faster fade-in.
-        /// Fast (~0.8s to 90%) because the Layer 1 bed-hold handover carries the
-        /// missing energy until this source delivers — a slow spawn ramp here only
-        /// prolongs the muffled hole, it no longer prevents any pop.
+        /// Spawn ramp rate per tick (exponential), used for
+        /// <see cref="SPAWN_RAMP_MS"/> after a slot is assigned.
+        ///
+        /// A source spawns because the tracker VERIFIED an opening, not because the world
+        /// changed. The opening was there before, so the player crossed nothing and must
+        /// hear no onset — our detection latency must not become an audible event. The
+        /// Layer 1 bed carries the level meanwhile: the bed-hold releases in proportion
+        /// to L2 readiness (effective/expected), and a slower ramp keeps effective low,
+        /// which holds the bed for exactly as long as the ramp needs. That is what the
+        /// readiness gate is for, so a slow ramp opens no hole.
+        ///
+        /// 0.08 per 100 ms tick is a time constant near 1.2 s, so about 2.7 s to 90 %.
         /// </summary>
-        public float FadeInRate { get; set; } = 0.25f;
+        public float FadeInRate { get; set; } = 0.08f;
 
         /// <summary>Fade-out rate per tick (exponential). Higher = faster fade-out.</summary>
         public float FadeOutRate { get; set; } = 0.10f;   // ~3s to silence
@@ -98,8 +106,17 @@ namespace soundphysicsadapted
         /// </summary>
         public float TrackRate { get; set; } = 0.5f;    // ~0.3s to 90%
 
-        /// <summary>Below this volume a rising source uses FadeInRate (spawn ramp).</summary>
-        private const float SPAWN_RAMP_THRESHOLD = 0.05f;
+        /// <summary>
+        /// How long after assignment a rising source stays on <see cref="FadeInRate"/>.
+        ///
+        /// This used to be a volume threshold of 0.05, which the first tick already
+        /// crossed for any target above 0.2: the ramp ran for ONE tick and the rest of
+        /// the onset went at <see cref="TrackRate"/>, so a new rain source reached full
+        /// level in about 0.4 s however slow FadeInRate was set. The documented 0.8 s
+        /// never happened. Time is the honest gate here — the ramp is about how long the
+        /// handover takes, not about which level it passes.
+        /// </summary>
+        private const long SPAWN_RAMP_MS = 2500;
 
         /// <summary>
         /// Distance at which near-field gain compensation ends (full volume beyond).
@@ -190,10 +207,15 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Instant volume a newly assigned source starts at (clamped to its target).
-        /// The Layer 1 bed-hold still carries the mix while this ramps, but starting
-        /// from true silence wasted the first ~0.3s doing nothing audible.
+        ///
+        /// This was 0.15, which is a step of about 17 dB up from silence inside one
+        /// frame — the loudest part of the onset, and the reason a rain source read as
+        /// switching on rather than as rain that was always there. It is now low enough
+        /// to stay under the Layer 1 bed while <see cref="SPAWN_RAMP_MS"/> runs. The
+        /// "wasted first 0.3 s" the head start was for was really the spawn ramp exiting
+        /// after one tick; see SPAWN_RAMP_MS.
         /// </summary>
-        private const float SPAWN_HEAD_START = 0.15f;
+        private const float SPAWN_HEAD_START = 0.02f;
 
         /// <summary>Minimum age before an active slot can be evict-swapped (churn guard).</summary>
         private const long SWAP_COOLDOWN_MS = 2500;
@@ -263,6 +285,7 @@ namespace soundphysicsadapted
         {
             if (!initialized || sources == null || mode != PoolMode.Looping) return;
 
+            long nowMs = capi.World.ElapsedMilliseconds;
             lastEarPos = earPos;
             TickOrphans();
 
@@ -400,7 +423,6 @@ namespace soundphysicsadapted
                     // fades out detached — waiting for an in-slot fade stalled better
                     // openings for many seconds (Pass 1 re-armed the target each tick).
                     float candidateScore = OpeningScore(trackedOpenings[o], earPos);
-                    long nowMs = capi.World.ElapsedMilliseconds;
                     int weakest = -1;
                     float weakestScore = float.MaxValue;
                     for (int s = 0; s < maxSlots; s++)
@@ -443,11 +465,10 @@ namespace soundphysicsadapted
                 float baseVol2 = CalculateVolume(newOpening, intensity, volumeMultiplier);
                 targetSlot.TargetVolume = baseVol2 * ProximityFadeFactor(newOpening, earPos)
                                                    * NearFieldFactor(newPos, earPos);
-                // Head start: skip the silent bottom of the ramp — the bed-hold is
-                // still carrying the mix, so an instantly-audible (but modest) start
-                // is smoother than 0.3s of nothing followed by a swell.
+                // Head start: lifts the source off true silence so the ramp starts from a
+                // real value, and stays under the bed that is still carrying the mix.
                 targetSlot.CurrentVolume = Math.Min(SPAWN_HEAD_START, targetSlot.TargetVolume);
-                targetSlot.AssignedAtMs = capi.World.ElapsedMilliseconds;
+                targetSlot.AssignedAtMs = nowMs;
                 slotScores[bestSlot] = OpeningScore(newOpening, earPos);
 
                 EnsureSourcePlaying(targetSlot);
@@ -474,13 +495,14 @@ namespace soundphysicsadapted
                 }
                 else if (diff > 0)
                 {
-                    // Spawn ramp (FadeInRate) only while the source is still quiet.
-                    // Established sources track their target fast — the target is
-                    // already smoothed upstream (enclosure EMA, cluster weight EMA),
-                    // and stacking a second slow lag here made Layer 2 rise seconds
-                    // after Layer 1 fell on indoor transitions.
-                    float rate = slot.CurrentVolume < SPAWN_RAMP_THRESHOLD ? FadeInRate : TrackRate;
-                    slot.CurrentVolume += diff * rate;
+                    // Spawn ramp (FadeInRate) for the first SPAWN_RAMP_MS after this slot
+                    // was assigned — the source has to appear without an onset, see
+                    // SPAWN_RAMP_MS. After that the source is established and tracks its
+                    // target fast: that target is already smoothed upstream (enclosure
+                    // EMA, cluster weight EMA), and stacking a second slow lag on top made
+                    // Layer 2 rise seconds after Layer 1 fell on indoor transitions.
+                    bool spawning = nowMs - slot.AssignedAtMs < SPAWN_RAMP_MS;
+                    slot.CurrentVolume += diff * (spawning ? FadeInRate : TrackRate);
                 }
                 else
                 {
