@@ -342,7 +342,10 @@ namespace soundphysicsadapted
                 PlayerX = (int)Math.Floor(playerEarPos.X),
                 PlayerY = (int)Math.Floor(playerEarPos.Y),
                 PlayerZ = (int)Math.Floor(playerEarPos.Z),
-                BlockAccessor = capi.World.BlockAccessor,
+                // Chunk-caching accessor: this scan reads thousands of blocks along
+                // hemisphere rays, and most steps of a ray stay inside one chunk.
+                // The context lives for this scan only, so the cache cannot go stale.
+                BlockAccessor = SoundPhysicsAdaptedModSystem.BeginTickBlockAccess() ?? capi.World.BlockAccessor,
                 DebugWeather = SoundPhysicsAdaptedModSystem.Config?.DebugMode == true
                             && SoundPhysicsAdaptedModSystem.Config?.DebugWeather == true,
                 Viz = debugViz.BeginFrame(gameTimeMs)

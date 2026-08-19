@@ -991,12 +991,17 @@ namespace soundphysicsadapted
         /// </summary>
         /// <summary>
         /// Gives the main-thread block accessor with an empty chunk cache.
-        /// Call it once at the start of a tick and use the result for that tick only.
+        /// Call it at the start of a scan and use the result for that scan only.
+        /// Every main-thread scan shares this one instance, because the game runs the
+        /// tick listeners one after the other on that thread.
         /// See the comment on <see cref="tickBlockAccessor"/> for why the cache exists.
         /// </summary>
-        private static IBlockAccessor BeginTickBlockAccess()
+        internal static IBlockAccessor BeginTickBlockAccess()
         {
-            tickBlockAccessor ??= clientApi.World.GetCachingBlockAccessor(false, false);
+            var world = clientApi?.World;
+            if (world == null) return null;
+
+            tickBlockAccessor ??= world.GetCachingBlockAccessor(false, false);
             tickBlockAccessor.Begin();
             return tickBlockAccessor;
         }
