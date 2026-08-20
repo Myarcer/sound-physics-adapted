@@ -185,8 +185,10 @@ namespace soundphysicsadapted
             }
         }
 
-        // Match radius: how close a new cluster must be to an existing tracked opening
-        // to be considered the "same" opening (avoids duplicates when clusters shift slightly)
+        // Match radius: how close (3D) a new cluster must be to an existing tracked opening
+        // to be considered the "same" opening (avoids duplicates when clusters shift slightly).
+        // Must include Y — a hole 10+ blocks above/below is a different opening even if it
+        // shares the same X,Z footprint (stacked windows, roof hole over a lower doorway).
         private const float MATCH_RADIUS = 4.0f;
         private const float MATCH_RADIUS_SQ = MATCH_RADIUS * MATCH_RADIUS;
 
@@ -301,8 +303,9 @@ namespace soundphysicsadapted
                     if (clusterConsumed[c]) continue;
 
                     double dx = clusters[c].Centroid.X - tracked.WorldPos.X;
+                    double dy = clusters[c].Centroid.Y - tracked.WorldPos.Y;
                     double dz = clusters[c].Centroid.Z - tracked.WorldPos.Z;
-                    float distSq = (float)(dx * dx + dz * dz);
+                    float distSq = (float)(dx * dx + dy * dy + dz * dz);
 
                     if (distSq < bestDistSq)
                     {
@@ -477,6 +480,9 @@ namespace soundphysicsadapted
         /// Merge nearby tracked openings to prevent duplicate sources
         /// from cluster split/merge oscillation. When clusters split one cycle
         /// and merge the next, two tracked openings can end up 1-2 blocks apart.
+        /// Distance is 3D — X,Z alone let a roof hole and an unrelated opening
+        /// directly below or above it (same footprint, different height) merge
+        /// into one tracked source that then jumps between the two positions.
         /// The higher-weight one absorbs the other.
         /// </summary>
         private void MergeNearbyOpenings(bool debug)
@@ -486,8 +492,9 @@ namespace soundphysicsadapted
                 for (int j = i - 1; j >= 0; j--)
                 {
                     double mdx = trackedOpenings[i].WorldPos.X - trackedOpenings[j].WorldPos.X;
+                    double mdy = trackedOpenings[i].WorldPos.Y - trackedOpenings[j].WorldPos.Y;
                     double mdz = trackedOpenings[i].WorldPos.Z - trackedOpenings[j].WorldPos.Z;
-                    double mergeDist = mdx * mdx + mdz * mdz;
+                    double mergeDist = mdx * mdx + mdy * mdy + mdz * mdz;
 
                     if (mergeDist < MERGE_RADIUS_SQ)
                     {
