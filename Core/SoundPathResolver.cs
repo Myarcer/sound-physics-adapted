@@ -129,7 +129,9 @@ namespace soundphysicsadapted
     {
         private struct PathEntry
         {
-            public Vec3d Direction;       // Normalized direction from player toward path point
+            public double DirX;           // Normalized direction from player toward path point
+            public double DirY;           // (components, not a Vec3d — AddPath runs ~130x per
+            public double DirZ;           //  raytrace and a Clone per call showed up as GC pressure)
             public double TotalDistance;   // Total acoustic path distance
             public double Weight;          // Contribution weight (permeation / dist²)
             public double PathOcclusion;   // Occlusion along this path segment to player
@@ -173,12 +175,18 @@ namespace soundphysicsadapted
 
             occlusionThreshold = occThreshold;
 
-            Vec3d normalizedDir = directionFromPlayer.Clone();
-            normalizedDir.Normalize();
+            // Normalize into components — no clone. A zero-length direction is rejected:
+            // it would previously have normalized to NaN and poisoned the whole
+            // weighted sum in Evaluate (NaN silently survives the coherence checks).
+            double len = directionFromPlayer.Length();
+            if (len < 1e-9) return;
+            double invLen = 1.0 / len;
 
             allPaths.Add(new PathEntry
             {
-                Direction = normalizedDir,
+                DirX = directionFromPlayer.X * invLen,
+                DirY = directionFromPlayer.Y * invLen,
+                DirZ = directionFromPlayer.Z * invLen,
                 TotalDistance = totalDistance,
                 Weight = weight,
                 PathOcclusion = pathOcclusion
@@ -216,9 +224,9 @@ namespace soundphysicsadapted
 
             foreach (var path in allPaths)
             {
-                weightedX += path.Direction.X * path.Weight;
-                weightedY += path.Direction.Y * path.Weight;
-                weightedZ += path.Direction.Z * path.Weight;
+                weightedX += path.DirX * path.Weight;
+                weightedY += path.DirY * path.Weight;
+                weightedZ += path.DirZ * path.Weight;
                 totalWeight += path.Weight;
 
                 weightedOcclusion += path.PathOcclusion * path.Weight;

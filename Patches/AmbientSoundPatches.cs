@@ -130,13 +130,6 @@ namespace soundphysicsadapted
             return null;
         }
 
-        // Legacy compatibility — old API still used elsewhere
-        public static Vec3d[] GetFaceCandidates(ILoadedSound sound, out int count)
-        {
-            count = 0;
-            return null; // No longer used — callers should use GetFaceSamples
-        }
-
         /// <summary>
         /// Remove tracking for a disposed sound. Called during periodic cleanup.
         /// </summary>

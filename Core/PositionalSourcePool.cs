@@ -338,6 +338,10 @@ namespace soundphysicsadapted
             Span<bool> openingAssigned = stackalloc bool[openingCount];
             // Per-slot opening score for eviction decisions (0 = unmatched/fading slot)
             Span<float> slotScores = stackalloc float[maxSlots];
+            // Explicit init: stackalloc contents are not guaranteed zeroed, and the
+            // unvoiced-expected sum below depends on openingAssigned.
+            for (int i = 0; i < openingCount; i++) openingAssigned[i] = false;
+            for (int i = 0; i < maxSlots; i++) slotScores[i] = 0f;
 
             // Pass 1: Update existing slot assignments (matched by TrackingId)
             for (int s = 0; s < maxSlots; s++)
@@ -417,6 +421,7 @@ namespace soundphysicsadapted
             // so nearby relevant openings win slots over distant persisted ones —
             // previously tracker insertion order let old far sources monopolize slots.
             Span<int> candidateOrder = stackalloc int[openingCount];
+            Span<float> candidateVolumes = stackalloc float[openingCount];
             int candidateCount = 0;
             for (int o = 0; o < openingCount; o++)
             {
@@ -456,7 +461,12 @@ namespace soundphysicsadapted
                               * NearFieldFactor(candPos, earPos);
                 if (candVol < SPAWN_MIN_VOLUME) continue;
 
-                candidateOrder[candidateCount++] = o;
+                candidateOrder[candidateCount] = o;
+                // Indexed BY OPENING, not by candidate position: the insertion sort below
+                // permutes candidateOrder only, so a parallel array would silently pair
+                // sorted indexes with unsorted volumes.
+                candidateVolumes[o] = candVol;
+                candidateCount++;
             }
             // Insertion sort by descending score (candidateCount is tiny)
             for (int i = 1; i < candidateCount; i++)
@@ -541,6 +551,7 @@ namespace soundphysicsadapted
                 }
 
                 targetSlot.TrackingId = newOpening.TrackingId;
+                openingAssigned[o] = true; // Got a voice this tick — not voice-starved
                 var newPos = PositionSelector != null ? PositionSelector(newOpening) : newOpening.WorldPos;
                 targetSlot.WorldPos = newPos;
                 targetSlot.Active = true;
@@ -610,7 +621,26 @@ namespace soundphysicsadapted
                 }
             }
 
+            // Voice-starved candidates: qualified for a voice (verified, audible,
+            // not mute-held) but lost the slot contest. They are invisible to
+            // ExpectedLoudness otherwise, so the Layer 1 bed-hold readiness gate
+            // reads "L2 is delivering what's expected" while real openings have no
+            // voice at all — and the bed never fills the gap. Sum their raw target
+            // volumes (no distance/clarity weight: an unvoiced opening has no wall
+            // measured against it, and over-expecting errs toward the safe side —
+            // the bed covers until L2 delivers).
+            float unvoicedExpected = 0f;
+            for (int c = 0; c < candidateCount; c++)
+            {
+                int o = candidateOrder[c];
+                if (!openingAssigned[o]) unvoicedExpected += candidateVolumes[o];
+            }
+
             UpdateContribution();
+            if (unvoicedExpected > 0f)
+            {
+                ExpectedLoudness += unvoicedExpected;
+            }
         }
 
         // ════════════════════════════════════════════════════════════════

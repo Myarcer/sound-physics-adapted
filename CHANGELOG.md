@@ -3,6 +3,30 @@
 This file lists the changes to Sound Physics Adapted.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6-dev.7] - 2026-08-21
+
+### Fixed
+- Some sounds could lose their muffling forever after another sound ended on the same audio channel. The mod now checks that a finished sound still owns its channel before cleaning up.
+- Stereo sounds (music, resonator tracks) can no longer lose stereo permanently after a fast sequence of loads. A failed load no longer leaves the flat mono version behind.
+- Rain and thunder from the replacement system and the vanilla system can no longer play at the same time after you turn weather enhancement off and on between sessions.
+- In multiplayer, the server now ignores resonator and boombox messages from players who are not near the device, arrive too fast, or carry a malformed track name.
+- Two openings close together (one above the other) now keep their own identity instead of fighting over one voice.
+- When there are more openings than voices, the nearest opening wins the free slot first — not the oldest one.
+- The Layer 1 rain bed now fills in when an opening qualified for a voice but had no slot left, so wide cave mouths no longer go quiet.
+- Leafless rain no longer adds extra volume on top of leafy rain in dense forests.
+- Thunder cracks indoors no longer fight with the rumble over one filter.
+- A disc taken out of a resonator no longer reloads at an old frozen rotation.
+- Frozen resonator rotations no longer leak into a new world at the same coordinates.
+
+### Changed
+- Max Rain Sources default went from 4 to 8. This value also decides how many openings get tracked each tick; 4 starved cave mouths. Existing configs keep an edited value.
+- Removed the dead "Opening Persistence" setting. It did nothing since persistence moved to the virtualization model.
+
+### Performance
+- Reverb raycasts, path records, and block-change invalidation allocate far less, so mining and fighting cause less stutter.
+- Turning OFF sound repositioning no longer silently turns OFF positional reverb with it.
+- The player reverb cache refreshes after a block change even when you stand still.
+
 ## [0.2.6-dev.6] - 2026-08-19
 
 ### Fixed

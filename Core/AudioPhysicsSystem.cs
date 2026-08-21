@@ -120,6 +120,10 @@ namespace soundphysicsadapted
         private ReverbResult cachedPlayerReverb = ReverbResult.None;
         private long lastPlayerReverbTimeMs = 0;
         private const long PLAYER_REVERB_INTERVAL_MS = 250;  // Recalc every 250ms
+        // Time of the last raytrace that actually ran (cadence steps that skipped do
+        // not count). The static-listener skip in UpdatePlayerPositionReverb compares
+        // the last block-change time against this, not against a grace window.
+        private long lastActualPlayerReverbMs = 0;
         // Listener position of the last computed player reverb. The raytrace reads no
         // clock and seeds its probe RNG from the two positions only, so for a listener
         // that has not moved in a world that has not changed it returns the value the
@@ -477,11 +481,13 @@ namespace soundphysicsadapted
             lastPlayerReverbTimeMs = currentTimeMs;
 
             // Static listener, unchanged world: the raytrace would return what the cache
-            // already holds, so skip it. The block-change grace window lets a door or a
-            // wall reach the player reverb on the next cadence step.
-            bool inGraceWindow = lastBlockChangeInvalidationMs > 0
-                && (currentTimeMs - lastBlockChangeInvalidationMs) < BLOCK_CHANGE_GRACE_MS;
-            if (!inGraceWindow && lastPlayerReverbPos != null
+            // already holds, so skip it. The skip needs BOTH conditions: no movement AND
+            // no block change since the last REAL trace. A change landing just after a
+            // cadence step can fall outside any fixed grace window before the next step,
+            // which left a standing player with stale reverb after being walled in.
+            bool worldChangedSinceTrace = lastBlockChangeInvalidationMs > 0
+                && lastBlockChangeInvalidationMs >= lastActualPlayerReverbMs;
+            if (!worldChangedSinceTrace && lastPlayerReverbPos != null
                 && playerPos.DistanceTo(lastPlayerReverbPos) < MOVE_THRESHOLD)
                 return;
 
@@ -489,6 +495,7 @@ namespace soundphysicsadapted
             var (reverbResult, _) = AcousticRaytracer.CalculateWithPaths(playerPos, playerPos, blockAccessor, 0f);
             cachedPlayerReverb = reverbResult;
             lastPlayerReverbPos = playerPos.Clone();
+            lastActualPlayerReverbMs = currentTimeMs;
 
             if (SoundPhysicsAdaptedModSystem.IsReverbDebugEnabled)
                 SoundPhysicsAdaptedModSystem.ReverbDebugLog(
@@ -604,7 +611,13 @@ namespace soundphysicsadapted
                     force: isForceRefresh);
 
             // === 4 + 5. PATHS, REVERB, REPOSITIONING ===
-            if (config != null && config.EnableSoundRepositioning)
+            // One raytrace feeds reverb AND the paths, so it runs when either feature
+            // wants it. Gating the whole block on EnableSoundRepositioning (the old way)
+            // silently killed every reverb send for anyone who turned repositioning off.
+            // Note: with reverb off, CalculateWithPathsCacheable returns no paths by its
+            // own gate, so reverb-off + repositioning-on keeps today's behavior.
+            bool wantRepositioning = config != null && config.EnableSoundRepositioning;
+            if (config != null && (config.EnableCustomReverb || wantRepositioning))
             {
                 // Read the per-sound range from the vanilla parameters for the reverb
                 // distance falloff. 32 blocks is the vanilla default.
@@ -613,10 +626,12 @@ namespace soundphysicsadapted
                 var paths = ResolveAcousticPaths(cache, soundPos, playerPos, blockAccessor,
                     occlusion, soundRange, currentTimeMs, soundName);
 
-                PushReverbTarget(sound, paths.Reverb, soundName);
+                if (config.EnableCustomReverb)
+                    PushReverbTarget(sound, paths.Reverb, soundName);
 
                 targetGain = ResolveRepositioning(sound, cache, paths.Path, soundPos, acousticPos,
-                    occlusion, distance, isAmbientVolume, targetGain, config, soundName, firstLogOfTick);
+                    occlusion, distance, isAmbientVolume, targetGain, config, soundName, firstLogOfTick,
+                    wantRepositioning);
             }
 
             targetGain = FilterPipeline.ApplyPenetrationFloor(targetGain, penetrationFloor);
@@ -786,7 +801,8 @@ namespace soundphysicsadapted
         /// </summary>
         private float ResolveRepositioning(ILoadedSound sound, SoundCacheEntry cache, SoundPathResult? pathResult,
             Vec3d soundPos, Vec3d acousticPos, float occlusion, float distance, bool isAmbientVolume,
-            float directGain, SoundPhysicsConfig config, string soundName, bool firstLogOfTick)
+            float directGain, SoundPhysicsConfig config, string soundName, bool firstLogOfTick,
+            bool repositioningEnabled)
         {
             // SPR skips direction work when the direct path is clear
             // (shouldEvaluateDirection returns false at occlusion 0 with
@@ -796,7 +812,9 @@ namespace soundphysicsadapted
             //   gravel 0.4, wood 0.6, stone 1.0             -> obstruction, allow the move
             // 0.3 separates them with margin. Without it, 40 bounce rays outvote the one
             // direct path and pan a thrown stone 16 degrees sideways.
-            bool skipRepositioning = occlusion < 0.3f;
+            // The config switch folds into the same skip: the raytrace already ran
+            // (reverb shares it), only the position move is dropped here.
+            bool skipRepositioning = !repositioningEnabled || occlusion < 0.3f;
 
             // Ambient volumes never use the probes. Face sampling already gave the correct
             // origin, and the probe result would fight it. The raytrace still ran — reverb

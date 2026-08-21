@@ -363,13 +363,15 @@ namespace soundphysicsadapted
                 return;
             }
 
-            // Cluster the calculator's verified openings
+            // Cluster the calculator's verified openings. earPos orders the tracker's
+            // anchors nearest-first, so when tracked openings outnumber the cluster
+            // budget, relevance decides which apertures keep their identity.
             var openings = enclosureCalculator.VerifiedOpenings;
             // Use max of all per-type budgets for clustering (tracker serves all pools)
             int maxTracked = Math.Max(config.MaxPositionalRainSources,
                 Math.Max(config.MaxPositionalWindSources, config.MaxPositionalHailSources));
 
-            var clusters = OpeningClusterer.Cluster(openings, maxTracked, openingTracker.TrackedOpenings);
+            var clusters = OpeningClusterer.Cluster(openings, maxTracked, openingTracker.TrackedOpenings, earPos);
 
             // Update tracker with new clusters (handles persistence, matching, removal)
             openingTracker.Update(clusters, earPos, gameTimeMs, 12); // scanRadius=12 matches WeatherEnclosureCalculator.SCAN_RADIUS

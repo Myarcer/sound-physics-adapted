@@ -312,6 +312,13 @@ namespace soundphysicsadapted
             }
         }
 
+        // Reusable buffers — this runs on EVERY block change (before the caller's
+        // debounce gate), so per-call HashSet/List allocations were steady GC pressure
+        // while mining or fighting. Main-thread only (block-change event).
+        private static readonly (int X, int Y, int Z)[] _invalidateTargets = new (int, int, int)[7]; // target + up to 6 boundary neighbours
+        private static int _invalidateTargetCount;
+        private static readonly List<long> _invalidateRemove = new List<long>(16);
+
         /// <summary>
         /// Invalidate cells containing this block position + adjacent cells.
         /// Called on block change events.
@@ -321,40 +328,45 @@ namespace soundphysicsadapted
         {
             var (targetCellX, targetCellY, targetCellZ) = GetSoundCellCoords(blockX, blockY, blockZ);
 
-            // Collect adjacent cell coords to invalidate
-            var cellsToInvalidate = new HashSet<(int, int, int)>();
-            cellsToInvalidate.Add((targetCellX, targetCellY, targetCellZ));
+            // Collect adjacent cell coords to invalidate (linear scan over <=7 entries
+            // replaces the old per-call HashSet)
+            _invalidateTargetCount = 0;
+            _invalidateTargets[_invalidateTargetCount++] = (targetCellX, targetCellY, targetCellZ);
 
             // Check if block is near cell boundary (within 1 block of edge)
             int localX = blockX - targetCellX * SOUND_CELL_SIZE;
             int localY = blockY - targetCellY * SOUND_CELL_SIZE;
             int localZ = blockZ - targetCellZ * SOUND_CELL_SIZE;
 
-            if (localX == 0) cellsToInvalidate.Add((targetCellX - 1, targetCellY, targetCellZ));
-            if (localX == SOUND_CELL_SIZE - 1) cellsToInvalidate.Add((targetCellX + 1, targetCellY, targetCellZ));
-            if (localY == 0) cellsToInvalidate.Add((targetCellX, targetCellY - 1, targetCellZ));
-            if (localY == SOUND_CELL_SIZE - 1) cellsToInvalidate.Add((targetCellX, targetCellY + 1, targetCellZ));
-            if (localZ == 0) cellsToInvalidate.Add((targetCellX, targetCellY, targetCellZ - 1));
-            if (localZ == SOUND_CELL_SIZE - 1) cellsToInvalidate.Add((targetCellX, targetCellY, targetCellZ + 1));
+            if (localX == 0) _invalidateTargets[_invalidateTargetCount++] = (targetCellX - 1, targetCellY, targetCellZ);
+            if (localX == SOUND_CELL_SIZE - 1) _invalidateTargets[_invalidateTargetCount++] = (targetCellX + 1, targetCellY, targetCellZ);
+            if (localY == 0) _invalidateTargets[_invalidateTargetCount++] = (targetCellX, targetCellY - 1, targetCellZ);
+            if (localY == SOUND_CELL_SIZE - 1) _invalidateTargets[_invalidateTargetCount++] = (targetCellX, targetCellY + 1, targetCellZ);
+            if (localZ == 0) _invalidateTargets[_invalidateTargetCount++] = (targetCellX, targetCellY, targetCellZ - 1);
+            if (localZ == SOUND_CELL_SIZE - 1) _invalidateTargets[_invalidateTargetCount++] = (targetCellX, targetCellY, targetCellZ + 1);
 
             // Iterate all entries and remove those whose sound cell matches any target
-            List<long> toRemove = null;
+            _invalidateRemove.Clear();
             foreach (var kvp in cells)
             {
                 var (cx, cy, cz) = ExtractSoundCell(kvp.Key);
-                if (cellsToInvalidate.Contains((cx, cy, cz)))
+                for (int i = 0; i < _invalidateTargetCount; i++)
                 {
-                    if (toRemove == null) toRemove = new List<long>();
-                    toRemove.Add(kvp.Key);
+                    var t = _invalidateTargets[i];
+                    if (t.X == cx && t.Y == cy && t.Z == cz)
+                    {
+                        _invalidateRemove.Add(kvp.Key);
+                        break;
+                    }
                 }
             }
-            if (toRemove != null)
+            if (_invalidateRemove.Count > 0)
             {
-                foreach (var key in toRemove)
+                foreach (var key in _invalidateRemove)
                     cells.TryRemove(key, out _);
                 if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
                     SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"[CELL-CACHE] INVALIDATE {toRemove.Count} entries near ({targetCellX},{targetCellY},{targetCellZ}) reason=block_change");
+                        $"[CELL-CACHE] INVALIDATE {_invalidateRemove.Count} entries near ({targetCellX},{targetCellY},{targetCellZ}) reason=block_change");
             }
         }
 

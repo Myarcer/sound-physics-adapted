@@ -340,6 +340,56 @@ namespace soundphysicsadapted
         // CONVENIENCE METHODS: Common patterns built on top of the core DDA
         // =====================================================================
 
+        // === Shared scratch state for the convenience-method visitors ===
+        // Same alloc-free pattern as the OcclusionCalculator visitors: static fields +
+        // one cached delegate each, instead of a closure + delegate per call.
+        // FindFirstBlock sits inside the reverb raycast (numRays x bounces calls per
+        // trace), so a per-call closure allocation was measurable GC pressure.
+        // Main-thread only, like every other DDA caller.
+        private static System.Func<Block, bool> _scratchBlockFilter;
+        private static BlockPos _scratchExclude; // null = no exclusion
+        private static DDAHitResult _scratchHit;
+        private static bool _scratchHasHit;
+
+        private static readonly BlockVisitor _findFirstBlockVisitor = FindFirstBlockVisitor;
+        private static readonly BlockVisitor _hasClearPathVisitor = HasClearPathVisitor;
+
+        private static bool FindFirstBlockVisitor(ref TraversalContext ctx)
+        {
+            Block block = ctx.Block;
+            if (block == null || block.Id == 0)
+                return false; // Continue
+
+            // Skip excluded block (the one we just bounced off)
+            if (_scratchExclude != null && ctx.X == _scratchExclude.X && ctx.Y == _scratchExclude.Y && ctx.Z == _scratchExclude.Z)
+                return false; // Continue
+
+            if (_scratchBlockFilter(block))
+            {
+                _scratchHit = new DDAHitResult
+                {
+                    Block = block,
+                    Distance = ctx.GetDistance(),
+                    Position = ctx.GetEntryPosition(),
+                    Normal = ctx.GetEntryNormal(),
+                    BlockPos = new BlockPos(ctx.X, ctx.Y, ctx.Z, 0)
+                };
+                _scratchHasHit = true;
+                return true; // Stop
+            }
+
+            return false; // Continue
+        }
+
+        private static bool HasClearPathVisitor(ref TraversalContext ctx)
+        {
+            Block block = ctx.Block;
+            if (block == null || block.Id == 0)
+                return false; // Continue
+
+            return _scratchBlockFilter(block); // Stop when the filter calls it solid
+        }
+
         /// <summary>
         /// Find the first block along a ray that matches a filter predicate.
         /// Returns null if no matching block is found within range.
@@ -360,35 +410,13 @@ namespace soundphysicsadapted
         public static DDAHitResult? FindFirstBlock(Vec3d origin, Vec3d direction, float maxDistance,
             IBlockAccessor blockAccessor, System.Func<Block, bool> blockFilter, BlockPos excludeBlock = null)
         {
-            DDAHitResult? result = null;
+            _scratchBlockFilter = blockFilter;
+            _scratchExclude = excludeBlock;
+            _scratchHasHit = false;
 
-            TraverseDirection(origin, direction, maxDistance, blockAccessor, (ref TraversalContext ctx) =>
-            {
-                Block block = ctx.Block;
-                if (block == null || block.Id == 0)
-                    return false; // Continue
+            TraverseDirection(origin, direction, maxDistance, blockAccessor, _findFirstBlockVisitor, skipFirst: true);
 
-                // Skip excluded block (the one we just bounced off)
-                if (excludeBlock != null && ctx.X == excludeBlock.X && ctx.Y == excludeBlock.Y && ctx.Z == excludeBlock.Z)
-                    return false; // Continue
-
-                if (blockFilter(block))
-                {
-                    result = new DDAHitResult
-                    {
-                        Block = block,
-                        Distance = ctx.GetDistance(),
-                        Position = ctx.GetEntryPosition(),
-                        Normal = ctx.GetEntryNormal(),
-                        BlockPos = new BlockPos(ctx.X, ctx.Y, ctx.Z, 0)
-                    };
-                    return true; // Stop
-                }
-
-                return false; // Continue
-            }, skipFirst: true);
-
-            return result;
+            return _scratchHasHit ? _scratchHit : (DDAHitResult?)null;
         }
 
         /// <summary>
@@ -404,17 +432,10 @@ namespace soundphysicsadapted
         /// <returns>True if path is clear, false if blocked.</returns>
         public static bool HasClearPath(Vec3d from, Vec3d to, IBlockAccessor blockAccessor, System.Func<Block, bool> blockFilter)
         {
-            bool blocked = Traverse(from, to, blockAccessor, (ref TraversalContext ctx) =>
-            {
-                Block block = ctx.Block;
-                if (block == null || block.Id == 0)
-                    return false; // Continue
+            _scratchBlockFilter = blockFilter;
+            _scratchExclude = null;
 
-                if (blockFilter(block))
-                    return true; // Stop — path is blocked
-
-                return false; // Continue
-            }, skipFirst: true);
+            bool blocked = Traverse(from, to, blockAccessor, _hasClearPathVisitor, skipFirst: true);
 
             return !blocked; // Not blocked = clear path
         }

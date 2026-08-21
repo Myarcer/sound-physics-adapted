@@ -96,6 +96,21 @@ namespace soundphysicsadapted
         private static readonly List<OpeningCluster> resultClusters = new List<OpeningCluster>(8);
         private static bool[] consumed = new bool[32]; // Grows if needed
 
+        // Anchor ordering scratch: verified anchors are visited nearest-listener first,
+        // so an early, possibly stale anchor can never claim a cluster slot ahead of a
+        // closer audible one once the cluster budget runs out. Static fields + one cached
+        // Comparison keep the sort allocation-free.
+        private static readonly List<TrackedOpening> verifiedAnchors = new List<TrackedOpening>(16);
+        private static double _anchorEarX, _anchorEarY, _anchorEarZ;
+        private static readonly Comparison<TrackedOpening> _anchorOrder = CompareAnchorToEar;
+
+        private static int CompareAnchorToEar(TrackedOpening a, TrackedOpening b)
+        {
+            double dxa = a.WorldPos.X - _anchorEarX, dya = a.WorldPos.Y - _anchorEarY, dza = a.WorldPos.Z - _anchorEarZ;
+            double dxb = b.WorldPos.X - _anchorEarX, dyb = b.WorldPos.Y - _anchorEarY, dzb = b.WorldPos.Z - _anchorEarZ;
+            return (dxa * dxa + dya * dya + dza * dza).CompareTo(dxb * dxb + dyb * dyb + dzb * dzb);
+        }
+
         /// <summary>
         /// Accumulates members into one cluster: centroid weights, aggregate stats,
         /// and the wind ceiling height — all in a single pass over the members.
@@ -226,12 +241,16 @@ namespace soundphysicsadapted
         /// <param name="anchors">Previous cycle's tracked openings for centroid stability (optional).
         /// When provided, verified openings are first assigned to the nearest anchor within
         /// CLUSTER_RADIUS, preserving cluster identity across cycles. Unassigned openings
-        /// fall through to greedy seeding. On the first cycle (no anchors), pure greedy.</param>
+        /// fall through to greedy seeding. On the first cycle (no anchors), pure greedy.
+        /// Anchors are visited nearest the listener first: when there are more tracked
+        /// openings than clusters, relevance — not creation order — decides which survive.</param>
+        /// <param name="earPos">Listener position used to order the anchors. Ignored when null.</param>
         /// <returns>List of clusters sorted by TotalWeight descending. Reused internal list — do NOT cache across calls.</returns>
         public static IReadOnlyList<OpeningCluster> Cluster(
             IReadOnlyList<VerifiedRainPosition> openings,
             int maxClusters,
-            IReadOnlyList<TrackedOpening> anchors = null)
+            IReadOnlyList<TrackedOpening> anchors = null,
+            Vec3d earPos = null)
         {
             resultClusters.Clear();
 
@@ -249,13 +268,27 @@ namespace soundphysicsadapted
 
             // ── Phase 1: Anchored clustering ──
             // Only tracked openings verified last cycle are used as anchors
-            // (not persisted behind-corner ones, which would pull front openings).
+            // (not persisted behind-corner ones, which would pull front openings),
+            // ordered nearest the listener first.
             if (anchors != null && anchors.Count > 0)
             {
-                for (int a = 0; a < anchors.Count && clusterIdx < maxClusters; a++)
+                verifiedAnchors.Clear();
+                for (int a = 0; a < anchors.Count; a++)
                 {
-                    var anchor = anchors[a];
-                    if (!anchor.CurrentlyVerified) continue;
+                    if (anchors[a].CurrentlyVerified) verifiedAnchors.Add(anchors[a]);
+                }
+
+                if (earPos != null && verifiedAnchors.Count > 1)
+                {
+                    _anchorEarX = earPos.X;
+                    _anchorEarY = earPos.Y;
+                    _anchorEarZ = earPos.Z;
+                    verifiedAnchors.Sort(_anchorOrder);
+                }
+
+                for (int a = 0; a < verifiedAnchors.Count && clusterIdx < maxClusters; a++)
+                {
+                    var anchor = verifiedAnchors[a];
 
                     var builder = AbsorbAround(openings, count, anchor.WorldPos.X, anchor.WorldPos.Z);
                     if (builder.MemberCount > 0)

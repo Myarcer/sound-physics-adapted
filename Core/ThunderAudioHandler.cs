@@ -13,10 +13,10 @@ namespace soundphysicsadapted
     /// Ambient thunder: Harmony prefix on WeatherSimulationLightning.ClientTick.
     /// Bolt thunder: Harmony transpiler suppresses VS's PlaySoundAt + postfix plays ours.
     ///
-    /// Sound assets and distance tiers (bolt thunder):
-    ///   verynear.ogg  — sharp crack, plays for bolts &lt; 150m
-    ///   near.ogg      — balanced crack + rumble, plays for bolts 150-200m
-    ///   distant.ogg   — rolling rumble, plays for bolts 200-1000m
+    /// Sound assets and distance tiers (bolt thunder, switch points in GetAssetForDistance):
+    ///   verynear.ogg  — sharp crack, plays for bolts &lt; 300m
+    ///   near.ogg      — balanced crack + rumble, plays for bolts 300-500m
+    ///   distant.ogg   — rolling rumble, plays for bolts 500-1000m
     ///   nodistance.ogg — pure instant crack, plays as delayed extra layer for bolts &lt; 300m
     ///
     /// Volume curves (bolt thunder):
@@ -770,12 +770,16 @@ namespace soundphysicsadapted
             // Pre-apply LPF filter to one-shot BEFORE Start() to prevent transient bypass.
             // Thunder cracks are transient — if filter arrives a frame late, the initial crack
             // is heard unfiltered, destroying the indoor illusion.
+            // Use the dedicated crackFilterId, NOT the shared layer1FilterId: the rumble
+            // tick rewrites layer1FilterId's gain every ~100ms, so the L2 event's value
+            // was overwritten within a tick while every L1 rumble briefly heard the L2
+            // cutoff. Same curve, just on the filter reserved for cracks.
             int preFilterId = 0;
-            if (combinedEnclosure > 0.05f && layer1FilterId > 0 && EfxHelper.IsAvailable)
+            if (combinedEnclosure > 0.05f && crackFilterId > 0 && EfxHelper.IsAvailable)
             {
                 float gainHF = CalculateThunderGainHF(combinedEnclosure, config);
-                EfxHelper.SetLowpassGainHF(layer1FilterId, gainHF);
-                preFilterId = layer1FilterId;
+                EfxHelper.SetLowpassGainHF(crackFilterId, gainHF);
+                preFilterId = crackFilterId;
             }
 
             // Push the L2 source outward from the opening through air blocks.

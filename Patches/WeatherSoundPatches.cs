@@ -91,11 +91,37 @@ namespace soundphysicsadapted.Patches
         }
 
         /// <summary>
+        /// Clear all static state. Called from ModSystem.Dispose — these statics survive
+        /// world unload (the assembly stays loaded), so without this a stale
+        /// weather-sim instance, handler references and latched leafy values leak into
+        /// the next world session.
+        /// </summary>
+        public static void Reset()
+        {
+            _patchApplied = false;
+            _api = null;
+            _weatherSimInstance = null;
+            _thunderHandler = null;
+            _weatherManager = null;
+            _latchedLeafy = false;
+            _hasLatchedLeafy = false;
+            _latchedLeaviness = 0f;
+        }
+
+        /// <summary>
         /// Apply manual Harmony patches. Follows ReverbPatch pattern.
         /// </summary>
         public static void ApplyPatches(Harmony harmony, ICoreClientAPI api)
         {
             _api = api;
+
+            // Reset the applied latch up front. It is only set true after a successful
+            // patch run and never survives a failed one: without this reset, disabling
+            // then re-enabling weather enhancement across world sessions left the stale
+            // flag reporting "applied" while UnpatchAll had removed the patches — the
+            // replacement system started and the vanilla loops played on top (double
+            // rain/thunder).
+            _patchApplied = false;
 
             var config = SoundPhysicsAdaptedModSystem.Config;
             if (config == null || !config.EnableWeatherEnhancement)

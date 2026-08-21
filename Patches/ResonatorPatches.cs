@@ -232,8 +232,9 @@ namespace soundphysicsadapted.Patches
         private const float MUSIC_SUPPRESS_THRESHOLD = 0.05f;
 
         /// <summary>
-        /// Distance scale for resonator attenuation. Lower values extend audible range.
-        /// 0.116 extends audible range ~50% further than previous 0.175.
+        /// Distance scale for resonator attenuation. Higher values shrink audible range.
+        /// 0.232 (was 0.175) — range shrank vs the old default so resonators do not
+        /// flood the whole cave system.
         /// </summary>
         private const float RESONATOR_DISTANCE_SCALE = 0.232f;
 
@@ -293,6 +294,47 @@ namespace soundphysicsadapted.Patches
         private static string GetPosKey(BlockPos pos)
         {
             return pos == null ? null : $"{pos.X},{pos.Y},{pos.Z}";
+        }
+
+        /// <summary>
+        /// Cap for <see cref="savedAnimFramesByPos"/>. Entries are removed on resume and
+        /// on disc eject, but a resonator that is broken while PAUSED runs neither, so
+        /// the entry would leak for the session. Once past the cap, drop entries whose
+        /// position no longer hosts a resonator. Runs only on pause events — never hot.
+        /// </summary>
+        private const int MAX_SAVED_ANIM_FRAMES = 64;
+
+        private static void PruneSavedAnimFrames(BlockEntityResonator resonator)
+        {
+            if (savedAnimFramesByPos.Count < MAX_SAVED_ANIM_FRAMES) return;
+
+            var ba = resonator.Api?.World?.BlockAccessor;
+            if (ba == null)
+            {
+                savedAnimFramesByPos.Clear();
+                return;
+            }
+
+            System.Collections.Generic.List<string> dead = null;
+            foreach (var kvp in savedAnimFramesByPos)
+            {
+                var parts = kvp.Key.Split(',');
+                if (parts.Length != 3) continue;
+                if (!int.TryParse(parts[0], out int bx) || !int.TryParse(parts[1], out int by) || !int.TryParse(parts[2], out int bz))
+                {
+                    (dead ??= new System.Collections.Generic.List<string>()).Add(kvp.Key);
+                    continue;
+                }
+                var be = ba.GetBlockEntity(new BlockPos(bx, by, bz));
+                if (!(be is BlockEntityResonator))
+                {
+                    (dead ??= new System.Collections.Generic.List<string>()).Add(kvp.Key);
+                }
+            }
+            if (dead != null)
+            {
+                foreach (var key in dead) savedAnimFramesByPos.Remove(key);
+            }
         }
 
         private static bool ShouldStartInitializeBatchResonator(BlockPos selfPos, ICoreClientAPI capi)
@@ -1061,6 +1103,10 @@ namespace soundphysicsadapted.Patches
                     {
                         serverPositionsByPos.Remove(posToRemove);
                         serverPausedByPos.Remove(posToRemove);
+                        // The rotation entry must go too: ToTreeAttributesPostfix falls
+                        // back to it, so a stale entry persisted a frozen rotation for an
+                        // ejecting resonator and the disc reloaded at the wrong angle.
+                        serverRotationsByPos.Remove(posToRemove);
                     }
                 }
             }
@@ -1225,11 +1271,14 @@ namespace soundphysicsadapted.Patches
                             var currentFrameField = runningAnimState.GetType().GetField("CurrentFrame", BindingFlags.Public | BindingFlags.Instance);
                             if (currentFrameField != null)
                             {
-                                float savedFrame = (float)currentFrameField.GetValue(runningAnimState);
-                                string posKey = $"{__instance.Pos.X},{__instance.Pos.Y},{__instance.Pos.Z}";
-                                savedAnimFramesByPos[posKey] = savedFrame;
-                                __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] StopMusicPrefix: Captured animation frame={savedFrame:F2}");
-                            }
+                            float savedFrame = (float)currentFrameField.GetValue(runningAnimState);
+                            string posKey = $"{__instance.Pos.X},{__instance.Pos.Y},{__instance.Pos.Z}";
+                            // Bound the store: breaking a PAUSED resonator never runs the
+                            // resume/eject cleanup, so its entry would otherwise live forever.
+                            PruneSavedAnimFrames(__instance);
+                            savedAnimFramesByPos[posKey] = savedFrame;
+                            __instance.Api.Logger.Debug($"[SoundPhysicsAdapted] StopMusicPrefix: Captured animation frame={savedFrame:F2}");
+                        }
                         }
                     }
 

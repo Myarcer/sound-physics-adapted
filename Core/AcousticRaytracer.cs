@@ -67,7 +67,6 @@ namespace soundphysicsadapted
         private static Vec3d _reusableOpeningCenter = new Vec3d();
         private static Vec3d _reusableDirToOpening = new Vec3d();
         private static Vec3d _reusableNormalizedDir = new Vec3d();
-        private static Random _probeRng = new Random(0);
 
         // Pre-allocated reusable objects for main ray loop
         private static Vec3d _reusableMainRayDir = new Vec3d();
@@ -651,8 +650,9 @@ namespace soundphysicsadapted
             int openingsFound = 0;
             int posHash = (int)(soundPos.X * 73856093 + soundPos.Y * 19349663 + soundPos.Z * 83492791
                          + playerPos.X * 37139213 + playerPos.Y * 57853711 + playerPos.Z * 29475827);
-            _probeRng = new Random(posHash);
-            Random rng = _probeRng;
+            // Local, not a cached static: the seed is per-call anyway, so the field
+            // only pretended to be pre-allocated.
+            Random rng = new Random(posHash);
 
             _openingDedup.Clear();
 

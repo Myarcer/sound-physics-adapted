@@ -32,7 +32,9 @@ namespace soundphysicsadapted
         {
             if (soundPos == null || blockAccessor == null) return soundPos;
 
-            _checkPos.Set((int)soundPos.X, (int)soundPos.Y, (int)soundPos.Z);
+            // Floor, not truncate: a source at negative coordinates in (-1, 0) must
+            // sample the block it is actually inside.
+            _checkPos.Set((int)Math.Floor(soundPos.X), (int)Math.Floor(soundPos.Y), (int)Math.Floor(soundPos.Z));
             Block block = blockAccessor.GetBlock(_checkPos);
             if (block == null || block.Id == 0) return soundPos;
 

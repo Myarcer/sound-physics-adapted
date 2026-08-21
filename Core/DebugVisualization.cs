@@ -258,14 +258,6 @@ namespace soundphysicsadapted
             }
         }
 
-        /// <summary>
-        /// Reset ray segment capture at the start of a raytrace for the focused sound.
-        /// </summary>
-        public void ResetRayCapture()
-        {
-            pendingRayCount = 0;
-        }
-
         public void ClearAll()
         {
             BounceColorMode = 0;

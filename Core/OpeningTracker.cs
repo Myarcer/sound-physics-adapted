@@ -217,6 +217,17 @@ namespace soundphysicsadapted
         /// <summary>Minimum interval between structural integrity checks per opening.</summary>
         private const long INTEGRITY_CHECK_INTERVAL_MS = 500;
 
+        // Best-match assignment scratch (see MatchAndReverify). Static + cached
+        // comparison, same alloc-free pattern as OpeningClusterer.
+        private struct MatchPair
+        {
+            public float DistSq;
+            public int Tracked;
+            public int Cluster;
+        }
+        private static readonly List<MatchPair> matchPairs = new List<MatchPair>(64);
+        private static readonly Comparison<MatchPair> matchOrder = (a, b) => a.DistSq.CompareTo(b.DistSq);
+
         public OpeningTracker(ICoreClientAPI api)
         {
             capi = api;
@@ -281,7 +292,13 @@ namespace soundphysicsadapted
 
         /// <summary>
         /// Match new clusters to existing tracked openings by proximity.
-        /// Re-verifies matches, smooths positions, and updates peak/smoothed weights.
+        /// Assignment is best-match: every (tracked, cluster) pair inside MATCH_RADIUS
+        /// is collected, then pairs claim in closest-first order. The old single-pass
+        /// loop let list order decide contention — once persisted openings outnumber
+        /// clusters (MERGE_RADIUS < MATCH_RADIUS leaves duplicates alive), an early
+        /// tracked opening stole the nearest cluster from a closer match and stayed
+        /// unverified, which zeroed its voice target and forced a teardown + fresh
+        /// TrackingId through merge churn on the next tick.
         /// </summary>
         private void MatchAndReverify(
             IReadOnlyList<OpeningCluster> clusters,
@@ -291,13 +308,16 @@ namespace soundphysicsadapted
             bool debug)
         {
             int clusterCount = clusters.Count;
+            int trackedCount = trackedOpenings.Count;
+            if (clusterCount == 0 || trackedCount == 0) return;
 
-            for (int t = 0; t < trackedOpenings.Count; t++)
+            Span<bool> trackedClaimed = stackalloc bool[trackedCount];
+            for (int i = 0; i < trackedCount; i++) trackedClaimed[i] = false;
+
+            matchPairs.Clear();
+            for (int t = 0; t < trackedCount; t++)
             {
                 var tracked = trackedOpenings[t];
-                float bestDistSq = MATCH_RADIUS_SQ;
-                int bestCluster = -1;
-
                 for (int c = 0; c < clusterCount; c++)
                 {
                     if (clusterConsumed[c]) continue;
@@ -307,129 +327,141 @@ namespace soundphysicsadapted
                     double dz = clusters[c].Centroid.Z - tracked.WorldPos.Z;
                     float distSq = (float)(dx * dx + dy * dy + dz * dz);
 
-                    if (distSq < bestDistSq)
-                    {
-                        bestDistSq = distSq;
-                        bestCluster = c;
-                    }
+                    if (distSq < MATCH_RADIUS_SQ)
+                        matchPairs.Add(new MatchPair { DistSq = distSq, Tracked = t, Cluster = c });
                 }
+            }
 
-                if (bestCluster >= 0)
+            matchPairs.Sort(matchOrder);
+
+            for (int p = 0; p < matchPairs.Count; p++)
+            {
+                var pair = matchPairs[p];
+                if (trackedClaimed[pair.Tracked] || clusterConsumed[pair.Cluster]) continue;
+
+                trackedClaimed[pair.Tracked] = true;
+                clusterConsumed[pair.Cluster] = true;
+
+                ReverifyMatch(trackedOpenings[pair.Tracked], clusters[pair.Cluster],
+                    playerEarPos, gameTimeMs, debug);
+            }
+        }
+
+        /// <summary>Apply one matched cluster to its tracked opening.</summary>
+        private void ReverifyMatch(
+            TrackedOpening tracked,
+            OpeningCluster cluster,
+            Vec3d playerEarPos,
+            long gameTimeMs,
+            bool debug)
+        {
+            // Position smoothing: lerp toward new centroid to prevent per-tick panning jitter.
+            // Small shifts (<snap threshold) snap immediately (float precision).
+            // Large shifts (> 3 blocks) snap immediately (new geometry, not jitter).
+            // Medium shifts get exponential smoothing.
+            double pdx = cluster.Centroid.X - tracked.WorldPos.X;
+            double pdy = cluster.Centroid.Y - tracked.WorldPos.Y;
+            double pdz = cluster.Centroid.Z - tracked.WorldPos.Z;
+            double shiftSq = pdx * pdx + pdy * pdy + pdz * pdz;
+
+            if (shiftSq < POSITION_SNAP_THRESHOLD_SQ)
+            {
+                // Trivially small shift — snap to avoid float drift
+                tracked.WorldPos = cluster.Centroid;
+            }
+            else if (shiftSq > POSITION_SNAP_MAX_SQ)
+            {
+                // Large shift (>3 blocks) — likely new geometry, snap
+                tracked.WorldPos = cluster.Centroid;
+            }
+            else
+            {
+                // Velocity-aware lerp: larger shifts get dampened more heavily.
+                // Small jitter converges quickly, large centroid jumps (from member
+                // set changes) are near-frozen until they persist directionally.
+                //   < 1 block:  normal lerp (0.3) — ~700ms to 90%
+                //   1-2 blocks: slow lerp (0.12) — ~1.8s to 90%
+                //   2-3 blocks: very slow lerp (0.05) — ~4.5s to 90%
+                float lerpFactor = shiftSq < 1.0f ? POSITION_LERP_FACTOR
+                                 : shiftSq < 4.0f ? POSITION_LERP_FACTOR * 0.4f
+                                 : POSITION_LERP_FACTOR * 0.15f;
+
+                tracked.WorldPos = new Vec3d(
+                    tracked.WorldPos.X + pdx * lerpFactor,
+                    tracked.WorldPos.Y + pdy * lerpFactor,
+                    tracked.WorldPos.Z + pdz * lerpFactor);
+            }
+
+            tracked.ClusterWeight = cluster.MemberCount;
+
+            // Peak weight hold: remember highest verified member count.
+            // When player walks back into cave, DDA can't reach overhead
+            // columns anymore → members drop to 1. Without peak hold,
+            // volume would crash instantly. Peak decays slowly instead.
+            // Asymmetric EMA smoothing: fast attack, slow decay.
+            // Both directions use exponential smoothing to absorb member
+            // flicker from DDA verification noise (small objects, angle changes).
+            // Snap-up would cause sawtooth volume when members oscillate 4→3→4→3.
+            if (cluster.MemberCount >= tracked.SmoothedClusterWeight)
+            {
+                // Attack: 12% per tick → time constant ~0.8s, 90% in ~1.8s.
+                // This was 0.5 (90% in 200ms), which is a fast lane for sampling
+                // noise: every upward flicker of the member count arrived at the
+                // ear almost unfiltered, then decayed slowly, so the source
+                // sawtoothed. A hole in a wall does not grow, so an upward step
+                // has no more claim to speed than a downward one.
+                tracked.SmoothedClusterWeight += (cluster.MemberCount - tracked.SmoothedClusterWeight) * 0.12f;
+            }
+            else
+            {
+                // Decay: 6% per tick at ~10Hz → time constant ~1.7s.
+                // Absorbs transient member drops from DDA angle changes / small objects
+                tracked.SmoothedClusterWeight += (cluster.MemberCount - tracked.SmoothedClusterWeight) * 0.06f;
+            }
+            tracked.LastKnownOcclusion = cluster.AverageOcclusion;
+            tracked.LastVerifiedTimeMs = gameTimeMs;
+            tracked.CurrentlyVerified = true;
+            // Adopt the cluster's lists directly — OpeningClusterer allocates
+            // them fresh every call and nothing else retains them, so copying
+            // here was pure GC churn at 10Hz.
+            tracked.MemberPositions = cluster.MemberPositions;
+            tracked.MemberEntryPositions = cluster.MemberEntryPositions;
+            tracked.LastVerifiedPlayerPos = new Vec3d(playerEarPos.X, playerEarPos.Y, playerEarPos.Z);
+
+            // WindWorldPos: smooth toward cluster's WindCentroid (same logic as WorldPos)
+            if (tracked.WindWorldPos == null)
+            {
+                tracked.WindWorldPos = new Vec3d(cluster.WindCentroid.X, cluster.WindCentroid.Y, cluster.WindCentroid.Z);
+            }
+            else
+            {
+                double wdx = cluster.WindCentroid.X - tracked.WindWorldPos.X;
+                double wdy = cluster.WindCentroid.Y - tracked.WindWorldPos.Y;
+                double wdz = cluster.WindCentroid.Z - tracked.WindWorldPos.Z;
+                double windShiftSq = wdx * wdx + wdy * wdy + wdz * wdz;
+
+                if (windShiftSq < POSITION_SNAP_THRESHOLD_SQ)
+                    tracked.WindWorldPos = new Vec3d(cluster.WindCentroid.X, cluster.WindCentroid.Y, cluster.WindCentroid.Z);
+                else if (windShiftSq > POSITION_SNAP_MAX_SQ)
+                    tracked.WindWorldPos = new Vec3d(cluster.WindCentroid.X, cluster.WindCentroid.Y, cluster.WindCentroid.Z);
+                else
                 {
-                    // Re-verified: update stats and smooth position
-                    var cluster = clusters[bestCluster];
-
-                    // Position smoothing: lerp toward new centroid to prevent per-tick panning jitter.
-                    // Small shifts (<snap threshold) snap immediately (float precision).
-                    // Large shifts (> 3 blocks) snap immediately (new geometry, not jitter).
-                    // Medium shifts get exponential smoothing.
-                    double pdx = cluster.Centroid.X - tracked.WorldPos.X;
-                    double pdy = cluster.Centroid.Y - tracked.WorldPos.Y;
-                    double pdz = cluster.Centroid.Z - tracked.WorldPos.Z;
-                    double shiftSq = pdx * pdx + pdy * pdy + pdz * pdz;
-
-                    if (shiftSq < POSITION_SNAP_THRESHOLD_SQ)
-                    {
-                        // Trivially small shift — snap to avoid float drift
-                        tracked.WorldPos = cluster.Centroid;
-                    }
-                    else if (shiftSq > POSITION_SNAP_MAX_SQ)
-                    {
-                        // Large shift (>3 blocks) — likely new geometry, snap
-                        tracked.WorldPos = cluster.Centroid;
-                    }
-                    else
-                    {
-                        // Velocity-aware lerp: larger shifts get dampened more heavily.
-                        // Small jitter converges quickly, large centroid jumps (from member
-                        // set changes) are near-frozen until they persist directionally.
-                        //   < 1 block:  normal lerp (0.3) — ~700ms to 90%
-                        //   1-2 blocks: slow lerp (0.12) — ~1.8s to 90%
-                        //   2-3 blocks: very slow lerp (0.05) — ~4.5s to 90%
-                        float lerpFactor = shiftSq < 1.0f ? POSITION_LERP_FACTOR
-                                         : shiftSq < 4.0f ? POSITION_LERP_FACTOR * 0.4f
-                                         : POSITION_LERP_FACTOR * 0.15f;
-
-                        tracked.WorldPos = new Vec3d(
-                            tracked.WorldPos.X + pdx * lerpFactor,
-                            tracked.WorldPos.Y + pdy * lerpFactor,
-                            tracked.WorldPos.Z + pdz * lerpFactor);
-                    }
-
-                    tracked.ClusterWeight = cluster.MemberCount;
-
-                    // Peak weight hold: remember highest verified member count.
-                    // When player walks back into cave, DDA can't reach overhead
-                    // columns anymore → members drop to 1. Without peak hold,
-                    // volume would crash instantly. Peak decays slowly instead.
-                    // Asymmetric EMA smoothing: fast attack, slow decay.
-                    // Both directions use exponential smoothing to absorb member
-                    // flicker from DDA verification noise (small objects, angle changes).
-                    // Snap-up would cause sawtooth volume when members oscillate 4→3→4→3.
-                    if (cluster.MemberCount >= tracked.SmoothedClusterWeight)
-                    {
-                        // Attack: 12% per tick → time constant ~0.8s, 90% in ~1.8s.
-                        // This was 0.5 (90% in 200ms), which is a fast lane for sampling
-                        // noise: every upward flicker of the member count arrived at the
-                        // ear almost unfiltered, then decayed slowly, so the source
-                        // sawtoothed. A hole in a wall does not grow, so an upward step
-                        // has no more claim to speed than a downward one.
-                        tracked.SmoothedClusterWeight += (cluster.MemberCount - tracked.SmoothedClusterWeight) * 0.12f;
-                    }
-                    else
-                    {
-                        // Decay: 6% per tick at ~10Hz → time constant ~1.7s.
-                        // Absorbs transient member drops from DDA angle changes / small objects
-                        tracked.SmoothedClusterWeight += (cluster.MemberCount - tracked.SmoothedClusterWeight) * 0.06f;
-                    }
-                    tracked.LastKnownOcclusion = cluster.AverageOcclusion;
-                    tracked.LastVerifiedTimeMs = gameTimeMs;
-                    tracked.CurrentlyVerified = true;
-                    // Adopt the cluster's lists directly — OpeningClusterer allocates
-                    // them fresh every call and nothing else retains them, so copying
-                    // here was pure GC churn at 10Hz.
-                    tracked.MemberPositions = cluster.MemberPositions;
-                    tracked.MemberEntryPositions = cluster.MemberEntryPositions;
-                    tracked.LastVerifiedPlayerPos = new Vec3d(playerEarPos.X, playerEarPos.Y, playerEarPos.Z);
-
-                    // WindWorldPos: smooth toward cluster's WindCentroid (same logic as WorldPos)
-                    if (tracked.WindWorldPos == null)
-                    {
-                        tracked.WindWorldPos = new Vec3d(cluster.WindCentroid.X, cluster.WindCentroid.Y, cluster.WindCentroid.Z);
-                    }
-                    else
-                    {
-                        double wdx = cluster.WindCentroid.X - tracked.WindWorldPos.X;
-                        double wdy = cluster.WindCentroid.Y - tracked.WindWorldPos.Y;
-                        double wdz = cluster.WindCentroid.Z - tracked.WindWorldPos.Z;
-                        double windShiftSq = wdx * wdx + wdy * wdy + wdz * wdz;
-
-                        if (windShiftSq < POSITION_SNAP_THRESHOLD_SQ)
-                            tracked.WindWorldPos = new Vec3d(cluster.WindCentroid.X, cluster.WindCentroid.Y, cluster.WindCentroid.Z);
-                        else if (windShiftSq > POSITION_SNAP_MAX_SQ)
-                            tracked.WindWorldPos = new Vec3d(cluster.WindCentroid.X, cluster.WindCentroid.Y, cluster.WindCentroid.Z);
-                        else
-                        {
-                            float wLerp = windShiftSq < 1.0 ? POSITION_LERP_FACTOR
-                                        : windShiftSq < 4.0 ? POSITION_LERP_FACTOR * 0.4f
-                                        : POSITION_LERP_FACTOR * 0.15f;
-                            tracked.WindWorldPos = new Vec3d(
-                                tracked.WindWorldPos.X + wdx * wLerp,
-                                tracked.WindWorldPos.Y + wdy * wLerp,
-                                tracked.WindWorldPos.Z + wdz * wLerp);
-                        }
-                    }
-
-                    clusterConsumed[bestCluster] = true;
-
-                    if (debug)
-                    {
-                        WeatherAudioManager.WeatherDebugLog(
-                            $"[5B-TRACK] RE-VERIFIED id={tracked.TrackingId} pos=({tracked.WorldPos.X:F0},{tracked.WorldPos.Y:F0},{tracked.WorldPos.Z:F0}) " +
-                            $"windY={tracked.WindWorldPos?.Y:F0} " +
-                            $"members={cluster.MemberCount} occl={cluster.AverageOcclusion:F2}");
-                    }
+                    float wLerp = windShiftSq < 1.0 ? POSITION_LERP_FACTOR
+                                : windShiftSq < 4.0 ? POSITION_LERP_FACTOR * 0.4f
+                                : POSITION_LERP_FACTOR * 0.15f;
+                    tracked.WindWorldPos = new Vec3d(
+                        tracked.WindWorldPos.X + wdx * wLerp,
+                        tracked.WindWorldPos.Y + wdy * wLerp,
+                        tracked.WindWorldPos.Z + wdz * wLerp);
                 }
+            }
+
+            if (debug)
+            {
+                WeatherAudioManager.WeatherDebugLog(
+                    $"[5B-TRACK] RE-VERIFIED id={tracked.TrackingId} pos=({tracked.WorldPos.X:F0},{tracked.WorldPos.Y:F0},{tracked.WorldPos.Z:F0}) " +
+                    $"windY={tracked.WindWorldPos?.Y:F0} " +
+                    $"members={cluster.MemberCount} occl={cluster.AverageOcclusion:F2}");
             }
         }
 
@@ -545,6 +577,10 @@ namespace soundphysicsadapted
             int scanRadius,
             IBlockAccessor blockAccessor, bool debug)
         {
+            // Sections 4a/4b both dereference the ear position; bail once instead of
+            // guarding each check (defensive — the caller passes a non-null ear today).
+            if (playerEarPos == null) return;
+
             for (int i = trackedOpenings.Count - 1; i >= 0; i--)
             {
                 var tracked = trackedOpenings[i];

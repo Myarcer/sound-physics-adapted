@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
@@ -30,9 +31,11 @@ namespace soundphysicsadapted
         /// <summary>
         /// Cache of mono-downmixed AudioMetaData per asset location string.
         /// Avoids re-downmixing on every positional source creation.
-        /// Thread-safe: only accessed from main thread (VS enforces this for audio).
+        /// Concurrent: EnsureMono runs from StartPlayingAudioMonoPrefix, which is
+        /// reachable on the music-engine worker thread as well as the main thread.
+        /// A duplicated concurrent downmix is idempotent (last write wins).
         /// </summary>
-        private static readonly Dictionary<string, AudioMetaData> monoCache = new Dictionary<string, AudioMetaData>();
+        private static readonly ConcurrentDictionary<string, AudioMetaData> monoCache = new ConcurrentDictionary<string, AudioMetaData>();
 
         /// <summary>
         /// Per-asset explicit mono request set.

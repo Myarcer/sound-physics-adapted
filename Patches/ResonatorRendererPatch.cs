@@ -88,6 +88,19 @@ namespace soundphysicsadapted.Patches
             if (toRemove != null) savedRotationsByPos.Remove(toRemove);
         }
 
+        /// <summary>
+        /// Clear ALL saved rotations and pause timings. Called from ModSystem.Dispose —
+        /// these dictionaries are keyed by world coordinates, so without this the frozen
+        /// rotation of a resonator in world #1 applied to whatever sits at the same
+        /// coordinates in world #2.
+        /// </summary>
+        public static void Reset()
+        {
+            savedRotationsByPos.Clear();
+            pauseTimingByPos.Clear();
+            frozenRotations = new ConditionalWeakTable<ResonatorRenderer, FrozenRotation>();
+        }
+
         // Cached field accessors
         private static AccessTools.FieldRef<ResonatorRenderer, BlockPos> posField;
         private static AccessTools.FieldRef<ResonatorRenderer, ICoreClientAPI> apiField;

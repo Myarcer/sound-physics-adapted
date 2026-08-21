@@ -36,9 +36,12 @@ namespace soundphysicsadapted
         // Mono cache swap for explicit LoadSound requests (weather pools, resonator)
         // When ForceMonoNextLoad is set, we temporarily replace the cached AudioMetaData
         // in ScreenManager.soundAudioData with a mono clone before LoadSound runs.
+        // The swap record travels per-invocation through the Harmony __state channel
+        // (prefix -> postfix/finalizer). The old pair of statics broke under two
+        // interleaved LoadSound calls — LoadSound runs on main AND music-engine
+        // threads — letting one invocation erase the other's swap record so a mono
+        // clone stayed in the shared cache forever.
         private static Dictionary<AssetLocation, AudioData> soundAudioDataDict;
-        private static AssetLocation monoSwapKey;       // The key we swapped (for restore)
-        private static AudioData monoSwapOriginal;      // The original stereo data (for restore)
 
         // === PRE-WARMUP SOUND QUEUE ===
         // Sounds that call Start() between LevelFinalize and warmup completion are queued here.
@@ -83,8 +86,6 @@ namespace soundphysicsadapted
             cachedBlockAccessor = null;
             cachedApi = null;
             soundAudioDataDict = null;
-            monoSwapKey = null;
-            monoSwapOriginal = null;
             lock (_localPlayerSoundPositions) _localPlayerSoundPositions.Clear();
             lock (_localPlayerOcclusionSkipQueue) _localPlayerOcclusionSkipQueue.Clear();
             lock (_distanceModelApplied) _distanceModelApplied.Clear();
@@ -283,11 +284,14 @@ namespace soundphysicsadapted
                 {
                     var prefix = typeof(LoadSoundPatch).GetMethod("LoadSoundMonoPrefix",
                         BindingFlags.Static | BindingFlags.Public);
-                    var postfix = typeof(LoadSoundPatch).GetMethod("LoadSoundPostfix", 
+                    var postfix = typeof(LoadSoundPatch).GetMethod("LoadSoundPostfix",
+                        BindingFlags.Static | BindingFlags.Public);
+                    var finalizer = typeof(LoadSoundPatch).GetMethod("LoadSoundMonoFinalizer",
                         BindingFlags.Static | BindingFlags.Public);
                     harmony.Patch(loadSoundMethod,
                         prefix: prefix != null ? new HarmonyMethod(prefix) : null,
-                        postfix: new HarmonyMethod(postfix));
+                        postfix: new HarmonyMethod(postfix),
+                        finalizer: finalizer != null ? new HarmonyMethod(finalizer) : null);
                     api.Logger.Notification($"[SoundPhysicsAdapted] Patched ClientMain.LoadSound() [prefix={prefix != null}]");
                 }
 
@@ -594,14 +598,17 @@ namespace soundphysicsadapted
                     AirAbsorptionApplied = false
                 };
 
+                // Availability check BEFORE the claim: claiming first left a NaN entry
+                // behind when EFX was unavailable, and that claimed id could never be
+                // re-applied (e.g. after an audio device reconnect).
+                if (!EfxHelper.IsAvailable) return;
+
                 lock (_distanceModelApplied)
                 {
                     if (_distanceModelApplied.ContainsKey(sourceId))
                         return;
                     _distanceModelApplied[sourceId] = vanillaParams;
                 }
-
-                if (!EfxHelper.IsAvailable) return;
 
                 // Range multiplier — affects AL_MAX_DISTANCE.
                 // VS sets MaxDistance = SoundParams.Range when starting the source.
@@ -1219,12 +1226,8 @@ namespace soundphysicsadapted
         /// Still needed for the cache-swap mechanism used by weather positional pools
         /// and resonator patches that need mono BEFORE LoadSound creates the buffer.
         /// </summary>
-        public static void LoadSoundMonoPrefix(SoundParams sound)
+        public static void LoadSoundMonoPrefix(SoundParams sound, ref MonoSwapState __state)
         {
-            // Reset any previous swap state
-            monoSwapKey = null;
-            monoSwapOriginal = null;
-
             // NO STARTUP GATE HERE — see StartPlayingAudioMonoPrefix. This prefix is the
             // ONLY mono hook for music tracks: ClientMain.LoadSound reads
             // ScreenManager.soundAudioData and calls Platform.CreateAudio directly, so it
@@ -1294,9 +1297,11 @@ namespace soundphysicsadapted
                 var monoMeta = MonoDownmixManager.GetOrCreateMonoVersion(stereoMeta);
                 if (monoMeta == null || monoMeta == stereoMeta) return;
 
-                // Temporarily replace the cache entry with the mono version
-                monoSwapKey = location;
-                monoSwapOriginal = stereoData;
+                // Temporarily replace the cache entry with the mono version.
+                // The swap record goes into __state: it belongs to THIS invocation,
+                // so interleaved loads on main/music threads cannot erase each other,
+                // and the finalizer still restores when LoadSound itself throws.
+                __state = new MonoSwapState { Key = location, Original = stereoData };
                 soundAudioDataDict[location] = monoMeta;
 
                 if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
@@ -1307,26 +1312,52 @@ namespace soundphysicsadapted
             {
                 if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
                     SoundPhysicsAdaptedModSystem.DebugLog($"MonoPrefix error: {ex.Message}");
-                monoSwapKey = null;
-                monoSwapOriginal = null;
+                __state = null;
             }
+        }
+
+        /// <summary>Per-invocation record of one mono cache swap (Harmony __state).</summary>
+        public sealed class MonoSwapState
+        {
+            public AssetLocation Key;
+            public AudioData Original;
+        }
+
+        /// <summary>
+        /// Finalizer for ClientMain.LoadSound(): restore the stereo cache entry when
+        /// the original throws. Harmony postfixes are skipped on the exception path,
+        /// which used to leave the mono clone in the shared cache permanently.
+        /// Void return: runs like a finally block without altering exception flow.
+        /// </summary>
+        public static void LoadSoundMonoFinalizer(MonoSwapState __state)
+        {
+            if (__state != null)
+            {
+                RestoreStereoAfterMonoSwap(__state);
+            }
+        }
+
+        /// <summary>Put the original stereo AudioMetaData back after a mono swap.</summary>
+        private static void RestoreStereoAfterMonoSwap(MonoSwapState state)
+        {
+            if (state?.Key == null || state.Original == null || soundAudioDataDict == null) return;
+            try
+            {
+                soundAudioDataDict[state.Key] = state.Original;
+            }
+            catch { }
         }
 
         /// <summary>
         /// Postfix for ClientMain.LoadSound()
         /// </summary>
-        public static void LoadSoundPostfix(ILoadedSound __result, SoundParams sound, object __instance)
+        public static void LoadSoundPostfix(ILoadedSound __result, SoundParams sound, object __instance, ref MonoSwapState __state)
         {
             // Phase 5B: Restore stereo AudioMetaData in cache after mono swap
-            if (monoSwapKey != null && monoSwapOriginal != null && soundAudioDataDict != null)
+            if (__state != null)
             {
-                try
-                {
-                    soundAudioDataDict[monoSwapKey] = monoSwapOriginal;
-                }
-                catch { }
-                monoSwapKey = null;
-                monoSwapOriginal = null;
+                RestoreStereoAfterMonoSwap(__state);
+                __state = null; // Finalizer must not restore a second time
             }
 
             // STARTUP GATE: Skip reflection + occlusion during loading
@@ -1685,7 +1716,7 @@ namespace soundphysicsadapted
                             if (cell != null) startReverb = cell.Reverb;
 
                             // Underwater source reduces reverb (fluid layer covers waterlogged blocks)
-                            BlockPos soundBlockPos = new BlockPos((int)soundPosD.X, (int)soundPosD.Y, (int)soundPosD.Z);
+                            BlockPos soundBlockPos = new BlockPos((int)Math.Floor(soundPosD.X), (int)Math.Floor(soundPosD.Y), (int)Math.Floor(soundPosD.Z));
                             Block soundBlock = cachedBlockAccessor.GetBlock(soundBlockPos, BlockLayersAccess.Fluid);
                             isSourceUnderwater = soundBlock != null && soundBlock.IsLiquid();
                         }

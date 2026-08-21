@@ -1052,7 +1052,7 @@ namespace soundphysicsadapted
                     // Remove stale entry and re-register
                     if (activeFilters.TryRemove(sound, out var staleEntry))
                     {
-                        CleanupEntry(staleEntry);
+                        CleanupEntry(staleEntry, sound);
                     }
 
                     // Re-register with new sourceId
@@ -1559,7 +1559,7 @@ namespace soundphysicsadapted
             {
                 if (activeFilters.TryRemove(sound, out var staleEntry))
                 {
-                    CleanupEntry(staleEntry);
+                    CleanupEntry(staleEntry, sound);
                 }
             }
 
@@ -1578,7 +1578,7 @@ namespace soundphysicsadapted
 
             if (activeFilters.TryRemove(sound, out var entry))
             {
-                CleanupEntry(entry);
+                CleanupEntry(entry, sound);
             }
         }
 
@@ -1590,14 +1590,23 @@ namespace soundphysicsadapted
         /// We only delete the filter object itself - if it's still attached to a
         /// recycled source, OpenAL will handle it when that source is reconfigured.
         /// </summary>
-        private static void CleanupEntry(FilterEntry entry)
+        private static void CleanupEntry(FilterEntry entry, ILoadedSound expectedOwner = null)
         {
             try
             {
-                // Remove from reverse lookup map
-                if (entry.SourceId > 0)
+                // Remove from reverse lookup map, but only if it still points at
+                // THIS entry's sound. OpenAL recycles source ids: if the id already
+                // moved to a newer sound, the map entry belongs to that sound now and
+                // must stay. When the sound was garbage-collected already, the weak
+                // reference is dead — compare against the dictionary key the caller
+                // used to find this entry instead.
+                if (entry.SourceId > 0 && sourceIdToSound.TryGetValue(entry.SourceId, out var owner))
                 {
-                    sourceIdToSound.TryRemove(entry.SourceId, out _);
+                    ILoadedSound owned = entry.SoundRef.TryGetTarget(out var target) ? target : expectedOwner;
+                    if (owned != null && ReferenceEquals(owner, owned))
+                    {
+                        sourceIdToSound.TryRemove(entry.SourceId, out _);
+                    }
                 }
 
                 // DO NOT detach filter from source!
@@ -1646,7 +1655,7 @@ namespace soundphysicsadapted
             {
                 if (activeFilters.TryRemove(sound, out var entry))
                 {
-                    CleanupEntry(entry);
+                    CleanupEntry(entry, sound);
                 }
             }
         }

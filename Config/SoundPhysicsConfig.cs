@@ -569,9 +569,12 @@ namespace soundphysicsadapted
         /// <summary>
         /// Maximum positional rain sources (per-type budget).
         /// Each source is an OpenAL voice with per-source occlusion/repositioning.
-        /// 4 is typically enough to cover all openings in a building.
+        /// This value is ALSO the tracker's cluster cap (maxTracked in
+        /// WeatherAudioManager), so it decides how many apertures can be DISCOVERED
+        /// per tick, not only how many can sound. 8 covers a cave mouth with several
+        /// real openings without starving the tracker.
         /// </summary>
-        public int MaxPositionalRainSources { get; set; } = 4;
+        public int MaxPositionalRainSources { get; set; } = 8;
 
         /// <summary>
         /// Maximum positional wind sources (per-type budget).
@@ -584,15 +587,6 @@ namespace soundphysicsadapted
         /// Hail uses the same openings as rain with different audio assets.
         /// </summary>
         public int MaxPositionalHailSources { get; set; } = 4;
-
-        /// <summary>
-        /// How long tracked openings persist after last verification (seconds).
-        /// While persisted, positional sources stay active even when the
-        /// opening is out of direct line-of-sight.
-        /// Higher = openings survive longer around corners.
-        /// Lower = faster cleanup of abandoned openings.
-        /// </summary>
-        public float OpeningPersistenceSeconds { get; set; } = 10f;
 
         /// <summary>
         /// Minimum sky coverage before positional sources activate (0-1).
@@ -648,7 +642,8 @@ namespace soundphysicsadapted
         /// <summary>
         /// Minimum LPF cutoff for thunder Layer 1 when fully enclosed (Hz).
         /// Thunder is already low-frequency content; heavy filtering makes it
-        /// a deep, barely-audible rumble. 200 Hz keeps some bass presence.
+        /// a deep, barely-audible rumble. 800 Hz keeps some presence while
+        /// still reading as "outside weather".
         /// </summary>
         public float ThunderLPFMinCutoff { get; set; } = 800f;
 

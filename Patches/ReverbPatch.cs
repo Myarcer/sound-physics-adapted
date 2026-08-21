@@ -117,31 +117,5 @@ namespace soundphysicsadapted.Patches
 
             return false; // Skip original method
         }
-
-        /// <summary>
-        /// Re-enable vanilla reverb (for comparison/debugging).
-        /// </summary>
-        public static void EnableVanillaReverb()
-        {
-            var config = SoundPhysicsAdaptedModSystem.Config;
-            if (config != null)
-            {
-                config.DisableVanillaReverb = false;
-                _api?.Logger.Notification("[SoundPhysicsAdapted] Vanilla reverb RE-ENABLED");
-            }
-        }
-
-        /// <summary>
-        /// Disable vanilla reverb again.
-        /// </summary>
-        public static void DisableVanillaReverb()
-        {
-            var config = SoundPhysicsAdaptedModSystem.Config;
-            if (config != null)
-            {
-                config.DisableVanillaReverb = true;
-                _api?.Logger.Notification("[SoundPhysicsAdapted] Vanilla reverb DISABLED");
-            }
-        }
     }
 }

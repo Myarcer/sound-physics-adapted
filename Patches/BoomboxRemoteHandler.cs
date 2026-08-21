@@ -100,7 +100,8 @@ namespace soundphysicsadapted.Patches
                 return;
             }
 
-            capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Received packet from carrier {packet.CarrierEntityId}, playing={packet.IsPlaying}, track={packet.TrackLocation}, pos=({packet.PosX:F0},{packet.PosY:F0},{packet.PosZ:F0})");
+            if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Received packet from carrier {packet.CarrierEntityId}, playing={packet.IsPlaying}, track={packet.TrackLocation}, pos=({packet.PosX:F0},{packet.PosY:F0},{packet.PosZ:F0})");
 
             if (!packet.IsPlaying)
             {
@@ -155,7 +156,8 @@ namespace soundphysicsadapted.Patches
                 }
                 assetLoc.WithPathAppendixOnce(".ogg");
 
-                capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Creating sound for carrier {packet.CarrierEntityId}, rawTrack={packet.TrackLocation}, resolved={assetLoc}");
+                if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                    capi.Logger.Debug($"[SoundPhysicsAdapted] BoomboxRemote: Creating sound for carrier {packet.CarrierEntityId}, rawTrack={packet.TrackLocation}, resolved={assetLoc}");
 
                 // Request mono downmix for this asset before LoadSound runs.
                 // Music ogg files are typically stereo; OpenAL refuses to spatialize stereo

@@ -51,6 +51,10 @@ namespace soundphysicsadapted
         /// </summary>
         public void EvaluateThrottle(Dictionary<ILoadedSound, float> soundDistances)
         {
+            // Per-tick counters — GetStats labels them "ThisTick", so reset on every evaluation
+            _throttledCount = 0;
+            _unthrottledCount = 0;
+
             var config = SoundPhysicsAdaptedModSystem.Config;
             if (config == null || !config.EnableSoundThrottle)
             {

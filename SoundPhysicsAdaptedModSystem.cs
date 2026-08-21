@@ -45,7 +45,7 @@ namespace soundphysicsadapted
         /// Keep it equal to <see cref="MaterialSoundConfig.CurrentVersion"/> — both
         /// config files use one version number.
         /// </summary>
-        private const int CurrentConfigVersion = 11;
+        private const int CurrentConfigVersion = 12;
         private static MaterialSoundConfig materialConfig;
         private static ICoreClientAPI clientApi;
         private static AudioPhysicsSystem acousticsManager;
@@ -446,17 +446,84 @@ namespace soundphysicsadapted
             }
         }
 
+        // === SERVER-SIDE PACKET VALIDATION ===
+        // Client packets are untrusted input in multiplayer. Without these checks a
+        // modified client could grow the pos-keyed dictionaries without bound, pause
+        // resonators anywhere on the map, or relay arbitrary strings to nearby clients
+        // as an AssetLocation for LoadSound.
+        private const double RESONATOR_SYNC_MAX_DIST = 12.0;  // blocks; reach is ~5, auto-pause target is near the player
+        private const double BOOMBOX_SYNC_MAX_DIST = 16.0;    // blocks; carrier moves while playing
+        private const int RESONATOR_SYNC_MAX_ENTRIES = 512;   // cap on the pos-keyed stores
+        private const long PACKET_MIN_INTERVAL_MS = 200;      // per-player rate floor (~2 Hz senders unaffected)
+        private static readonly Dictionary<string, long> packetLastMsByPlayer = new Dictionary<string, long>();
+
+        /// <summary>Per-player, per-packet-type rate limit. True = accept the packet.
+        /// Separate buckets: a playing boombox relays at ~2 Hz and must not eat the
+        /// resonator's budget (or vice versa).</summary>
+        private static bool AcceptPacketRate(IServerPlayer player, string packetKind)
+        {
+            long now = Environment.TickCount64;
+            string key = packetKind + ":" + player.PlayerUID;
+            if (packetLastMsByPlayer.TryGetValue(key, out long last) && now - last < PACKET_MIN_INTERVAL_MS)
+            {
+                return false;
+            }
+            packetLastMsByPlayer[key] = now;
+            return true;
+        }
+
+        /// <summary>
+        /// Track strings are relayed to every nearby client and fed to AssetLocation /
+        /// LoadSound there. VS asset codes are lowercase alphanumerics plus :/._- —
+        /// anything else never came from a legit client.
+        /// </summary>
+        private static bool ValidTrackLocation(string loc)
+        {
+            if (string.IsNullOrEmpty(loc)) return true; // empty = "stopped playing", legitimate
+            if (loc.Length > 256) return false;
+            foreach (char c in loc)
+            {
+                bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                          || c == ':' || c == '/' || c == '.' || c == '_' || c == '-';
+                if (!ok) return false;
+            }
+            return true;
+        }
+
         private void OnResonatorSyncPacket(IServerPlayer player, ResonatorSyncPacket packet)
         {
-            if (player?.Entity?.World?.BlockAccessor == null) return;
+            if (player?.Entity?.World?.BlockAccessor == null || packet?.Pos == null) return;
+
+            if (!AcceptPacketRate(player, "resonator")) return;
+
+            // Trust boundary: the sender must be near the resonator they claim to sync.
+            var resonatorCenter = new Vec3d(packet.Pos.X + 0.5, packet.Pos.Y + 0.5, packet.Pos.Z + 0.5);
+            double dist = player.Entity.Pos.XYZ.DistanceTo(resonatorCenter);
+            if (dist > RESONATOR_SYNC_MAX_DIST)
+            {
+                player.Entity.World.Logger.Debug(
+                    $"[SoundPhysicsAdapted] Rejected resonator sync from {player.PlayerName}: {dist:F0} blocks from {packet.Pos}");
+                return;
+            }
+
+            // Bound the pos-keyed stores: a hostile client must not be able to grow
+            // them without bound. Known positions keep updating; new ones need room.
+            if (ResonatorPatches.serverPositionsByPos.Count >= RESONATOR_SYNC_MAX_ENTRIES
+                && !ResonatorPatches.serverPositionsByPos.ContainsKey(packet.Pos))
+            {
+                player.Entity.World.Logger.Warning(
+                    $"[SoundPhysicsAdapted] Resonator sync store full ({RESONATOR_SYNC_MAX_ENTRIES}) — dropping sync for {packet.Pos}");
+                return;
+            }
 
             // ALWAYS store by BlockPos first - this survives chunk reload
             // The weak table entries are lost when chunk unloads (instance destroyed)
             ResonatorPatches.serverPositionsByPos[packet.Pos.Copy()] = packet.PlaybackPosition;
             ResonatorPatches.serverPausedByPos[packet.Pos.Copy()] = packet.IsPaused;
             ResonatorPatches.serverRotationsByPos[packet.Pos.Copy()] = packet.FrozenRotation;
-            
-            player.Entity.World.Logger.Debug($"[SoundPhysicsAdapted] Server received sync: pos={packet.Pos}, position={packet.PlaybackPosition:F2}s, isPaused={packet.IsPaused}, rotation={packet.FrozenRotation:F2}");
+
+            if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                player.Entity.World.Logger.Debug($"[SoundPhysicsAdapted] Server received sync: pos={packet.Pos}, position={packet.PlaybackPosition:F2}s, isPaused={packet.IsPaused}, rotation={packet.FrozenRotation:F2}");
 
             BlockEntity be = player.Entity.World.BlockAccessor.GetBlockEntity(packet.Pos);
             if (be is BlockEntityResonator resonator)
@@ -498,6 +565,28 @@ namespace soundphysicsadapted
         {
             if (sender?.Entity == null || serverApi == null) return;
 
+            if (!AcceptPacketRate(sender, "boombox")) return;
+
+            var senderPos = sender.Entity.Pos.XYZ;
+
+            // Trust boundary: the sender must be near the carrier position it reports.
+            var claimedPos = new Vec3d(packet.PosX, packet.PosY, packet.PosZ);
+            if (senderPos.DistanceTo(claimedPos) > BOOMBOX_SYNC_MAX_DIST)
+            {
+                serverApi.Logger.Debug(
+                    $"[SoundPhysicsAdapted] Rejected boombox sync from {sender.PlayerName}: {senderPos.DistanceTo(claimedPos):F0} blocks from reported carrier");
+                return;
+            }
+
+            // The track string reaches every nearby client and is fed to
+            // AssetLocation/LoadSound there. Reject anything that is not a VS asset code.
+            if (!ValidTrackLocation(packet.TrackLocation))
+            {
+                serverApi.Logger.Debug(
+                    $"[SoundPhysicsAdapted] Rejected boombox sync from {sender.PlayerName}: malformed track location '{packet.TrackLocation}'");
+                return;
+            }
+
             long carrierId = sender.Entity.EntityId;
 
             // Maintain the active-carrier cache used by join-sync and range-entry sync.
@@ -518,7 +607,6 @@ namespace soundphysicsadapted
                 foreach (var set in boomboxInRangeByReceiver.Values) set.Remove(carrierId);
             }
 
-            var senderPos = sender.Entity.Pos.XYZ;
             var allPlayers = serverApi.World.AllOnlinePlayers;
             int relayCount = 0;
 
@@ -548,7 +636,10 @@ namespace soundphysicsadapted
                 }
             }
 
-            serverApi.Logger.Debug($"[SoundPhysicsAdapted] Boombox relay: {sender.PlayerName} playing={packet.IsPlaying} track={packet.TrackLocation} pos=({packet.PosX:F0},{packet.PosY:F0},{packet.PosZ:F0}) relayed to {relayCount} players, cache={activeBoomboxesByCarrier.Count}");
+            // Per-relay packet log — 2 Hz per playing boombox in normal play, so it
+            // stays behind the debug gate instead of flooding the server log.
+            if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                serverApi.Logger.Debug($"[SoundPhysicsAdapted] Boombox relay: {sender.PlayerName} playing={packet.IsPlaying} track={packet.TrackLocation} pos=({packet.PosX:F0},{packet.PosY:F0},{packet.PosZ:F0}) relayed to {relayCount} players, cache={activeBoomboxesByCarrier.Count}");
 
             // Sync the playback position to the carrier's Itemstack so that when the boombox
             // is placed down, it starts from the correct position.
@@ -781,13 +872,19 @@ namespace soundphysicsadapted
                 // multiplayer servers until blocks are received from the server.
                 BlockAmbientInjector.InjectAmbientSounds(api);
 
-                // DIAGNOSTIC: Dump beehive entries from soundAudioData after a delay
-                long diagId = 0;
-                diagId = api.Event.RegisterGameTickListener((float dt) =>
+                // DIAGNOSTIC: Dump beehive entries from soundAudioData after a delay.
+                // Debug-gated: it walks the whole soundAudioData dictionary via
+                // reflection + dynamic, which ran on EVERY world join regardless of
+                // DebugMode and stalled joins on mod-heavy installs.
+                if (config.DebugMode)
                 {
-                    api.Event.UnregisterGameTickListener(diagId);
-                    DumpBeehiveSoundDiag(api);
-                }, 3000); // 3 second delay to let CatalogSounds finish
+                    long diagId = 0;
+                    diagId = api.Event.RegisterGameTickListener((float dt) =>
+                    {
+                        api.Event.UnregisterGameTickListener(diagId);
+                        DumpBeehiveSoundDiag(api);
+                    }, 3000); // 3 second delay to let CatalogSounds finish
+                }
             };
 
             // Phase 3: Initialize reverb effect system
@@ -1466,12 +1563,26 @@ namespace soundphysicsadapted
             // (ambient loops never registered) and raycast against the old world's accessor.
             LoadSoundPatch.Reset();
 
+            // Reset weather patch statics (applied latch, weather-sim instance, thunder
+            // handler, latched leafy state) — same survive-unload problem. A stale
+            // PatchesApplied flag made the next session start the replacement weather
+            // system while the removed patches left vanilla loops playing on top.
+            WeatherSoundPatches.Reset();
+
+            // Reset resonator renderer statics (saved rotations, pause timing) — frozen
+            // rotations from world #1 otherwise apply to same-coordinate resonators in #2.
+            ResonatorRendererPatch.Reset();
+
             // Unpatch Harmony
             harmony?.UnpatchAll(HARMONY_ID);
             serverHarmony?.UnpatchAll(HARMONY_ID + ".server");
 
             // Reset server detection flag
             ResonatorPatches.ServerHasMod = false;
+
+            // Clear per-player packet rate buckets (server side, bounded by UID count
+            // but stale entries would survive into the next server session)
+            packetLastMsByPlayer.Clear();
 
             // Dispose sound override manager
             Core.SoundOverrideManager.Dispose();
@@ -1511,6 +1622,16 @@ namespace soundphysicsadapted
                         if (Math.Abs(cfg.TorchAmbientVolume - 0.35f) < 0.0001f)
                             cfg.TorchAmbientVolume = 0.42f;
                         cfg.ConfigVersion = 11;
+                        break;
+
+                    case 11:
+                        // v12: rain source budget 4 -> 8. The value also caps how many
+                        // openings the tracker can discover per tick, and 4 starved
+                        // multi-opening scenes (cave mouths). Only lift users who still
+                        // sit at the old default; respect an explicit choice of 4.
+                        if (cfg.MaxPositionalRainSources == 4)
+                            cfg.MaxPositionalRainSources = 8;
+                        cfg.ConfigVersion = 12;
                         break;
 
                     default:
@@ -1979,7 +2100,9 @@ namespace soundphysicsadapted
             // Check fluid layer at eye position for water/lava detection.
             // Using BlockLayersAccess.Fluid ensures we detect water even when
             // waterlogged blocks (Milfoil, seaweed, kelp, etc.) occupy the solid layer.
-            BlockPos blockPos = new BlockPos((int)eyePos.X, (int)eyePos.Y, (int)eyePos.Z);
+            // Math.Floor, not a cast: at negative coordinates in (-1, 0) the truncating
+            // cast samples the block one over (submersion detection).
+            BlockPos blockPos = new BlockPos((int)Math.Floor(eyePos.X), (int)Math.Floor(eyePos.Y), (int)Math.Floor(eyePos.Z));
             var fluidBlock = clientApi.World.BlockAccessor.GetBlock(blockPos, BlockLayersAccess.Fluid);
 
             bool wasUnderwater = isPlayerUnderwater;

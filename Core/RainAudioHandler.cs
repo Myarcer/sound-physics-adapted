@@ -256,9 +256,12 @@ namespace soundphysicsadapted
 
                 if (vol > VOLUME_STOP_THRESHOLD)
                 {
-                    // Split volume by leaviness (vanilla approach: both play simultaneously)
+                    // Split volume by leaviness (vanilla approach: both play simultaneously).
+                    // Complementary split, same as wind below — an older 0.3 floor on the
+                    // leafless layer made the two loops sum to up to 1.3x vol in deep-leafy
+                    // biomes and kept leafless rain audible where no leafless rain should be.
                     float leafyVol = vol * leaviness;
-                    float leaflessVol = vol * Math.Max(0.3f, 1f - leaviness);
+                    float leaflessVol = vol * (1f - leaviness);
 
                     EnsureRainPlaying();
                     if (rainLoopLeafy != null)
