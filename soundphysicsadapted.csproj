@@ -49,21 +49,31 @@
     <Optimize>true</Optimize>
   </PropertyGroup>
 
+  <!-- Game reference DLLs. Default is the FLOOR version (1.22.0, from the
+       Vintagestory1.22.0OLD install) so the shipped zip runs on every 1.22.x —
+       a floor-compiled binary loads on all newer builds, and any use of an API
+       that does not exist in 1.22.0 fails the compile loudly instead of
+       MissingMethodException-ing on a player's machine. Override with
+       -p:GameLibDir=lib for a build against the newest install's DLLs. -->
+  <PropertyGroup>
+    <GameLibDir Condition="'$(GameLibDir)' == ''">lib-1.22.0</GameLibDir>
+  </PropertyGroup>
+
   <ItemGroup>
     <Reference Include="VintagestoryAPI">
-      <HintPath>lib\VintagestoryAPI.dll</HintPath>
+      <HintPath>$(GameLibDir)\VintagestoryAPI.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="VintagestoryLib">
-      <HintPath>lib\VintagestoryLib.dll</HintPath>
+      <HintPath>$(GameLibDir)\VintagestoryLib.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="VSSurvivalMod">
-      <HintPath>lib\VSSurvivalMod.dll</HintPath>
+      <HintPath>$(GameLibDir)\VSSurvivalMod.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="VSEssentials">
-      <HintPath>lib\VSEssentials.dll</HintPath>
+      <HintPath>$(GameLibDir)\VSEssentials.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="protobuf-net">

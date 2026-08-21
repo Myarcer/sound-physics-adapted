@@ -3,6 +3,12 @@
 This file lists the changes to Sound Physics Adapted.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6-dev.8] - 2026-08-21
+
+### Changed
+- The mod now runs on every Vintage Story 1.22.x release, starting at 1.22.0. Earlier development builds declared 1.22.5 or newer without a technical reason and were refused by older game builds before any code ran.
+- The shipped build is now compiled against the 1.22.0 game libraries directly, so using an API that a newer patch added would fail the build instead of breaking on your machine.
+
 ## [0.2.6-dev.7] - 2026-08-21
 
 ### Fixed
