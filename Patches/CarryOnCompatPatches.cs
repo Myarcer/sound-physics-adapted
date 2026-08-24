@@ -126,6 +126,12 @@ namespace soundphysicsadapted.Patches
         private const long SYNC_INTERVAL_MS = 500;
 
         /// <summary>
+        /// True after we reported once that the server does not listen on our channel.
+        /// The sync tick runs at 2 Hz, so the message must not repeat.
+        /// </summary>
+        private static bool loggedBoomboxChannelDown = false;
+
+        /// <summary>
         /// Last computed sound position (cached for sync packets).
         /// </summary>
         private static float lastSoundX, lastSoundY, lastSoundZ;
@@ -737,16 +743,27 @@ namespace soundphysicsadapted.Patches
         }
 
         /// <summary>
+        /// True when the server also has this mod and listens on our channel.
+        /// SendPacket throws on a channel the server does not listen on, so every
+        /// boombox send must test this first. On a vanilla server the relay does not
+        /// exist at all — remote players cannot hear a carried boombox there.
+        /// </summary>
+        private static bool BoomboxChannelReady =>
+            SoundPhysicsAdaptedModSystem.ClientChannel?.Connected == true;
+
+        /// <summary>
         /// Send a stop packet to server so remote clients dispose their boombox sound for us.
         /// </summary>
         private static void SendBoomboxStopPacket(float playbackPosition)
         {
             try
             {
+                if (!BoomboxChannelReady) return;
+
                 var player = capi?.World?.Player?.Entity;
                 if (player == null) return;
 
-                SoundPhysicsAdaptedModSystem.ClientChannel?.SendPacket(new BoomboxSyncPacket
+                SoundPhysicsAdaptedModSystem.ClientChannel.SendPacket(new BoomboxSyncPacket
                 {
                     CarrierEntityId = player.EntityId,
                     PlaybackPosition = playbackPosition,
@@ -857,9 +874,15 @@ namespace soundphysicsadapted.Patches
                 {
                     capi.Logger.Debug("[SoundPhysicsAdapted] [Boombox] SYNC SKIPPED: activeBoomboxTrackLocation is NULL — remote players won't hear this");
                 }
-                else if (SoundPhysicsAdaptedModSystem.ClientChannel == null)
+                else if (!BoomboxChannelReady)
                 {
-                    capi.Logger.Debug("[SoundPhysicsAdapted] [Boombox] SYNC SKIPPED: ClientChannel is NULL");
+                    // Vanilla server (or channel not up yet). Sending would throw here at
+                    // 2 Hz for as long as the boombox plays. Nobody else can hear it.
+                    if (!loggedBoomboxChannelDown)
+                    {
+                        loggedBoomboxChannelDown = true;
+                        capi.Logger.Debug("[SoundPhysicsAdapted] [Boombox] SYNC SKIPPED: server does not have the mod — remote players cannot hear this boombox");
+                    }
                 }
                 else
                 {
@@ -1059,6 +1082,7 @@ namespace soundphysicsadapted.Patches
             currentCarrySlot = CarrySlotType.None;
             activeBoomboxTrackLocation = null;
             lastSyncTimeMs = 0;
+            loggedBoomboxChannelDown = false;
             lastPlacementTimeMs = 0;
             ResonatorPatches.UnregisterExternalMusicTrack(BOOMBOX_SUPPRESSION_KEY, capi);
             capi = null;

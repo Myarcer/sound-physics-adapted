@@ -3,6 +3,11 @@
 This file lists the changes to Sound Physics Adapted.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6-dev.9] - 2026-08-24
+
+### Fixed
+- On a server without this mod, carrying a resonator with CarryOn no longer causes an error twice each second. The mod now tests that the server listens before it sends. The log records the condition one time instead.
+
 ## [0.2.6-dev.8] - 2026-08-21
 
 ### Changed
