@@ -3,7 +3,7 @@
 This file lists the changes to Sound Physics Adapted.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.2.7.1] - 2026-11-15
+## [0.2.8] - 2026-11-15
 
 Your configuration survives this update. No settings changed.
 
