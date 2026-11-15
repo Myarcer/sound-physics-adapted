@@ -3,6 +3,15 @@
 This file lists the changes to Sound Physics Adapted.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.7.1] - 2026-11-15
+
+Your configuration survives this update. No settings changed.
+
+### Fixed
+- Stereo water sounds from other mods now come from a direction. Before, the Watersheds river played inside your head at every distance.
+- Water no longer sounds inside your head when you stand on the bank or above it. The sound now comes from the water surface near you. It surrounds you only when your head is in the water.
+- Walls and terrain between you and the water now muffle it. The water itself, and slabs or plants that stand in it, do not.
+
 ## [0.2.7] - 2026-11-15
 
 The first stable release since 0.2.5. It also contains all changes of the 0.2.6 development builds below. Your configuration survives this update.

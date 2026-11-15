@@ -37,6 +37,7 @@ namespace soundphysicsadapted
         private static int _vDestX, _vDestY, _vDestZ;
         private static Cuboidi[] _vExclusionBboxes;
         private static int _vExclusionBboxCount;
+        private static bool _vPassLiquids;
 
         private static readonly DDABlockTraversal.BlockVisitor _runOcclusionVisitor = RunOcclusionVisitor;
 
@@ -280,8 +281,27 @@ namespace soundphysicsadapted
         ///
         /// Only used for ambient volumes where occlusion stability matters for continuous sound.
         /// Regular sounds use Calculate() with voting + EMA smoothing instead.
+        ///
+        /// With <paramref name="passLiquids"/> no water or lava block occludes. A ray from
+        /// the surface of a pool must not count the pool: the offset rays start 0.35 blocks
+        /// to the side and below, inside the neighbouring water cells.
         /// </summary>
         public static float CalculateExcludingBboxes(
+            Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor,
+            Cuboidi[] bboxes, int bboxCount, bool passLiquids = false)
+        {
+            _vPassLiquids = passLiquids;
+            try
+            {
+                return MedianExcludingBboxes(soundPos, playerPos, blockAccessor, bboxes, bboxCount);
+            }
+            finally
+            {
+                _vPassLiquids = false;
+            }
+        }
+
+        private static float MedianExcludingBboxes(
             Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor,
             Cuboidi[] bboxes, int bboxCount)
         {
@@ -548,6 +568,21 @@ namespace soundphysicsadapted
                 return false; // Continue — endpoint's own block doesn't occlude it
 
             float blockOcclusion = 0f;
+
+            // Ambient volume rays pass the water itself, and also a slab or plant that
+            // stands in water: it holds the water in the fluid layer and is part of the
+            // same pool. Must run BEFORE the solid-face fast path, which takes slabs.
+            // A full cube cannot hold a fluid, so it skips the extra lookup.
+            if (_vPassLiquids && !BlockClassification.IsFullCube(block))
+            {
+                _vCollisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
+                if (BlockClassification.IsLiquidMaterial(
+                        _vBlockAccessor.GetBlock(_vCollisionCheckPos, BlockLayersAccess.Fluid)))
+                {
+                    if (_vVerboseLog) _vDdaTrace.Append($"  DDA liquid-pass: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (ambient volume source)\n");
+                    return false; // Continue
+                }
+            }
 
             // OPEN DOOR/GATE CHECK: must run BEFORE solid-face fast path.
             // ME gate spacers have solid faces that would take the fast path and occlude.

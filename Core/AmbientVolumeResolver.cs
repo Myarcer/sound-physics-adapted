@@ -24,10 +24,12 @@ namespace soundphysicsadapted
     /// Finds where an ambient VOLUME sound must be heard from, and how occluded it is.
     ///
     /// Vintage Story plays beehives, water, lava and rainwindow as bounding-box volumes
-    /// whose position tracks the player (the nearest point on the box). That point often
-    /// sits on a face the player cannot hear through. This resolver samples every
-    /// player-facing face and keeps the clearest one, so the direct ray already carries
-    /// the correct occlusion and no second DDA is needed.
+    /// whose position tracks the player (the nearest point on the box). The box is coarse:
+    /// it covers the shore, and the player on the bank stands inside it. Near the player
+    /// the candidates are open faces of the sound's own blocks; farther out they are
+    /// samples on the box faces. This resolver tests every candidate and keeps the
+    /// clearest one, so the direct ray already carries the correct occlusion and no
+    /// second DDA is needed.
     ///
     /// Extracted from AudioPhysicsSystem.ProcessSoundRaycast (audit item A4).
     ///
@@ -60,8 +62,8 @@ namespace soundphysicsadapted
         /// <summary>Face-center stabilization, about 300 ms at the 50 ms ambient cadence.</summary>
         private const float FACE_POS_STABILIZER = 0.15f;
 
-        /// <summary>Panning starts to build up at this distance from the surface.</summary>
-        private const float BLEND_START = 2.5f;
+        // Exclusion list for one surface sample: only its own block. Main thread only.
+        private static readonly Cuboidi[] _ownBlock = new Cuboidi[1];
 
         /// <summary>True for the sound types Vintage Story plays as volumes.</summary>
         internal static bool IsVolumeSoundType(EnumSoundType? soundType)
@@ -82,15 +84,14 @@ namespace soundphysicsadapted
 
             if (playerInside)
             {
-                // Inside the volume: put the sound on the player. This removes left/right
-                // panning completely and gives the enveloping effect. The proximity blend
-                // below makes the way in smooth.
+                // The head is in the sound's own water: the one place where the volume
+                // surrounds the listener. Put the sound on the player, with no panning.
                 result.AcousticPos = playerPos;
                 result.DerivedOcclusion = 0f;
 
                 if (logThisTick && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
                     SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                        $"[AMBIENT-INSIDE] {soundName} playerInside=true bboxes={volBboxCount}, occ=0, centered on player " +
+                        $"[AMBIENT-INSIDE] {soundName} headInside=true bboxes={volBboxCount}, occ=0, centered on player " +
                         $"plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2})");
             }
             else if (samples != null && sampleCount > 0)
@@ -123,56 +124,91 @@ namespace soundphysicsadapted
                 return result;
             }
 
-            ApplyProximityBlend(playerPos, soundName, logThisTick, sound, ref result);
+            if (logThisTick && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+            {
+                bool fromSurface = samples != null && sampleCount > 0 && samples[0].Cell != null;
+                float dx = (float)(result.AcousticPos.X - playerPos.X);
+                float dz = (float)(result.AcousticPos.Z - playerPos.Z);
+                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                    $"[AMBIENT-POS] {soundName} inside={playerInside} " +
+                    $"from={(playerInside ? "player" : fromSurface ? "surface" : "box")} bboxes={volBboxCount} " +
+                    $"dist={playerPos.DistanceTo(result.AcousticPos):F2} " +
+                    $"stereoXZ={MathF.Sqrt(dx * dx + dz * dz):F3} (dx={dx:F2} dz={dz:F2}) " +
+                    $"acPos=({result.AcousticPos.X:F2},{result.AcousticPos.Y:F2},{result.AcousticPos.Z:F2}) " +
+                    $"plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2})");
+            }
+
             return result;
         }
 
         /// <summary>
-        /// Picks the clearest player-facing face and derives the occlusion from it.
+        /// Picks the clearest candidate and derives the occlusion from it.
         /// </summary>
         private static void ResolveFromFaces(AmbientSoundPatches.FaceSample[] samples, int sampleCount,
             Cuboidi[] volBboxes, int volBboxCount, Vec3d playerPos, Vec3d soundPos,
             IBlockAccessor blockAccessor, AmbientVolumeState state, string soundName,
             bool logThisTick, ref Result result)
         {
-            // One multi-ray voted DDA per face center, with the volume's own boxes excluded.
-            // A single ray per sample was unstable: edge clipping on one wall gave occ 1, 2
-            // or 3 depending on the exact angle through the block corners. The voting keeps
-            // the wall count stable — the center ray decides, the offsets find thin walls.
+            // One multi-ray voted DDA per candidate. A single ray per sample was unstable:
+            // edge clipping on one wall gave occ 1, 2 or 3 depending on the exact angle
+            // through the block corners. The voting keeps the wall count stable — the
+            // center ray decides, the offsets find thin walls.
             //
-            // The occlusion is the BEST face, never the average of all faces. Back faces
-            // cross the whole volume and would pull an average up, which muffles a sound
-            // the player stands right next to.
+            // A box-face sample excludes the whole box, or the ray would start in the
+            // volume's own blocks. A surface sample sits in the open air next to its block
+            // and excludes only that block, so the terrain the box covers occludes too.
+            // Liquids never occlude here: nearly every volume is water or lava, and its
+            // rays start at the surface, where the offset rays dip into the next cells.
+            // A beehive heard through a pond is the one case this gets wrong.
+            //
+            // The occlusion is the BEST candidate, never the average. Back faces cross the
+            // whole volume and would pull an average up, which muffles a sound the player
+            // stands right next to.
             Vec3d bestFaceCenter = null;
+            Vec3d bestPoint = null;
             double bestFaceClarity = -1;
             double bestFaceRawOcc = 0;
             double bestFaceDist = double.MaxValue;
             int facesTested = 0;
 
+            Vec3d lockedPoint = null;
             double lockedFaceClarity = -1;
             double lockedFaceRawOcc = 0;
 
             Vec3d prevFaceCenter = null;
             for (int i = 0; i < sampleCount; i++)
             {
-                var fc = samples[i].FaceCenter;
+                var sample = samples[i];
+                var fc = sample.FaceCenter;
                 if (prevFaceCenter != null && fc == prevFaceCenter)
                     continue; // same face — one DDA per face center is enough
                 prevFaceCenter = fc;
 
-                float faceOcc = (volBboxes != null && volBboxCount > 0)
-                    ? OcclusionCalculator.CalculateExcludingBboxes(fc, playerPos, blockAccessor, volBboxes, volBboxCount)
-                    : OcclusionCalculator.Calculate(fc, playerPos, blockAccessor);
+                // A box face is heard from its center; a surface face from the point
+                // nearest the player, which slides along the bank as the player walks.
+                Vec3d point = sample.Cell != null ? sample.SamplePoint : fc;
+
+                float faceOcc;
+                if (sample.Cell != null)
+                {
+                    _ownBlock[0] = sample.Cell;
+                    faceOcc = OcclusionCalculator.CalculateExcludingBboxes(point, playerPos, blockAccessor,
+                        _ownBlock, 1, passLiquids: true);
+                }
+                else
+                {
+                    faceOcc = OcclusionCalculator.CalculateExcludingBboxes(point, playerPos, blockAccessor,
+                        volBboxes, volBboxes != null ? volBboxCount : 0, passLiquids: true);
+                }
                 float clarity = Math.Max(0f, 1f - faceOcc);
-                double faceDist = fc.DistanceTo(playerPos);
+                double faceDist = point.DistanceTo(playerPos);
                 facesTested++;
 
                 // Order of preference: more clarity, then less raw occlusion (0.01 margin),
-                // then the face closest to the player. The distance rule matters for volumes
-                // with more than one box (a beehive has two): with equal clarity in open air
-                // the first face in iteration order wins without it, which is often a far
-                // box face. The proximity blend then misses and a step to the left or right
-                // flips the face and the stereo image with it.
+                // then the candidate closest to the player. The distance rule matters for
+                // volumes with more than one box (a beehive has two): with equal clarity in
+                // open air the first face in iteration order wins without it, which is often
+                // a far box face, and a step to the left or right flips the stereo image.
                 if (clarity > bestFaceClarity ||
                     (clarity == bestFaceClarity && faceOcc < bestFaceRawOcc - 0.01f) ||
                     (clarity == bestFaceClarity && Math.Abs(faceOcc - bestFaceRawOcc) <= 0.01f
@@ -181,6 +217,7 @@ namespace soundphysicsadapted
                     bestFaceClarity = clarity;
                     bestFaceRawOcc = faceOcc;
                     bestFaceCenter = fc;
+                    bestPoint = point;
                     bestFaceDist = faceDist;
                 }
 
@@ -189,6 +226,7 @@ namespace soundphysicsadapted
                     fc.Y == state.LockedFaceCenter.Y &&
                     fc.Z == state.LockedFaceCenter.Z)
                 {
+                    lockedPoint = point;
                     lockedFaceClarity = clarity;
                     lockedFaceRawOcc = faceOcc;
                 }
@@ -203,10 +241,11 @@ namespace soundphysicsadapted
             }
 
             Vec3d chosenFace = bestFaceCenter;
+            Vec3d chosenPoint = bestPoint;
             double chosenRawOcc = bestFaceRawOcc;
 
             // Hysteresis: hold the current face unless the new one is clearly better.
-            if (state.LockedFaceCenter != null && lockedFaceClarity >= 0)
+            if (lockedPoint != null && lockedFaceClarity >= 0)
             {
                 double clarityDelta = bestFaceClarity - lockedFaceClarity;
                 if (clarityDelta < FACE_SWITCH_THRESHOLD)
@@ -225,12 +264,13 @@ namespace soundphysicsadapted
                         //    because the stabilizer below already stops position jumps.
                         //    Strong hysteresis here would block face tracking along a
                         //    multi-box volume and lock the sound to the wrong box.
-                        double bestDist = bestFaceCenter.DistanceTo(playerPos);
-                        double lockedDist = state.LockedFaceCenter.DistanceTo(playerPos);
+                        double bestDist = bestPoint.DistanceTo(playerPos);
+                        double lockedDist = lockedPoint.DistanceTo(playerPos);
 
                         if (bestDist >= lockedDist - 0.3)
                         {
                             chosenFace = state.LockedFaceCenter;
+                            chosenPoint = lockedPoint;
                             chosenRawOcc = lockedFaceRawOcc;
                         }
                     }
@@ -243,13 +283,13 @@ namespace soundphysicsadapted
             {
                 var prev = state.StabilizedPos;
                 acousticPos = new Vec3d(
-                    prev.X + (chosenFace.X - prev.X) * FACE_POS_STABILIZER,
-                    prev.Y + (chosenFace.Y - prev.Y) * FACE_POS_STABILIZER,
-                    prev.Z + (chosenFace.Z - prev.Z) * FACE_POS_STABILIZER);
+                    prev.X + (chosenPoint.X - prev.X) * FACE_POS_STABILIZER,
+                    prev.Y + (chosenPoint.Y - prev.Y) * FACE_POS_STABILIZER,
+                    prev.Z + (chosenPoint.Z - prev.Z) * FACE_POS_STABILIZER);
             }
             else
             {
-                acousticPos = chosenFace;
+                acousticPos = chosenPoint;
             }
             state.StabilizedPos = acousticPos;
             state.HasStabilizedPos = true;
@@ -268,46 +308,6 @@ namespace soundphysicsadapted
                     $"bestFaceClarity={bestFaceClarity:F2} bestRawOcc={bestFaceRawOcc:F2} " +
                     $"derivedOcc={result.DerivedOcclusion:F2} " +
                     $"pos=({acousticPos.X:F2},{acousticPos.Y:F2},{acousticPos.Z:F2})");
-        }
-
-        /// <summary>
-        /// Moves the acoustic position toward the player as the player comes closer
-        /// (the Steam Audio approach). Panning falls off near the surface, which removes
-        /// the left/right flip at box boundaries and between adjacent boxes. Fully inside,
-        /// the sound is centered.
-        /// </summary>
-        private static void ApplyProximityBlend(Vec3d playerPos, string soundName, bool logThisTick,
-            ILoadedSound sound, ref Result result)
-        {
-            float distToSound = (float)playerPos.DistanceTo(result.AcousticPos);
-            float blendT = -1f; // -1 = out of range, no blend
-
-            if (distToSound < BLEND_START)
-            {
-                // t = 0 at the surface (centered), t = 1 at BLEND_START (fully directional).
-                // The square keeps the sound centered longer as the player walks away.
-                float t = distToSound / BLEND_START;
-                t = t * t;
-                blendT = t;
-                result.AcousticPos = new Vec3d(
-                    playerPos.X + (result.AcousticPos.X - playerPos.X) * t,
-                    playerPos.Y + (result.AcousticPos.Y - playerPos.Y) * t,
-                    playerPos.Z + (result.AcousticPos.Z - playerPos.Z) * t);
-            }
-
-            if (logThisTick && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
-            {
-                float dx = (float)(result.AcousticPos.X - playerPos.X);
-                float dz = (float)(result.AcousticPos.Z - playerPos.Z);
-                AmbientSoundPatches.GetFaceSamples(sound, out int diagSampleCount, out bool diagPlayerInside);
-                AmbientSoundPatches.GetBboxes(sound, out int diagBboxCount);
-                SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
-                    $"[AMBIENT-POS] {soundName} inside={diagPlayerInside} bboxes={diagBboxCount} " +
-                    $"dist={distToSound:F2} blendT={blendT:F3} " +
-                    $"stereoXZ={MathF.Sqrt(dx * dx + dz * dz):F3} (dx={dx:F2} dz={dz:F2}) " +
-                    $"acPos=({result.AcousticPos.X:F2},{result.AcousticPos.Y:F2},{result.AcousticPos.Z:F2}) " +
-                    $"plr=({playerPos.X:F2},{playerPos.Y:F2},{playerPos.Z:F2})");
-            }
         }
     }
 }
