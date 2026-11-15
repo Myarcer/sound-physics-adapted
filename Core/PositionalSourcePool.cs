@@ -71,6 +71,12 @@ namespace soundphysicsadapted
         public System.Func<bool, AssetLocation> AssetResolver { get; set; }
 
         /// <summary>
+        /// Runs on each new SoundParams just before LoadSound (one-shot mode).
+        /// The thunder pool uses it to mark its sounds as thunder.
+        /// </summary>
+        public System.Action<SoundParams> BeforeLoad { get; set; }
+
+        /// <summary>
         /// Position selector: (opening) → Vec3d world position for the source.
         /// When null (default), uses opening.WorldPos. Wind pool overrides this
         /// to use opening.WindWorldPos for ceiling-height placement on sky openings.
@@ -735,6 +741,7 @@ namespace soundphysicsadapted
                     Range = SoundRange
                 };
 
+                BeforeLoad?.Invoke(soundParams);
                 slot.Sound = capi.World.LoadSound(soundParams);
                 AudioLoaderPatch.ForceMonoNextLoad = false;
 

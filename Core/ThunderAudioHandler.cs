@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
@@ -98,6 +99,24 @@ namespace soundphysicsadapted
         private static readonly AssetLocation VERY_NEAR = new AssetLocation("sounds/weather/lightning-verynear.ogg");
         private static readonly AssetLocation NODISTANCE = new AssetLocation("sounds/weather/lightning-nodistance.ogg");
 
+        // Thunder made here sets its own filters, so the generic occlusion path must skip it.
+        // Matching the asset name instead also skipped any other mod that plays a vanilla
+        // lightning sound at a world position, and that sound was never muffled by walls.
+        // VS keeps the same SoundParams object on the loaded sound, so it identifies the sound.
+        private static readonly ConditionalWeakTable<SoundParams, object> ownSounds = new ConditionalWeakTable<SoundParams, object>();
+        private static readonly object OwnMark = new object();
+
+        /// <summary>Marks params as thunder of this handler. Call before LoadSound.</summary>
+        public static SoundParams MarkOwn(SoundParams soundParams)
+        {
+            ownSounds.AddOrUpdate(soundParams, OwnMark);
+            return soundParams;
+        }
+
+        /// <summary>True if this handler made the sound that carries these params.</summary>
+        public static bool IsOwnSound(SoundParams soundParams)
+            => soundParams != null && ownSounds.TryGetValue(soundParams, out _);
+
         /// <summary>Tracks a Layer 1 one-shot sound for cleanup and dynamic enclosure.</summary>
         private class ManagedThunderSound
         {
@@ -156,6 +175,7 @@ namespace soundphysicsadapted
 
             // Layer 2 crack at openings: use NODISTANCE for snappy impact
             oneShotPool.AssetResolver = (_) => NODISTANCE;
+            oneShotPool.BeforeLoad = p => MarkOwn(p);
             oneShotPool.SoundRange = 64f;
 
             // Layer 1 EFX filter (shared, reused across events)
@@ -454,7 +474,7 @@ namespace soundphysicsadapted
                     Range = range
                 };
 
-                ILoadedSound sound = capi.World.LoadSound(soundParams);
+                ILoadedSound sound = capi.World.LoadSound(MarkOwn(soundParams));
                 if (sound != null)
                 {
                     sound.Start();
@@ -549,7 +569,7 @@ namespace soundphysicsadapted
                     Range = range
                 };
 
-                ILoadedSound sound = capi.World.LoadSound(soundParams);
+                ILoadedSound sound = capi.World.LoadSound(MarkOwn(soundParams));
                 if (sound != null)
                 {
                     sound.Start();
@@ -610,7 +630,7 @@ namespace soundphysicsadapted
                     SoundType = EnumSoundType.Weather
                 };
 
-                ILoadedSound sound = capi.World.LoadSound(soundParams);
+                ILoadedSound sound = capi.World.LoadSound(MarkOwn(soundParams));
                 if (sound == null) return;
 
                 // Apply LPF filter before starting
@@ -1060,7 +1080,7 @@ namespace soundphysicsadapted
                         Range = range
                     };
 
-                    ILoadedSound sound = capi.World.LoadSound(soundParams);
+                    ILoadedSound sound = capi.World.LoadSound(MarkOwn(soundParams));
                     if (sound != null)
                     {
                         // Apply atmospheric LPF before Start() to prevent unfiltered transient
@@ -1126,7 +1146,7 @@ namespace soundphysicsadapted
                         SoundType = EnumSoundType.Weather
                     };
 
-                    ILoadedSound sound = capi.World.LoadSound(soundParams);
+                    ILoadedSound sound = capi.World.LoadSound(MarkOwn(soundParams));
                     if (sound != null)
                     {
                         // Apply crack-specific LPF before Start()

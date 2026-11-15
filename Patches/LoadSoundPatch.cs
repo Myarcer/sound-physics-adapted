@@ -1391,13 +1391,9 @@ namespace soundphysicsadapted
 
                 string soundName = sound.Location?.ToShortString() ?? "unknown";
 
-                // PHASE 5C: Skip thunder/lightning sounds - they have custom audio handling
-                // ThunderAudioHandler manages LPF directly, don't let our system double-process
-                if (soundName.Contains("lightning"))
-                {
-                    // Thunder handled by ThunderAudioHandler - no log needed
+                // Our thunder sets its own low-pass; a second pass here would double-filter it.
+                if (ThunderAudioHandler.IsOwnSound(sound))
                     return;
-                }
 
                 // Get World via cached reflection from ClientMain
                 if (clientMainWorldProperty == null) return;
@@ -1544,13 +1540,9 @@ namespace soundphysicsadapted
                 var soundType = soundParams.SoundType;
                 string soundName = soundParams.Location?.ToShortString() ?? "unknown";
 
-                // PHASE 5C: Skip thunder/lightning sounds - they have custom audio handling
-                // ThunderAudioHandler manages LPF directly, don't let our system double-process
-                if (soundName.Contains("lightning"))
-                {
-                    // Thunder handled by ThunderAudioHandler - no log needed
+                // Our thunder sets its own low-pass; a second pass here would double-filter it.
+                if (ThunderAudioHandler.IsOwnSound(soundParams))
                     return;
-                }
 
                 // Check if this is a music or ambient sound (no position expected)
                 bool isMusic = soundType == EnumSoundType.Music || soundType == EnumSoundType.MusicGlitchunaffected;
@@ -1655,11 +1647,9 @@ namespace soundphysicsadapted
 
                 string soundName = loadedSound.Params?.Location?.ToShortString() ?? "unknown";
 
-                // PHASE 5C: Skip thunder/lightning sounds - they have custom audio handling
-                if (soundName.Contains("lightning"))
-                {
+                // Our thunder sets its own filter and distance model.
+                if (ThunderAudioHandler.IsOwnSound(loadedSound.Params))
                     return;
-                }
 
                 // Now that AL.SourcePlay() has run, the source is in PLAYING state
                 // Attach our filter - it should work now!
@@ -2015,8 +2005,7 @@ namespace soundphysicsadapted
 
                     string soundName = soundParams.Location?.ToShortString() ?? "unknown";
 
-                    // Skip lightning (handled by ThunderAudioHandler)
-                    if (soundName.Contains("lightning")) continue;
+                    if (ThunderAudioHandler.IsOwnSound(soundParams)) continue;
 
                     // Detach VS's global filter
                     int sourceId = AudioRenderer.GetSourceId(sound);
