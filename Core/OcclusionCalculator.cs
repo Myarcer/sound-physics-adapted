@@ -569,6 +569,21 @@ namespace soundphysicsadapted
 
             float blockOcclusion = 0f;
 
+            // Ambient volume rays pass the water itself, and also a slab or plant that
+            // stands in water: it holds the water in the fluid layer and is part of the
+            // same pool. Must run BEFORE the solid-face fast path, which takes slabs.
+            // A full cube cannot hold a fluid, so it skips the extra lookup.
+            if (_vPassLiquids && !BlockClassification.IsFullCube(block))
+            {
+                _vCollisionCheckPos.Set(ctx.X, ctx.Y, ctx.Z);
+                if (BlockClassification.IsLiquidMaterial(
+                        _vBlockAccessor.GetBlock(_vCollisionCheckPos, BlockLayersAccess.Fluid)))
+                {
+                    if (_vVerboseLog) _vDdaTrace.Append($"  DDA liquid-pass: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (ambient volume source)\n");
+                    return false; // Continue
+                }
+            }
+
             // OPEN DOOR/GATE CHECK: must run BEFORE solid-face fast path.
             // ME gate spacers have solid faces that would take the fast path and occlude.
             // Multiblock door spacers also need controller resolution here.
@@ -586,12 +601,6 @@ namespace soundphysicsadapted
             }
             else if (BlockClassification.IsLiquidMaterial(block))
             {
-                if (_vPassLiquids)
-                {
-                    if (_vVerboseLog) _vDdaTrace.Append($"  DDA liquid-pass: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (ambient volume source)\n");
-                    return false; // Continue
-                }
-
                 // LIQUID/LAVA PATH: No collision boxes but still muffles sound.
                 blockOcclusion = BlockClassification.GetBlockOcclusion(block, _vConfig);
                 if (blockOcclusion > 0 && _vVerboseLog)

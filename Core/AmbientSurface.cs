@@ -299,8 +299,11 @@ namespace soundphysicsadapted
                             grid[i] |= OWN;
                         }
                         else if (!BlockClassification.IsLiquidMaterial(block)
-                            && !BlockClassification.IsSolidForOcclusion(block))
+                            && !BlockClassification.IsSolidForOcclusion(block)
+                            && !BlockClassification.IsLiquidMaterial(ba.GetBlock(pos, BlockLayersAccess.Fluid)))
                         {
+                            // A slab or plant standing in water is no open air: the face
+                            // toward it is under water.
                             grid[i] |= OPEN;
                         }
                     }
