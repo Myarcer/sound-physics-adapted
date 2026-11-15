@@ -1554,14 +1554,34 @@ namespace soundphysicsadapted
                 bool isMusic = soundType == EnumSoundType.Music || soundType == EnumSoundType.MusicGlitchunaffected;
                 bool isNonPositional = !SoundPosition.IsWorld(soundParams);
 
+                // A listener-relative sound placed away from the head is traced from the world
+                // point its offset maps to, so it does not start unmuffled behind a wall.
+                if (isNonPositional && soundParams.RelativePosition)
+                {
+                    var listener = cachedApi.World?.Player?.Entity;
+                    var located = new Vec3d();
+                    if (listener != null && ListenerRelativeSource.TryLocate(soundParams,
+                            listener.Pos.XYZ.Add(listener.LocalEyePos), listener.Pos.GetViewVector(), located))
+                    {
+                        position = new Vec3f((float)located.X, (float)located.Y, (float)located.Z);
+                        isNonPositional = false;
+                    }
+                }
+
                 // For positional sounds, we need a valid position for occlusion
                 // If it IS music but HAS a position (like our patched Resonator), we DO want to process it!
                 if (isNonPositional && !isMusic)
                 {
+                    // A relative sound whose offset cannot be traced yet (inside the head
+                    // radius, or a view straight up) must still be registered: the tick only
+                    // sees registered sounds, and the offset can grow while it plays.
+                    bool traceLater = soundParams.RelativePosition && position != null
+                        && (position.X != 0 || position.Y != 0 || position.Z != 0);
+
                     // Only apply underwater filter to ambient/UI sounds if enabled
                     // These can't have occlusion calculated (no position)
-                    if (!SoundPhysicsAdaptedModSystem.IsPlayerUnderwater) return;
-                    
+                    if (!traceLater && !SoundPhysicsAdaptedModSystem.IsPlayerUnderwater) return;
+
                     // Apply underwater-only filter (no occlusion)
                     ApplyUnderwaterOnlyFilter(loadedSound, soundName, isMusic: false);
                     return;
