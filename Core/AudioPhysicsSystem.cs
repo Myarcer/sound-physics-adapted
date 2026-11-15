@@ -87,6 +87,11 @@ namespace soundphysicsadapted
             // Means: this specific sound was triggered by the local player — no occlusion, reverb only.
             public bool IsLocalPlayerSound;
 
+            // Listener-relative with an offset: traced from the point the offset maps to,
+            // never repositioned. Its OpenAL position is in head space, so a world-space
+            // write would move it, and the owning mod overwrites it on its own updates.
+            public bool IsListenerRelative;
+
             // ISSUE 20: cached entombment verdict (BFS pre-check). Re-verified every
             // ENTOMB_RECHECK_MS or after a block change, whichever comes first.
             public bool IsEntombed;
@@ -278,6 +283,9 @@ namespace soundphysicsadapted
             var config = SoundPhysicsAdaptedModSystem.Config;
             int maxPerTick = config?.MaxSoundsPerTick ?? 25;
 
+            // The same flat view direction VS gives the OpenAL listener.
+            Vec3f listenerView = SoundPhysicsAdaptedModSystem.ClientApi?.World?.Player?.Entity?.Pos.GetViewVector();
+
             // === PASS 1: Iterate all sounds, apply cheap gates, collect raycast candidates ===
             foreach (var sound in activeSounds)
             {
@@ -289,21 +297,30 @@ namespace soundphysicsadapted
                     soundCache[sound] = cache;
                 }
 
-                // Resolve position: prefer stored (from SetPosition patches), fall back to Params
-                Vec3d soundPos = AudioRenderer.GetStoredPosition(sound);
-                if (soundPos == null)
+                // Resolve position. A listener-relative sound is mapped from its live offset
+                // every pass: a stored point goes stale as soon as the listener turns.
+                // Others prefer the stored position (from SetPosition patches), then Params.
+                Vec3d soundPos = null;
+                try
                 {
-                    try
+                    cache.IsListenerRelative = sound.Params?.RelativePosition == true;
+                    if (cache.IsListenerRelative)
                     {
-                        var pos = sound.Params?.Position;
-                        if (pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0))
+                        if (ListenerRelativeSource.TryLocate(sound.Params, playerPos, listenerView, _reusableSoundPos))
+                            soundPos = _reusableSoundPos;
+                    }
+                    else
+                    {
+                        soundPos = AudioRenderer.GetStoredPosition(sound);
+                        if (soundPos == null && SoundPosition.IsWorld(sound.Params))
                         {
+                            var pos = sound.Params.Position;
                             _reusableSoundPos.Set(pos.X, pos.Y, pos.Z);
                             soundPos = _reusableSoundPos;
                         }
                     }
-                    catch { }
                 }
+                catch { }
                 if (soundPos == null) continue;
 
                 // Adjust sound position for multi-block sources (e.g. doors)
@@ -566,7 +583,8 @@ namespace soundphysicsadapted
             // the clearest player-facing face and returns its occlusion, so no second DDA
             // is needed. A point source with the Ambient type (a resonator) is downgraded
             // and follows the normal path, so probe rays can still route it around a wall.
-            bool isAmbientVolume = AmbientVolumeResolver.IsVolumeSoundType(sound.Params?.SoundType);
+            bool isAmbientVolume = !cache.IsListenerRelative
+                && AmbientVolumeResolver.IsVolumeSoundType(sound.Params?.SoundType);
             Vec3d acousticPos = soundPos;
             float derivedOcclusion = -1f;
 
@@ -631,7 +649,7 @@ namespace soundphysicsadapted
 
                 targetGain = ResolveRepositioning(sound, cache, paths.Path, soundPos, acousticPos,
                     occlusion, distance, isAmbientVolume, targetGain, config, soundName, firstLogOfTick,
-                    wantRepositioning);
+                    wantRepositioning && !cache.IsListenerRelative);
             }
 
             targetGain = FilterPipeline.ApplyPenetrationFloor(targetGain, penetrationFloor);

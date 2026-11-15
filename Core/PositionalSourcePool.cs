@@ -71,6 +71,12 @@ namespace soundphysicsadapted
         public System.Func<bool, AssetLocation> AssetResolver { get; set; }
 
         /// <summary>
+        /// Runs on each new SoundParams just before LoadSound (one-shot mode).
+        /// The thunder pool uses it to mark its sounds as thunder.
+        /// </summary>
+        public System.Action<SoundParams> BeforeLoad { get; set; }
+
+        /// <summary>
         /// Position selector: (opening) → Vec3d world position for the source.
         /// When null (default), uses opening.WorldPos. Wind pool overrides this
         /// to use opening.WindWorldPos for ceiling-height placement on sky openings.
@@ -207,6 +213,31 @@ namespace soundphysicsadapted
         /// <summary>Last ear position from UpdateSources (for loudness distance weighting).</summary>
         private Vec3d lastEarPos;
 
+        // ── Outdoor cap: a room is never louder than the open field ──
+        // Each voice takes its level from its own opening, and OpenAL adds the voices
+        // up, so openings on every side played louder than no roof at all. When the
+        // bed plus the voices go over the open-field power at the ear, every voice is
+        // scaled by one shared factor, so the balance between directions stays. A room
+        // under that level keeps its voices as they are.
+
+        /// <summary>
+        /// Whether this pool caps its total at the open-field level. Wind leaves it
+        /// off: its bed is meant to come through walls, so it follows its own rule.
+        /// </summary>
+        public bool CapToOutdoorLevel { get; set; }
+
+        /// <summary>
+        /// Scale smoothing per tick. Down is fast, so a new voice cannot push the room
+        /// over the cap for a second; up is slow, so a voice that leaves does not make
+        /// the others jump.
+        /// </summary>
+        private const float CAP_DOWN_RATE = 0.5f;
+        private const float CAP_UP_RATE = 0.08f;
+
+        private float capScale = 1f;
+        private long lastLevelLogMs;
+        private const long LEVEL_LOG_INTERVAL_MS = 1000;
+
         /// <summary>
         /// Instant volume a newly assigned source starts at (clamped to its target).
         ///
@@ -306,12 +337,16 @@ namespace soundphysicsadapted
         /// <param name="isLeafy">Whether current biome is leafy (for asset variant)</param>
         /// <param name="volumeMultiplier">Config volume multiplier for this type</param>
         /// <param name="earPos">Player ear position for proximity fade</param>
+        /// <param name="bedLevel">Layer 1 bed level at the ear, without the hand-over hold (outdoor cap)</param>
+        /// <param name="openFieldLevel">Layer 1 bed level at the ear with no cover (outdoor cap)</param>
         public void UpdateSources(
             IReadOnlyList<TrackedOpening> trackedOpenings,
             float intensity,
             bool isLeafy,
             float volumeMultiplier,
-            Vec3d earPos)
+            Vec3d earPos,
+            float bedLevel,
+            float openFieldLevel)
         {
             if (!initialized || sources == null || mode != PoolMode.Looping) return;
 
@@ -577,6 +612,10 @@ namespace soundphysicsadapted
                 }
             }
 
+            // Before the smoothing, so the fades and ExpectedLoudness (the bed-hold
+            // readiness gate) both work toward the capped level.
+            ApplyOutdoorCap(bedLevel, openFieldLevel, nowMs, debug);
+
             // Pass 3: Apply volume smoothing to all active slots
             for (int s = 0; s < maxSlots; s++)
             {
@@ -629,11 +668,12 @@ namespace soundphysicsadapted
             // volumes (no distance/clarity weight: an unvoiced opening has no wall
             // measured against it, and over-expecting errs toward the safe side —
             // the bed covers until L2 delivers).
+            // A starved candidate would be capped like the voiced ones once it got a slot.
             float unvoicedExpected = 0f;
             for (int c = 0; c < candidateCount; c++)
             {
                 int o = candidateOrder[c];
-                if (!openingAssigned[o]) unvoicedExpected += candidateVolumes[o];
+                if (!openingAssigned[o]) unvoicedExpected += candidateVolumes[o] * capScale;
             }
 
             UpdateContribution();
@@ -701,6 +741,7 @@ namespace soundphysicsadapted
                     Range = SoundRange
                 };
 
+                BeforeLoad?.Invoke(soundParams);
                 slot.Sound = capi.World.LoadSound(soundParams);
                 AudioLoaderPatch.ForceMonoNextLoad = false;
 
@@ -848,6 +889,67 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
+        /// The gain the game's OpenAL setup gives a source at this distance. The game
+        /// uses the exponent-clamped model with rolloff ln(100)/ln(range) and a
+        /// reference distance of max(3, sqrt(range) - 2): at range 48 a source plays at
+        /// full gain inside 4.9 m, which is every voice in a small room.
+        /// </summary>
+        private float DistanceGain(float dist)
+        {
+            float refDist = MathF.Max(3f, MathF.Sqrt(SoundRange) - 2f);
+            if (dist <= refDist) return 1f;
+            float rolloff = MathF.Log(100f) / MathF.Log(SoundRange);
+            return MathF.Pow(dist / refDist, -rolloff);
+        }
+
+        /// <summary>
+        /// Scale every active target so the bed plus the voices stay at or under the
+        /// open-field level (see <see cref="CapToOutdoorLevel"/>). Open field = the bed
+        /// with no sky cover, as the bed handler reports it.
+        /// </summary>
+        private void ApplyOutdoorCap(float bedLevel, float openFieldLevel, long nowMs, bool debug)
+        {
+            if (!CapToOutdoorLevel) return;
+
+            float voicePower = 0f;
+            int voiced = 0;
+            for (int s = 0; s < sources.Length; s++)
+            {
+                var slot = sources[s];
+                if (!slot.Active || slot.TargetVolume <= 0f) continue;
+                float dist = lastEarPos != null && slot.WorldPos != null
+                    ? (float)slot.WorldPos.DistanceTo(lastEarPos) : 0f;
+                float atEar = slot.TargetVolume * DistanceGain(dist) * Math.Clamp(slot.Clarity, 0f, 1f);
+                voicePower += atEar * atEar;
+                voiced++;
+            }
+
+            float outdoorPower = openFieldLevel * openFieldLevel;
+            float budget = Math.Max(0f, outdoorPower - bedLevel * bedLevel);
+            float wanted = voicePower > budget ? MathF.Sqrt(budget / voicePower) : 1f;
+            capScale += (wanted - capScale) * (wanted < capScale ? CAP_DOWN_RATE : CAP_UP_RATE);
+
+            for (int s = 0; s < sources.Length; s++)
+            {
+                if (sources[s].Active) sources[s].TargetVolume *= capScale;
+            }
+
+            if (debug && voiced > 0 && outdoorPower > 0f && nowMs - lastLevelLogMs >= LEVEL_LOG_INTERVAL_MS)
+            {
+                lastLevelLogMs = nowMs;
+                float bedPower = bedLevel * bedLevel;
+                float uncappedDb = 10f * MathF.Log10(MathF.Max(1e-6f, (bedPower + voicePower) / outdoorPower));
+                float cappedDb = 10f * MathF.Log10(MathF.Max(1e-6f,
+                    (bedPower + voicePower * capScale * capScale) / outdoorPower));
+                WeatherAudioManager.WeatherDebugLog(
+                    $"[5B-{debugTag}] LEVEL total={cappedDb:+0.0;-0.0} dB vs open field " +
+                    $"(uncapped {uncappedDb:+0.0;-0.0} dB) bed={bedLevel:F2} voices={MathF.Sqrt(voicePower):F2} " +
+                    $"budget={MathF.Sqrt(budget):F2} scale={capScale:F2} n={voiced} openField={openFieldLevel:F2}",
+                    force: true);
+            }
+        }
+
+        /// <summary>
         /// Slot-priority score: bigger and closer openings matter more, currently
         /// verified openings beat persisted ones, suppressed openings score zero.
         /// Used to order slot assignment and decide fade-swap evictions.
@@ -937,6 +1039,17 @@ namespace soundphysicsadapted
                 if (slot.Sound != null)
                 {
                     slot.Sound.Start();
+
+                    // Every voice of this pool plays the same loop. Voices that spawn in
+                    // one tick started on the same sample, and copies in step add up in
+                    // amplitude (+6 dB per doubling, not +3) and comb-filter as the player
+                    // moves. A random start point makes each one separate rain.
+                    float length = slot.Sound.SoundLengthSeconds;
+                    if (length > 1f)
+                    {
+                        slot.Sound.PlaybackPosition = (float)(capi.World.Rand.NextDouble() * length);
+                    }
+
                     slot.LastAppliedPos = new Vec3f(
                         (float)slot.WorldPos.X,
                         (float)slot.WorldPos.Y,
@@ -946,8 +1059,9 @@ namespace soundphysicsadapted
                     try { channels = slot.Sound.Channels; } catch { }
                     WeatherAudioManager.WeatherDebugLog(
                         $"[5B-{debugTag}] Created source trackId={slot.TrackingId} " +
-                        $"channels={channels} " +
-                        $"pos=({slot.WorldPos.X:F0},{slot.WorldPos.Y:F0},{slot.WorldPos.Z:F0})");
+                        $"channels={channels} offset={slot.Sound.PlaybackPosition:F2}/{length:F2}s " +
+                        $"pos=({slot.WorldPos.X:F0},{slot.WorldPos.Y:F0},{slot.WorldPos.Z:F0})",
+                        force: true);
                 }
             }
             catch (Exception ex)
@@ -1037,6 +1151,10 @@ namespace soundphysicsadapted
 
             TickOrphans();
 
+            // The cap belongs to the room it was measured in. The next voices are for
+            // another place and must not start scaled by this one.
+            capScale = 1f;
+
             for (int i = 0; i < sources.Length; i++)
             {
                 var slot = sources[i];
@@ -1078,6 +1196,7 @@ namespace soundphysicsadapted
                 DisposeOrphan(orphans[i]);
             }
             orphans.Clear();
+            capScale = 1f;
             Contribution = 0f;
             EffectiveLoudness = 0f;
             ExpectedLoudness = 0f;

@@ -124,6 +124,18 @@ namespace soundphysicsadapted
         /// <summary>Below this expected loudness, Layer 2 has no indoor role — readiness 1.</summary>
         private const float READINESS_MIN_EXPECTED = 0.02f;
 
+        // The positional outdoor cap budgets against these, not the held level: the
+        // hold only covers the voices' ramp, and a budget taken from it would give the
+        // voices nothing while it lasts, which tells the readiness gate to let go early.
+        /// <summary>Rain bed level at the ear after enclosure and duck, without the hand-over hold.</summary>
+        public float RainBedLevel { get; private set; }
+        /// <summary>Rain bed level at the ear with no cover: what standing outside sounds like.</summary>
+        public float RainOpenFieldLevel { get; private set; }
+        /// <summary>Hail bed level at the ear after enclosure and duck, without the hand-over hold.</summary>
+        public float HailBedLevel { get; private set; }
+        /// <summary>Hail bed level at the ear with no cover.</summary>
+        public float HailOpenFieldLevel { get; private set; }
+
         // Track state for debug
         private bool rainLeafyPlaying, rainLeaflessPlaying;
         private bool windLeafyPlaying, windLeaflessPlaying;
@@ -236,6 +248,11 @@ namespace soundphysicsadapted
 
             // ── Rain ── (dual leafy/leafless, crossfade by leaviness)
             {
+                // The leafy and leafless loops are different recordings, so their powers
+                // add: at an even split the pair is 3 dB under one loop at the same vol.
+                float splitGain = MathF.Sqrt(leaviness * leaviness + (1f - leaviness) * (1f - leaviness));
+                RainOpenFieldLevel = smoothedRainIntensity * splitGain;
+
                 float vol = 0f;
                 if (smoothedRainIntensity > 0.01f)
                 {
@@ -244,6 +261,7 @@ namespace soundphysicsadapted
                     vol = CalculateRainVolume(smoothedRainIntensity, skyCoverage);
                     vol *= DeepEnclosureFactor(skyCoverage, occlusionFactor);
                     vol *= RainDuckFactor();
+                    RainBedLevel = vol * splitGain;
 
                     vol = ApplyBedHold(ref rainBedHold, vol,
                         rainL2Effective, rainL2Expected, smoothedRainIntensity, dt);
@@ -251,6 +269,7 @@ namespace soundphysicsadapted
                 else
                 {
                     rainBedHold = 0f;
+                    RainBedLevel = 0f;
                 }
                 currentRainVol = vol;
 
@@ -284,6 +303,8 @@ namespace soundphysicsadapted
 
             // ── Hail ── (faster LPF ramp — high-freq content attenuates quickly)
             {
+                HailOpenFieldLevel = smoothedHailIntensity;
+
                 float vol = 0f;
                 if (smoothedHailIntensity > 0.01f)
                 {
@@ -292,6 +313,7 @@ namespace soundphysicsadapted
                     vol = CalculateHailVolume(smoothedHailIntensity, skyCoverage);
                     vol *= DeepEnclosureFactor(skyCoverage, occlusionFactor);
                     vol *= HailDuckFactor();
+                    HailBedLevel = vol;
 
                     vol = ApplyBedHold(ref hailBedHold, vol,
                         hailL2Effective, hailL2Expected, smoothedHailIntensity, dt);
@@ -299,6 +321,7 @@ namespace soundphysicsadapted
                 else
                 {
                     hailBedHold = 0f;
+                    HailBedLevel = 0f;
                 }
                 currentHailVol = vol;
 
@@ -639,6 +662,10 @@ namespace soundphysicsadapted
             smoothedHailIntensity = 0f;
             rainBedHold = 0f;
             hailBedHold = 0f;
+            RainBedLevel = 0f;
+            RainOpenFieldLevel = 0f;
+            HailBedLevel = 0f;
+            HailOpenFieldLevel = 0f;
             currentRainVol = 0f;
             currentWindVol = 0f;
             currentHailVol = 0f;

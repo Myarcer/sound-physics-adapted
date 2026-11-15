@@ -3,6 +3,17 @@
 This file lists the changes to Sound Physics Adapted.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.7] - 2026-11-15
+
+The first stable release since 0.2.5. It also contains all changes of the 0.2.6 development builds below. Your configuration survives this update.
+
+### Fixed
+- In a room with openings on many sides, such as a half-broken house, rain and hail are no longer louder than standing outside. The positional sources at the openings now share one limit: the open-field level. When the total goes over it, all sources become quieter by the same amount, so you still hear which side the rain comes from. When the total is under it, nothing changes, so a cave mouth sounds the same as before.
+- Positional rain, hail, and wind sources no longer start on the same point of the loop. Sources that start together added up louder than separate rain and sounded hollow when you moved.
+- A sound from another mod that has "lightning" in its name is now muffled by walls like all other sounds. Before, the mod skipped occlusion for every sound with that name, also when another mod played a vanilla thunder file at a world position. Now it skips only the thunder that it plays itself.
+- With thunder positioning off, vanilla thunder is now muffled underwater like other sounds.
+- Sounds that another mod plays relative to the listener, at an offset from your head, are no longer silent, and walls now muffle them. A mod can play another player's sound this way to pan it toward that player. The mod read the offset as a world position near the map origin, so the occlusion ray went about 700,000 blocks and silenced the sound. Now the mod finds the point in the world that the offset points to and traces from there. These sounds are never moved toward openings. If a mod gives a shorter offset than the true distance, only walls inside that offset muffle the sound.
+
 ## [0.2.6-dev.9] - 2026-08-24
 
 ### Fixed

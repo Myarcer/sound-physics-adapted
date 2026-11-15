@@ -1370,6 +1370,9 @@ namespace soundphysicsadapted
                 var config = SoundPhysicsAdaptedModSystem.Config;
                 if (config == null || !config.Enabled) return;
 
+                // Listener-relative: Position is an offset from the ear, nothing to occlude.
+                if (sound.RelativePosition) return;
+
                 // Check if sound has a position (either from params or stored by ResonatorPatch)
                 Vec3d soundPos = null;
 
@@ -1391,13 +1394,9 @@ namespace soundphysicsadapted
 
                 string soundName = sound.Location?.ToShortString() ?? "unknown";
 
-                // PHASE 5C: Skip thunder/lightning sounds - they have custom audio handling
-                // ThunderAudioHandler manages LPF directly, don't let our system double-process
-                if (soundName.Contains("lightning"))
-                {
-                    // Thunder handled by ThunderAudioHandler - no log needed
+                // Our thunder sets its own low-pass; a second pass here would double-filter it.
+                if (ThunderAudioHandler.IsOwnSound(sound))
                     return;
-                }
 
                 // Get World via cached reflection from ClientMain
                 if (clientMainWorldProperty == null) return;
@@ -1444,6 +1443,10 @@ namespace soundphysicsadapted
                 var loadedSound = __instance as ILoadedSound;
                 if (loadedSound == null) return;
 
+                // An ear offset stored as a world point would be traced from near the map
+                // origin, and a repositioned world point written back would move the sound.
+                if (loadedSound.Params?.RelativePosition == true) return;
+
                 // Only store position - AcousticsManager will recalculate on its schedule
                 AudioRenderer.UpdateStoredPosition(loadedSound, new Vec3d(position.X, position.Y, position.Z));
 
@@ -1475,6 +1478,7 @@ namespace soundphysicsadapted
 
                 var loadedSound = __instance as ILoadedSound;
                 if (loadedSound == null) return;
+                if (loadedSound.Params?.RelativePosition == true) return;
 
                 // Only store position - AcousticsManager will recalculate on its schedule
                 AudioRenderer.UpdateStoredPosition(loadedSound, new Vec3d(x, y, z));
@@ -1516,9 +1520,7 @@ namespace soundphysicsadapted
                         var queueSound = __instance as ILoadedSound;
                         if (queueSound?.Params != null)
                         {
-                            var pos = queueSound.Params.Position;
-                            bool hasPosition = pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0);
-                            if (hasPosition)
+                            if (SoundPosition.IsWorld(queueSound.Params))
                             {
                                 lock (preWarmupSoundQueue)
                                     preWarmupSoundQueue.Add(new WeakReference<ILoadedSound>(queueSound));
@@ -1544,26 +1546,42 @@ namespace soundphysicsadapted
                 var soundType = soundParams.SoundType;
                 string soundName = soundParams.Location?.ToShortString() ?? "unknown";
 
-                // PHASE 5C: Skip thunder/lightning sounds - they have custom audio handling
-                // ThunderAudioHandler manages LPF directly, don't let our system double-process
-                if (soundName.Contains("lightning"))
-                {
-                    // Thunder handled by ThunderAudioHandler - no log needed
+                // Our thunder sets its own low-pass; a second pass here would double-filter it.
+                if (ThunderAudioHandler.IsOwnSound(soundParams))
                     return;
-                }
 
                 // Check if this is a music or ambient sound (no position expected)
                 bool isMusic = soundType == EnumSoundType.Music || soundType == EnumSoundType.MusicGlitchunaffected;
-                bool isNonPositional = position == null || (position.X == 0 && position.Y == 0 && position.Z == 0);
+                bool isNonPositional = !SoundPosition.IsWorld(soundParams);
+
+                // A listener-relative sound placed away from the head is traced from the world
+                // point its offset maps to, so it does not start unmuffled behind a wall.
+                if (isNonPositional && soundParams.RelativePosition)
+                {
+                    var listener = cachedApi.World?.Player?.Entity;
+                    var located = new Vec3d();
+                    if (listener != null && ListenerRelativeSource.TryLocate(soundParams,
+                            listener.Pos.XYZ.Add(listener.LocalEyePos), listener.Pos.GetViewVector(), located))
+                    {
+                        position = new Vec3f((float)located.X, (float)located.Y, (float)located.Z);
+                        isNonPositional = false;
+                    }
+                }
 
                 // For positional sounds, we need a valid position for occlusion
                 // If it IS music but HAS a position (like our patched Resonator), we DO want to process it!
                 if (isNonPositional && !isMusic)
                 {
+                    // A relative sound whose offset cannot be traced yet (inside the head
+                    // radius, or a view straight up) must still be registered: the tick only
+                    // sees registered sounds, and the offset can grow while it plays.
+                    bool traceLater = soundParams.RelativePosition && position != null
+                        && (position.X != 0 || position.Y != 0 || position.Z != 0);
+
                     // Only apply underwater filter to ambient/UI sounds if enabled
                     // These can't have occlusion calculated (no position)
-                    if (!SoundPhysicsAdaptedModSystem.IsPlayerUnderwater) return;
-                    
+                    if (!traceLater && !SoundPhysicsAdaptedModSystem.IsPlayerUnderwater) return;
+
                     // Apply underwater-only filter (no occlusion)
                     ApplyUnderwaterOnlyFilter(loadedSound, soundName, isMusic: false);
                     return;
@@ -1655,11 +1673,9 @@ namespace soundphysicsadapted
 
                 string soundName = loadedSound.Params?.Location?.ToShortString() ?? "unknown";
 
-                // PHASE 5C: Skip thunder/lightning sounds - they have custom audio handling
-                if (soundName.Contains("lightning"))
-                {
+                // Our thunder sets its own filter and distance model.
+                if (ThunderAudioHandler.IsOwnSound(loadedSound.Params))
                     return;
-                }
 
                 // Now that AL.SourcePlay() has run, the source is in PLAYING state
                 // Attach our filter - it should work now!
@@ -1698,12 +1714,11 @@ namespace soundphysicsadapted
 
                         var soundParams = loadedSound.Params;
                         Vec3f pos = soundParams?.Position;
-                        bool hasPosition = pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0);
 
                         ReverbResult startReverb = acoustics.CachedPlayerReverb;
                         bool isSourceUnderwater = false;
 
-                        if (hasPosition)
+                        if (SoundPosition.IsWorld(soundParams))
                         {
                             Vec3d soundPosD = new Vec3d(pos.X, pos.Y, pos.Z);
 
@@ -2009,14 +2024,12 @@ namespace soundphysicsadapted
                     var soundParams = sound.Params;
                     if (soundParams == null) { disposed++; continue; }
 
+                    if (!SoundPosition.IsWorld(soundParams)) { disposed++; continue; }
                     Vec3f position = soundParams.Position;
-                    if (position == null || (position.X == 0 && position.Y == 0 && position.Z == 0))
-                    { disposed++; continue; }
 
                     string soundName = soundParams.Location?.ToShortString() ?? "unknown";
 
-                    // Skip lightning (handled by ThunderAudioHandler)
-                    if (soundName.Contains("lightning")) continue;
+                    if (ThunderAudioHandler.IsOwnSound(soundParams)) continue;
 
                     // Detach VS's global filter
                     int sourceId = AudioRenderer.GetSourceId(sound);
