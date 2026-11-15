@@ -70,10 +70,7 @@ namespace soundphysicsadapted
         {
             if (sparams == null || audiodata == null) return false;
 
-            // Must have a world position (not listener-relative)
-            if (sparams.RelativePosition) return false;
-            if (sparams.Position == null) return false;
-            if (sparams.Position.X == 0f && sparams.Position.Y == 0f && sparams.Position.Z == 0f) return false;
+            if (!SoundPosition.IsWorld(sparams)) return false;
 
             // Check if the audio data is multi-channel
             var meta = audiodata as AudioMetaData;

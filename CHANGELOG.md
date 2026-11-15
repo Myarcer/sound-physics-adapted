@@ -10,6 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Positional rain, hail, and wind sources no longer start on the same point of the loop. Sources that start together added up louder than separate rain and sounded hollow when you moved.
 - A sound from another mod that has "lightning" in its name is now muffled by walls like all other sounds. Before, the mod skipped occlusion for every sound with that name, also when another mod played a vanilla thunder file at a world position. Now it skips only the thunder that it plays itself.
 - With thunder positioning off, vanilla thunder is now muffled underwater like other sounds.
+- Notes from other players with Nomads's Flute are no longer silent. The flute plays them relative to the listener, as an offset from your head. The mod read that offset as a world position near the map origin, so the occlusion ray went about 700,000 blocks and muffled the note fully. Sounds that play relative to the listener now get no occlusion, the same as in the vanilla game.
 
 ## [0.2.6-dev.9] - 2026-08-24
 

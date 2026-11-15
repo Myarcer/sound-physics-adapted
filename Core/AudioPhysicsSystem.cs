@@ -295,9 +295,9 @@ namespace soundphysicsadapted
                 {
                     try
                     {
-                        var pos = sound.Params?.Position;
-                        if (pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0))
+                        if (SoundPosition.IsWorld(sound.Params))
                         {
+                            var pos = sound.Params.Position;
                             _reusableSoundPos.Set(pos.X, pos.Y, pos.Z);
                             soundPos = _reusableSoundPos;
                         }

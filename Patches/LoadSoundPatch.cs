@@ -1370,6 +1370,9 @@ namespace soundphysicsadapted
                 var config = SoundPhysicsAdaptedModSystem.Config;
                 if (config == null || !config.Enabled) return;
 
+                // Listener-relative: Position is an offset from the ear, nothing to occlude.
+                if (sound.RelativePosition) return;
+
                 // Check if sound has a position (either from params or stored by ResonatorPatch)
                 Vec3d soundPos = null;
 
@@ -1440,6 +1443,10 @@ namespace soundphysicsadapted
                 var loadedSound = __instance as ILoadedSound;
                 if (loadedSound == null) return;
 
+                // An ear offset stored as a world point would be traced from near the map
+                // origin, and a repositioned world point written back would move the sound.
+                if (loadedSound.Params?.RelativePosition == true) return;
+
                 // Only store position - AcousticsManager will recalculate on its schedule
                 AudioRenderer.UpdateStoredPosition(loadedSound, new Vec3d(position.X, position.Y, position.Z));
 
@@ -1471,6 +1478,7 @@ namespace soundphysicsadapted
 
                 var loadedSound = __instance as ILoadedSound;
                 if (loadedSound == null) return;
+                if (loadedSound.Params?.RelativePosition == true) return;
 
                 // Only store position - AcousticsManager will recalculate on its schedule
                 AudioRenderer.UpdateStoredPosition(loadedSound, new Vec3d(x, y, z));
@@ -1512,9 +1520,7 @@ namespace soundphysicsadapted
                         var queueSound = __instance as ILoadedSound;
                         if (queueSound?.Params != null)
                         {
-                            var pos = queueSound.Params.Position;
-                            bool hasPosition = pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0);
-                            if (hasPosition)
+                            if (SoundPosition.IsWorld(queueSound.Params))
                             {
                                 lock (preWarmupSoundQueue)
                                     preWarmupSoundQueue.Add(new WeakReference<ILoadedSound>(queueSound));
@@ -1546,7 +1552,7 @@ namespace soundphysicsadapted
 
                 // Check if this is a music or ambient sound (no position expected)
                 bool isMusic = soundType == EnumSoundType.Music || soundType == EnumSoundType.MusicGlitchunaffected;
-                bool isNonPositional = position == null || (position.X == 0 && position.Y == 0 && position.Z == 0);
+                bool isNonPositional = !SoundPosition.IsWorld(soundParams);
 
                 // For positional sounds, we need a valid position for occlusion
                 // If it IS music but HAS a position (like our patched Resonator), we DO want to process it!
@@ -1688,12 +1694,11 @@ namespace soundphysicsadapted
 
                         var soundParams = loadedSound.Params;
                         Vec3f pos = soundParams?.Position;
-                        bool hasPosition = pos != null && (pos.X != 0 || pos.Y != 0 || pos.Z != 0);
 
                         ReverbResult startReverb = acoustics.CachedPlayerReverb;
                         bool isSourceUnderwater = false;
 
-                        if (hasPosition)
+                        if (SoundPosition.IsWorld(soundParams))
                         {
                             Vec3d soundPosD = new Vec3d(pos.X, pos.Y, pos.Z);
 
@@ -1999,9 +2004,8 @@ namespace soundphysicsadapted
                     var soundParams = sound.Params;
                     if (soundParams == null) { disposed++; continue; }
 
+                    if (!SoundPosition.IsWorld(soundParams)) { disposed++; continue; }
                     Vec3f position = soundParams.Position;
-                    if (position == null || (position.X == 0 && position.Y == 0 && position.Z == 0))
-                    { disposed++; continue; }
 
                     string soundName = soundParams.Location?.ToShortString() ?? "unknown";
 
