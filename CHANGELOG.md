@@ -3,6 +3,12 @@
 This file lists the changes to Sound Physics Adapted.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6-dev.10] - 2026-11-15
+
+### Fixed
+- In a room with openings on many sides, such as a half-broken house, rain and hail are no longer louder than standing outside. The positional sources at the openings now share one limit: the open-field level. When the total goes over it, all sources become quieter by the same amount, so you still hear which side the rain comes from. When the total is under it, nothing changes, so a cave mouth sounds the same as before.
+- Positional rain, hail, and wind sources no longer start on the same point of the loop. Sources that start together added up louder than separate rain and sounded hollow when you moved.
+
 ## [0.2.6-dev.9] - 2026-08-24
 
 ### Fixed

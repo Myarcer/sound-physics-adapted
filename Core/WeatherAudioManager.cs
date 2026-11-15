@@ -349,7 +349,11 @@ namespace soundphysicsadapted
                     IsLeafy,
                     earPos,
                     currentSky,
-                    currentOccl);
+                    currentOccl,
+                    rainHandler?.RainBedLevel ?? 0f,
+                    rainHandler?.RainOpenFieldLevel ?? 0f,
+                    rainHandler?.HailBedLevel ?? 0f,
+                    rainHandler?.HailOpenFieldLevel ?? 0f);
 
                 // Reset ducking — outdoors Layer 1 carries everything. Loudness stays
                 // wired to the pools' actual output so the bed-hold readiness gate
@@ -386,7 +390,11 @@ namespace soundphysicsadapted
                 IsLeafy,
                 earPos,
                 currentSky,
-                currentOccl);
+                currentOccl,
+                rainHandler?.RainBedLevel ?? 0f,
+                rainHandler?.RainOpenFieldLevel ?? 0f,
+                rainHandler?.HailBedLevel ?? 0f,
+                rainHandler?.HailOpenFieldLevel ?? 0f);
 
             // Feed per-type ducking contributions back to Layer 1
             rainHandler?.SetPositionalContributions(
@@ -625,14 +633,15 @@ namespace soundphysicsadapted
         /// Rate-limited via shared counter in SoundPhysicsAdaptedModSystem.
         /// Callable from WeatherSoundPatches and RainAudioHandler.
         /// </summary>
-        public static void WeatherDebugLog(string message)
+        public static void WeatherDebugLog(string message, bool force = false)
         {
             var config = SoundPhysicsAdaptedModSystem.Config;
             if (config?.DebugMode != true || config?.DebugWeather != true) return;
 
-            // Use the main mod system's debug log which includes rate limiting
+            // Use the main mod system's debug log which includes rate limiting.
+            // force skips it, for a measurement line that already limits itself.
             // Prefix with [Weather] for filtering
-            SoundPhysicsAdaptedModSystem.DebugLog($"[Weather] {message}");
+            SoundPhysicsAdaptedModSystem.DebugLog($"[Weather] {message}", force);
         }
     }
 }

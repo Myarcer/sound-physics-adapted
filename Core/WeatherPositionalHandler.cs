@@ -73,6 +73,7 @@ namespace soundphysicsadapted
                         : "sounds/weather/tracks/rain-leafless.ogg");
 
             rainPool.VolumeCalculator = CalculateRainVolume;
+            rainPool.CapToOutdoorLevel = true;
 
             // ── Wind pool ──
             windPool = new PositionalSourcePool(
@@ -101,6 +102,7 @@ namespace soundphysicsadapted
             hailPool.AssetResolver = (_) => new AssetLocation("sounds/weather/tracks/hail.ogg");
 
             hailPool.VolumeCalculator = CalculateHailVolume;
+            hailPool.CapToOutdoorLevel = true;
 
             initialized = true;
             WeatherAudioManager.WeatherDebugLog(
@@ -120,6 +122,10 @@ namespace soundphysicsadapted
         /// <param name="earPos">Player ear position for proximity fade</param>
         /// <param name="skyCoverage">Current sky coverage (0=outdoors, 1=fully roofed)</param>
         /// <param name="occlusionFactor">Current occlusion (0=clear air, 1=behind walls)</param>
+        /// <param name="rainBedLevel">Layer 1 rain bed level, for the rain pool's outdoor cap</param>
+        /// <param name="rainOpenFieldLevel">Layer 1 rain bed level with no cover, for the same cap</param>
+        /// <param name="hailBedLevel">Layer 1 hail bed level, for the hail pool's outdoor cap</param>
+        /// <param name="hailOpenFieldLevel">Layer 1 hail bed level with no cover, for the same cap</param>
         public void UpdateAll(
             IReadOnlyList<TrackedOpening> trackedOpenings,
             float rainIntensity,
@@ -128,7 +134,11 @@ namespace soundphysicsadapted
             bool isLeafy,
             Vec3d earPos,
             float skyCoverage,
-            float occlusionFactor)
+            float occlusionFactor,
+            float rainBedLevel,
+            float rainOpenFieldLevel,
+            float hailBedLevel,
+            float hailOpenFieldLevel)
         {
             if (!initialized || disposed) return;
 
@@ -157,7 +167,9 @@ namespace soundphysicsadapted
                     rainIntensity,
                     isLeafy,
                     config.PositionalWeatherVolume * outdoorAttenuation,
-                    earPos);
+                    earPos,
+                    rainBedLevel,
+                    rainOpenFieldLevel);
             }
             else
             {
@@ -174,7 +186,9 @@ namespace soundphysicsadapted
                     windSpeed,   // Wind uses windSpeed as its "intensity"
                     isLeafy,
                     config.PositionalWindVolume * outdoorAttenuation,
-                    earPos);
+                    earPos,
+                    0f,
+                    0f);
             }
             else
             {
@@ -189,7 +203,9 @@ namespace soundphysicsadapted
                     hailIntensity,
                     isLeafy,
                     config.PositionalHailVolume * outdoorAttenuation,
-                    earPos);
+                    earPos,
+                    hailBedLevel,
+                    hailOpenFieldLevel);
             }
             else
             {
