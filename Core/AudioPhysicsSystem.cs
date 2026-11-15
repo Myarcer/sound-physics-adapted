@@ -556,7 +556,13 @@ namespace soundphysicsadapted
                     .ConsumeLocalPlayerOcclusionPosition(soundPos);
             bool isLocalPlayerSound = cache.IsLocalPlayerSound;
 
-            if (distance < PLAYER_POS_THRESHOLD || isLocalPlayerSound)
+            // An ambient volume's vanilla position is the player's feet clamped into its
+            // boxes, so it sits right below the head whenever the player stands in a box
+            // with a low eye (swimming). The resolver below must still move it to the water.
+            bool hasVolumeBoxes = !cache.IsListenerRelative
+                && AmbientSoundPatches.GetBboxes(sound, out int volumeBoxCount) != null && volumeBoxCount > 0;
+
+            if ((distance < PLAYER_POS_THRESHOLD && !hasVolumeBoxes) || isLocalPlayerSound)
             {
                 playerPosThisTick++;
                 cache.IsRepositioned = false;
@@ -579,8 +585,9 @@ namespace soundphysicsadapted
 
             // === 2. AMBIENT VOLUMES ===
             // Beehives, water and lava are box volumes whose vanilla position tracks the
-            // player and often lands on a face that is blocked. AmbientVolumeResolver picks
-            // the clearest player-facing face and returns its occlusion, so no second DDA
+            // player and often lands on a face that is blocked or over dry land.
+            // AmbientVolumeResolver picks the clearest open face of the sound's own blocks
+            // (box faces when none is near) and returns its occlusion, so no second DDA
             // is needed. A point source with the Ambient type (a resonator) is downgraded
             // and follows the normal path, so probe rays can still route it around a wall.
             bool isAmbientVolume = !cache.IsListenerRelative
@@ -650,6 +657,12 @@ namespace soundphysicsadapted
                 targetGain = ResolveRepositioning(sound, cache, paths.Path, soundPos, acousticPos,
                     occlusion, distance, isAmbientVolume, targetGain, config, soundName, firstLogOfTick,
                     wantRepositioning && !cache.IsListenerRelative);
+            }
+            else if (isAmbientVolume)
+            {
+                // With reverb and repositioning both off, ResolveRepositioning never runs,
+                // and a volume would stay at the vanilla point in the player's feet.
+                AudioRenderer.ResetSoundPosition(sound, acousticPos);
             }
 
             targetGain = FilterPipeline.ApplyPenetrationFloor(targetGain, penetrationFloor);

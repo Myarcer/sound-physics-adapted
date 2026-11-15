@@ -10,24 +10,29 @@ using Vintagestory.API.MathTools;
 namespace soundphysicsadapted
 {
     /// <summary>
-    /// Patches AmbientSound.updatePosition to capture bounding box face data
-    /// for ambient volume sounds (beehives, water, lava).
+    /// Patches AmbientSound.updatePosition to capture where an ambient volume sound
+    /// (beehives, water, lava) can be heard from.
     ///
-    /// Produces multi-sample points across each player-facing face, scaled by
-    /// face size. AudioPhysicsSystem uses these for weighted occlusion blending
-    /// to compute a stable acoustic origin without face-flip artifacts.
+    /// Near the player the candidates are open faces of the sound's own blocks
+    /// (<see cref="AmbientSurface"/>). With no such face in range, they are samples on
+    /// the player-facing faces of the vanilla boxes, scaled by face size.
+    /// AmbientVolumeResolver picks the clearest one.
     ///
-    /// Also detects when the player is inside the volume — in that case,
-    /// no face sampling is needed (VS handles inside-volume positioning natively).
+    /// Also detects when the player's head is in the sound's own block — in that case
+    /// no candidates are needed.
     /// </summary>
     internal static class AmbientSoundPatches
     {
         // Per-sound face sample data, updated every updatePosition call.
         private static readonly Dictionary<ILoadedSound, FaceSampleData> _faceSamples = new();
 
+        // Per-sound open faces of its own blocks near the player.
+        private static readonly Dictionary<ILoadedSound, AmbientSurface> _surfaces = new();
+
         // Cached reflection for AmbientSound fields
         private static FieldInfo _soundField;
         private static FieldInfo _bboxField;
+        private static FieldInfo _assetField;
         private static bool _reflectionFailed;
 
         // Reusable lists to avoid allocation per tick
@@ -45,13 +50,18 @@ namespace soundphysicsadapted
         {
             public Vec3d SamplePoint;  // The point to DDA-check for occlusion
             public Vec3d FaceCenter;   // The face center this sample belongs to (for position blending)
+
+            // The sound's own block behind a surface sample. Its ray excludes only this
+            // block, so terrain between the water and the player occludes. Null for
+            // samples on a vanilla box face, which exclude the whole box.
+            public Cuboidi Cell;
         }
 
         internal struct FaceSampleData
         {
             public FaceSample[] Samples;
             public int Count;
-            public bool PlayerInside;  // True if player is inside any bbox
+            public bool PlayerInside;  // True if the head is in one of the sound's own blocks
             public Cuboidi[] Bboxes;       // Volume bounding boxes for DDA exclusion
             public int BboxCount;
         }
@@ -77,6 +87,11 @@ namespace soundphysicsadapted
                 // Cache reflection fields
                 _soundField = AccessTools.Field(ambientSoundType, "Sound");
                 _bboxField = AccessTools.Field(ambientSoundType, "BoundingBoxes");
+
+                // Optional: without it every volume keeps the vanilla box faces.
+                _assetField = AccessTools.Field(ambientSoundType, "AssetLoc");
+                if (_assetField == null)
+                    api.Logger.Warning("[SoundPhysicsAdapted] Could not find AmbientSound.AssetLoc — water surface sampling off");
 
                 if (_soundField == null || _bboxField == null)
                 {
@@ -136,7 +151,10 @@ namespace soundphysicsadapted
         public static void RemoveSound(ILoadedSound sound)
         {
             if (sound != null)
+            {
                 _faceSamples.Remove(sound);
+                _surfaces.Remove(sound);
+            }
         }
 
         /// <summary>
@@ -145,12 +163,14 @@ namespace soundphysicsadapted
         public static void Clear()
         {
             _faceSamples.Clear();
+            _surfaces.Clear();
+            AmbientSurface.ClearShared();
         }
 
         /// <summary>
         /// Postfix on AmbientSound.updatePosition(EntityPos).
-        /// Produces multi-sample points across each player-facing face.
-        /// Sample density scales with face size: 1x1=1, 3x3=4, 5x5=9.
+        /// Produces the candidate points for AmbientVolumeResolver: open faces of the
+        /// sound's own blocks near the player, else samples on the vanilla box faces.
         /// </summary>
         public static void UpdatePositionPostfix(object __instance, object position)
         {
@@ -180,7 +200,6 @@ namespace soundphysicsadapted
 
                 _tempSamples.Clear();
                 _tempBboxes.Clear();
-                bool playerInside = false;
 
                 foreach (var bboxObj in bboxes)
                 {
@@ -191,66 +210,37 @@ namespace soundphysicsadapted
                     // Convert to INCLUSIVE coords for DDA exclusion (subtract 1 from upper bounds).
                     // This ensures we only exclude blocks actually inside the sound volume —
                     // NOT adjacent blocks at +X/+Y/+Z which would cause false occ=0.
-                    var exclusionBbox = new Cuboidi(
+                    _tempBboxes.Add(new Cuboidi(
                         bbox.X1, bbox.Y1, bbox.Z1,
-                        bbox.X2 - 1, bbox.Y2 - 1, bbox.Z2 - 1);
-                    _tempBboxes.Add(exclusionBbox);
+                        bbox.X2 - 1, bbox.Y2 - 1, bbox.Z2 - 1));
+                }
 
-                    // Check if player is inside this bbox.
-                    // Player position is float; use original VS coords (half-open interval).
-                    // Upper bound is exclusive at blockCoord+1.
-                    //
-                    // Y-axis uses FEET position, not eye position. Single-block-high volumes
-                    // (beehives, Y range [5,6)) have eye position (6.52) always above the bbox,
-                    // so the inside check would never trigger. Using feet (5.0 when standing on
-                    // the same Y level) correctly detects the player as "inside" the volume's
-                    // horizontal footprint, which is what matters for immersive centering.
-                    // We also extend the Y check upward by player height so standing next to
-                    // a waist-high beehive counts as "inside" its acoustic field.
-                    if (playerX >= bbox.X1 && playerX < bbox.X2 &&
-                        playerY >= bbox.Y1 && playerY < bbox.Y2 + eyeOffsetY &&
-                        playerZ >= bbox.Z1 && playerZ < bbox.Z2)
-                    {
-                        playerInside = true;
-                        break; // No need to sample faces when inside
-                    }
+                var eye = new Vec3d(playerX, playerEyeY, playerZ);
+                var blockAccessor = capi?.World?.BlockAccessor;
+                var asset = _assetField?.GetValue(__instance) as AssetLocation;
+                AmbientSurface surface = null;
+                bool playerInside = false;
 
-                    // VS uses half-open interval: [X1, X2) where X2 = X1 + blockCount.
-                    // For single-block beehive at X=511910: X1=511910, X2=511911 → [511910, 511911).
-                    // World center = (X1 + X2) / 2 = 511910.5 (NOT X1 + X2 + 1).
-                    double cx = (bbox.X1 + bbox.X2) * 0.5;
-                    double cy = (bbox.Y1 + bbox.Y2) * 0.5;
-                    double cz = (bbox.Z1 + bbox.Z2) * 0.5;
+                if (blockAccessor != null && asset != null)
+                {
+                    if (!_surfaces.TryGetValue(sound, out surface))
+                        _surfaces[sound] = surface = new AmbientSurface();
 
-                    // Size in world blocks: X2 - X1 (half-open, NOT X2 - X1 + 1).
-                    int sizeX = bbox.X2 - bbox.X1;
-                    int sizeY = bbox.Y2 - bbox.Y1;
-                    int sizeZ = bbox.Z2 - bbox.Z1;
+                    if (surface.Update(bboxes, asset, eye, entityPos.Dimension, blockAccessor)
+                        && SoundPhysicsAdaptedModSystem.IsOcclusionDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.OcclusionDebugLog(
+                            $"[AMBIENT-SURFACE] {asset} rebuilt: faces={surface.FaceCount} " +
+                            $"boxes={bboxes.Count} in {surface.LastBuildMs:F2} ms");
 
-                    // -X face (world x = bbox.X1)
-                    if (playerX < cx)
-                        AddFaceSamples(bbox.X1 + FACE_INSET, cy, cz,
-                            sizeX, sizeY, sizeZ, 'X');
-                    // +X face (world x = bbox.X2)
-                    if (playerX > cx)
-                        AddFaceSamples(bbox.X2 - FACE_INSET, cy, cz,
-                            sizeX, sizeY, sizeZ, 'X');
-                    // -Y face (world y = bbox.Y1)
-                    if (playerEyeY < cy)
-                        AddFaceSamples(cx, bbox.Y1 + FACE_INSET, cz,
-                            sizeX, sizeY, sizeZ, 'Y');
-                    // +Y face (world y = bbox.Y2)
-                    if (playerEyeY > cy)
-                        AddFaceSamples(cx, bbox.Y2 - FACE_INSET, cz,
-                            sizeX, sizeY, sizeZ, 'Y');
-                    // -Z face (world z = bbox.Z1)
-                    if (playerZ < cz)
-                        AddFaceSamples(cx, cy, bbox.Z1 + FACE_INSET,
-                            sizeX, sizeY, sizeZ, 'Z');
-                    // +Z face (world z = bbox.Z2)
-                    if (playerZ > cz)
-                        AddFaceSamples(cx, cy, bbox.Z2 - FACE_INSET,
-                            sizeX, sizeY, sizeZ, 'Z');
+                    playerInside = surface.HeadInside(bboxes, eye, entityPos.Dimension, blockAccessor);
+                }
+
+                if (!playerInside)
+                {
+                    if (surface != null && surface.FaceCount > 0)
+                        surface.AddCandidates(eye, _tempSamples);
+                    else
+                        AddBoxFaceSamples(bboxes, playerX, playerEyeY, playerZ);
                 }
 
                 // Build bbox array for DDA exclusion
@@ -305,6 +295,56 @@ namespace soundphysicsadapted
             {
                 if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
                     SoundPhysicsAdaptedModSystem.DebugLog($"ERROR in AmbientSound updatePosition postfix: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Samples on the player-facing faces of the vanilla boxes. Used when none of the
+        /// sound's own blocks has an open face near the player.
+        /// </summary>
+        private static void AddBoxFaceSamples(System.Collections.IList bboxes,
+            double playerX, double playerEyeY, double playerZ)
+        {
+            foreach (var bboxObj in bboxes)
+            {
+                if (bboxObj is not Cuboidi bbox) continue;
+
+                // VS uses half-open interval: [X1, X2) where X2 = X1 + blockCount.
+                // For single-block beehive at X=511910: X1=511910, X2=511911 → [511910, 511911).
+                // World center = (X1 + X2) / 2 = 511910.5 (NOT X1 + X2 + 1).
+                double cx = (bbox.X1 + bbox.X2) * 0.5;
+                double cy = (bbox.Y1 + bbox.Y2) * 0.5;
+                double cz = (bbox.Z1 + bbox.Z2) * 0.5;
+
+                // Size in world blocks: X2 - X1 (half-open, NOT X2 - X1 + 1).
+                int sizeX = bbox.X2 - bbox.X1;
+                int sizeY = bbox.Y2 - bbox.Y1;
+                int sizeZ = bbox.Z2 - bbox.Z1;
+
+                // -X face (world x = bbox.X1)
+                if (playerX < cx)
+                    AddFaceSamples(bbox.X1 + FACE_INSET, cy, cz,
+                        sizeX, sizeY, sizeZ, 'X');
+                // +X face (world x = bbox.X2)
+                if (playerX > cx)
+                    AddFaceSamples(bbox.X2 - FACE_INSET, cy, cz,
+                        sizeX, sizeY, sizeZ, 'X');
+                // -Y face (world y = bbox.Y1)
+                if (playerEyeY < cy)
+                    AddFaceSamples(cx, bbox.Y1 + FACE_INSET, cz,
+                        sizeX, sizeY, sizeZ, 'Y');
+                // +Y face (world y = bbox.Y2)
+                if (playerEyeY > cy)
+                    AddFaceSamples(cx, bbox.Y2 - FACE_INSET, cz,
+                        sizeX, sizeY, sizeZ, 'Y');
+                // -Z face (world z = bbox.Z1)
+                if (playerZ < cz)
+                    AddFaceSamples(cx, cy, bbox.Z1 + FACE_INSET,
+                        sizeX, sizeY, sizeZ, 'Z');
+                // +Z face (world z = bbox.Z2)
+                if (playerZ > cz)
+                    AddFaceSamples(cx, cy, bbox.Z2 - FACE_INSET,
+                        sizeX, sizeY, sizeZ, 'Z');
             }
         }
 
