@@ -157,6 +157,9 @@ namespace soundphysicsadapted
             // A box-face sample excludes the whole box, or the ray would start in the
             // volume's own blocks. A surface sample sits in the open air next to its block
             // and excludes only that block, so the terrain the box covers occludes too.
+            // Liquids never occlude here: nearly every volume is water or lava, and its
+            // rays start at the surface, where the offset rays dip into the next cells.
+            // A beehive heard through a pond is the one case this gets wrong.
             //
             // The occlusion is the BEST candidate, never the average. Back faces cross the
             // whole volume and would pull an average up, which muffles a sound the player
@@ -189,15 +192,13 @@ namespace soundphysicsadapted
                 if (sample.Cell != null)
                 {
                     _ownBlock[0] = sample.Cell;
-                    faceOcc = OcclusionCalculator.CalculateExcludingBboxes(point, playerPos, blockAccessor, _ownBlock, 1);
-                }
-                else if (volBboxes != null && volBboxCount > 0)
-                {
-                    faceOcc = OcclusionCalculator.CalculateExcludingBboxes(point, playerPos, blockAccessor, volBboxes, volBboxCount);
+                    faceOcc = OcclusionCalculator.CalculateExcludingBboxes(point, playerPos, blockAccessor,
+                        _ownBlock, 1, passLiquids: true);
                 }
                 else
                 {
-                    faceOcc = OcclusionCalculator.Calculate(point, playerPos, blockAccessor);
+                    faceOcc = OcclusionCalculator.CalculateExcludingBboxes(point, playerPos, blockAccessor,
+                        volBboxes, volBboxes != null ? volBboxCount : 0, passLiquids: true);
                 }
                 float clarity = Math.Max(0f, 1f - faceOcc);
                 double faceDist = point.DistanceTo(playerPos);

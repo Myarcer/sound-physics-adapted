@@ -37,6 +37,7 @@ namespace soundphysicsadapted
         private static int _vDestX, _vDestY, _vDestZ;
         private static Cuboidi[] _vExclusionBboxes;
         private static int _vExclusionBboxCount;
+        private static bool _vPassLiquids;
 
         private static readonly DDABlockTraversal.BlockVisitor _runOcclusionVisitor = RunOcclusionVisitor;
 
@@ -280,8 +281,27 @@ namespace soundphysicsadapted
         ///
         /// Only used for ambient volumes where occlusion stability matters for continuous sound.
         /// Regular sounds use Calculate() with voting + EMA smoothing instead.
+        ///
+        /// With <paramref name="passLiquids"/> no water or lava block occludes. A ray from
+        /// the surface of a pool must not count the pool: the offset rays start 0.35 blocks
+        /// to the side and below, inside the neighbouring water cells.
         /// </summary>
         public static float CalculateExcludingBboxes(
+            Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor,
+            Cuboidi[] bboxes, int bboxCount, bool passLiquids = false)
+        {
+            _vPassLiquids = passLiquids;
+            try
+            {
+                return MedianExcludingBboxes(soundPos, playerPos, blockAccessor, bboxes, bboxCount);
+            }
+            finally
+            {
+                _vPassLiquids = false;
+            }
+        }
+
+        private static float MedianExcludingBboxes(
             Vec3d soundPos, Vec3d playerPos, IBlockAccessor blockAccessor,
             Cuboidi[] bboxes, int bboxCount)
         {
@@ -566,6 +586,12 @@ namespace soundphysicsadapted
             }
             else if (BlockClassification.IsLiquidMaterial(block))
             {
+                if (_vPassLiquids)
+                {
+                    if (_vVerboseLog) _vDdaTrace.Append($"  DDA liquid-pass: {block.Code} at ({ctx.X},{ctx.Y},{ctx.Z}) (ambient volume source)\n");
+                    return false; // Continue
+                }
+
                 // LIQUID/LAVA PATH: No collision boxes but still muffles sound.
                 blockOcclusion = BlockClassification.GetBlockOcclusion(block, _vConfig);
                 if (blockOcclusion > 0 && _vVerboseLog)
