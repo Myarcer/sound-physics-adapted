@@ -5,13 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.2.7.1] - 2026-11-15
 
-### Fixed
-- Stereo ambient sounds from other mods now come from a direction. Watersheds plays a stereo river sound, and you heard it inside your head at every distance. The mod now changes these sounds to mono when they load, as it already did for other world sounds.
-- Water no longer sounds inside your head when you stand on the bank or above it. The game keeps one box around all the water in an area, and that box also covers the shore. When you stood in that box, the mod moved the sound onto you.
+Your configuration survives this update. No settings changed.
 
-### Changed
-- Water, lava, and other block ambient sounds now come from the open surface of their own blocks, up to 12 blocks from you. Before, they came from the edge of the box, which can be several blocks away over dry land.
-- The mod centers an ambient sound on you only when your head is in its water. Walls and terrain between the water and you now muffle the sound. Farther away than 12 blocks, the mod uses the box as before.
+### Fixed
+- Stereo water sounds from other mods now come from a direction. Before, the Watersheds river played inside your head at every distance.
+- Water no longer sounds inside your head when you stand on the bank or above it. The sound now comes from the water surface near you. It surrounds you only when your head is in the water.
+- Walls and terrain between you and the water now muffle it. The water itself, and slabs or plants that stand in it, do not.
 
 ## [0.2.7] - 2026-11-15
 
