@@ -15,9 +15,9 @@ namespace soundphysicsadapted
     /// Uses per-sound filters via AudioRenderer to avoid global filter thrashing.
     /// 
     /// Key patches:
-    /// - StartPlayingAudioMonoPrefix: Universal stereo→mono for ALL positional sounds
-    ///   (catches both PlaySoundAt and LoadSound paths at their convergence point)
-    /// - LoadSoundMonoPrefix: Legacy explicit mono requests (weather pools, resonator)
+    /// - StartPlayingAudioMonoPrefix: stereo→mono for positional PlaySoundAt sounds
+    /// - LoadSoundMonoPrefix: stereo→mono for LoadSound — block ambient loops plus
+    ///   explicit requests (weather pools, resonator). LoadSound never reaches StartPlaying.
     /// - SoundStartPrefix/Postfix: Occlusion, reverb, filter management
     /// - SetPosition: Position tracking for acoustics updates
     /// </summary>
@@ -673,8 +673,9 @@ namespace soundphysicsadapted
         }
 
         /// <summary>
-        /// UNIVERSAL PREFIX for ClientMain.StartPlaying(AudioData, SoundParams, AssetLocation).
-        /// This is the convergence point where BOTH PlaySoundAtInternal and LoadSound paths land.
+        /// PREFIX for ClientMain.StartPlaying(AudioData, SoundParams, AssetLocation).
+        /// Only PlaySoundAtInternal lands here; LoadSound calls Platform.CreateAudio
+        /// directly and is covered by LoadSoundMonoPrefix.
         /// Swaps stereo AudioData to mono for positional sounds before CreateAudio runs.
         /// 
         /// Sounds spawned via PlaySoundAt(Entity == local player) are tagged at call time
@@ -1218,13 +1219,10 @@ namespace soundphysicsadapted
         #endregion
 
         /// <summary>
-        /// PREFIX for ClientMain.LoadSound() — Legacy mono downmix for explicit requests.
-        /// Now simplified: delegates to MonoDownmixManager for explicit ForceMonoNextLoad
-        /// and per-asset requests. Auto-detection for positional sounds is handled by
-        /// StartPlayingAudioMonoPrefix instead (covers both LoadSound and PlaySoundAt paths).
-        /// 
-        /// Still needed for the cache-swap mechanism used by weather positional pools
-        /// and resonator patches that need mono BEFORE LoadSound creates the buffer.
+        /// PREFIX for ClientMain.LoadSound() — mono downmix for the LoadSound path.
+        /// Covers explicit requests (ForceMonoNextLoad from weather positional pools,
+        /// per-asset requests from resonator patches) and block ambient loops. The swap
+        /// must happen BEFORE LoadSound creates the buffer: OpenAL keeps its channel count.
         /// </summary>
         public static void LoadSoundMonoPrefix(SoundParams sound, ref MonoSwapState __state)
         {
@@ -1246,6 +1244,18 @@ namespace soundphysicsadapted
             if (!wantMono && sound?.Location != null)
             {
                 wantMono = MonoDownmixManager.CheckAndConsumeMonoRequest(sound.Location);
+            }
+
+            // Block ambient loops (water, beehives, a mod's river sound) load here with a
+            // (0,0,0) placeholder position that AmbientSound.updatePosition moves right
+            // after, so nothing else downmixes them. A stereo file then plays inside the
+            // listener's head at every distance.
+            bool autoAmbient = false;
+            if (!wantMono && sound != null && !sound.RelativePosition && sound.Position != null &&
+                (sound.SoundType == EnumSoundType.Ambient || sound.SoundType == EnumSoundType.AmbientGlitchunaffected))
+            {
+                wantMono = true;
+                autoAmbient = true;
             }
 
             if (!wantMono) return;
@@ -1288,10 +1298,21 @@ namespace soundphysicsadapted
                 }
 
                 var stereoMeta = stereoData as AudioMetaData;
-                if (stereoMeta == null || stereoMeta.Channels != 2)
+                if (stereoMeta == null) return;
+
+                // Channels reads 0 until the asset is decoded, which made every first load
+                // look mono. Vanilla decodes it on this thread right after this prefix anyway.
+                if (stereoMeta.Loaded == 0) stereoMeta.Load();
+
+                if (stereoMeta.Loaded == 1)
                 {
+                    if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
+                        SoundPhysicsAdaptedModSystem.DebugLog(
+                            $"[MonoDownmix] MISS: '{location}' is still decoding on another thread — sound stays stereo if it is");
                     return;
                 }
+
+                if (stereoMeta.Channels < 2) return;
 
                 // Create/get the mono version (now via centralized manager)
                 var monoMeta = MonoDownmixManager.GetOrCreateMonoVersion(stereoMeta);
@@ -1306,7 +1327,8 @@ namespace soundphysicsadapted
 
                 if (SoundPhysicsAdaptedModSystem.IsDebugEnabled)
                     SoundPhysicsAdaptedModSystem.DebugLog(
-                        $"MonoPrefix: swapped '{location}' to mono ({monoMeta.Channels}ch, Loaded={monoMeta.Loaded})");
+                        $"MonoPrefix: swapped '{location}' to mono ({monoMeta.Channels}ch, Loaded={monoMeta.Loaded}, " +
+                        $"{(autoAmbient ? "block ambient" : "explicit request")})");
             }
             catch (Exception ex)
             {

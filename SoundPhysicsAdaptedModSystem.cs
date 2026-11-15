@@ -834,8 +834,8 @@ namespace soundphysicsadapted
             // because api.World.Blocks is empty during StartClientSide on servers.
 
             // Note: Universal mono downmix is handled by MonoDownmixManager +
-            // LoadSoundPatch.StartPlayingAudioMonoPrefix (auto-detects positional stereo sounds)
-            // and LoadSoundPatch.LoadSoundMonoPrefix (explicit requests from weather/resonator)
+            // LoadSoundPatch.StartPlayingAudioMonoPrefix (positional PlaySoundAt sounds)
+            // and LoadSoundPatch.LoadSoundMonoPrefix (block ambient loops + explicit requests)
 
             // Initialize AudioPhysicsSystem (optimization: time-slicing, sky probe, static cache)
             acousticsManager = new AudioPhysicsSystem();

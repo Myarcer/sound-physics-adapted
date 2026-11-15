@@ -77,7 +77,7 @@ namespace soundphysicsadapted
     }
 
     // NOTE: MonoBufferPatch (constructor patching approach) was removed.
-    // Universal mono downmix is now handled by MonoDownmixManager + 
-    // LoadSoundPatch.StartPlayingAudioMonoPrefix which catches ALL positional
-    // sounds at the convergence point before CreateAudio.
+    // Mono downmix is now handled by MonoDownmixManager +
+    // LoadSoundPatch.StartPlayingAudioMonoPrefix (PlaySoundAt path) and
+    // LoadSoundPatch.LoadSoundMonoPrefix (LoadSound path, block ambient loops).
 }
